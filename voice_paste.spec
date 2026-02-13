@@ -128,6 +128,11 @@ _hidden_imports = [
     'tqdm',
     'colorama',
 
+    # --- keyring (v0.3: Windows Credential Manager) ---
+    'keyring',
+    'keyring.backends',
+    'keyring.backends.Windows',
+
     # --- stdlib modules sometimes missed in onefile mode ---
     'ctypes',
     'ctypes.wintypes',
@@ -142,9 +147,8 @@ _hidden_imports = [
 # and third-party modules that get pulled in transitively.
 # ---------------------------------------------------------------------------
 _excludes = [
-    # GUI frameworks we do not use
-    'tkinter',
-    '_tkinter',
+    # GUI frameworks we do not use (except tkinter -- required for Settings dialog)
+    # NOTE: tkinter and _tkinter are NOT excluded since v0.3 (Settings dialog).
     'tk',
     'tcl',
     'PyQt5',

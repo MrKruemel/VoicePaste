@@ -23,7 +23,7 @@ class AppState(enum.Enum):
 
 # Application metadata
 APP_NAME = "Voice Paste"
-APP_VERSION = "0.2.0"
+APP_VERSION = "0.4.0"
 
 # Hotkey configuration
 # Hotkey history:
@@ -88,3 +88,64 @@ AUDIO_CUE_CANCEL_FREQ = 330         # Two low beeps
 AUDIO_CUE_ERROR_FREQ = 220          # Single low buzz
 AUDIO_CUE_TONE_DURATION_MS = 75     # Duration per tone
 AUDIO_CUE_CANCEL_GAP_MS = 50        # Gap between cancel beeps
+
+# --- v0.3: Keyring configuration ---
+KEYRING_SERVICE_NAME = "VoicePaste"
+KEYRING_OPENAI_KEY = "openai_api_key"
+KEYRING_OPENROUTER_KEY = "openrouter_api_key"
+
+# --- v0.3: Provider configuration ---
+OPENROUTER_DEFAULT_BASE_URL = "https://openrouter.ai/api/v1"
+OPENAI_DEFAULT_BASE_URL = "https://api.openai.com/v1"
+SUMMARIZATION_PROVIDERS = ("openai", "openrouter")
+DEFAULT_SUMMARIZATION_PROVIDER = "openai"
+OPENROUTER_DEFAULT_MODEL = "openai/gpt-4o-mini"
+
+# --- v0.4: Local STT configuration ---
+
+# STT backend options
+STT_BACKENDS = ("cloud", "local")
+DEFAULT_STT_BACKEND = "cloud"
+
+# Local model sizes (CTranslate2-format Whisper models from Hugging Face)
+LOCAL_MODEL_SIZES = ("tiny", "base", "small", "medium", "large-v2", "large-v3")
+LOCAL_STT_DEFAULT_MODEL_SIZE = "base"
+LOCAL_STT_DEFAULT_DEVICE = "cpu"
+LOCAL_STT_DEFAULT_COMPUTE_TYPE = "int8"
+LOCAL_STT_DEFAULT_BEAM_SIZE = 5
+LOCAL_STT_VALID_DEVICES = ("cpu", "cuda", "auto")
+LOCAL_STT_VALID_COMPUTE_TYPES = ("int8", "float16", "float32", "auto")
+
+# Local model display information (for Settings dialog)
+LOCAL_MODEL_DISPLAY: dict[str, dict[str, str]] = {
+    "tiny": {
+        "label": "Tiny (~75 MB, fastest, lower quality)",
+        "download_mb": "75",
+        "ram_mb": "~150",
+    },
+    "base": {
+        "label": "Base (~145 MB, good quality, recommended)",
+        "download_mb": "145",
+        "ram_mb": "~200",
+    },
+    "small": {
+        "label": "Small (~480 MB, better quality)",
+        "download_mb": "480",
+        "ram_mb": "~350",
+    },
+    "medium": {
+        "label": "Medium (~1.5 GB, high quality, slow on CPU)",
+        "download_mb": "1500",
+        "ram_mb": "~600",
+    },
+    "large-v2": {
+        "label": "Large v2 (~3 GB, highest quality, very slow on CPU)",
+        "download_mb": "3000",
+        "ram_mb": "~1200",
+    },
+    "large-v3": {
+        "label": "Large v3 (~3 GB, newest, very slow on CPU)",
+        "download_mb": "3000",
+        "ram_mb": "~1200",
+    },
+}

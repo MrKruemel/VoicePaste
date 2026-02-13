@@ -249,71 +249,50 @@ class TestMainMutexConflict:
 # =========================================================================
 
 class TestMainConfigFailure:
-    """Test that main() shows fatal error and exits when config is invalid."""
+    """Test that main() handles load_config() returning None gracefully.
+
+    v0.3+: Missing/invalid config is NO LONGER fatal. When load_config()
+    returns None, main() falls back to a default AppConfig and continues
+    so the user can configure via the Settings dialog.
+    """
 
     @patch("main._show_fatal_error")
     @patch("main._release_single_instance_mutex")
     @patch("main._acquire_single_instance_mutex", return_value=12345)
     @patch("main.load_config", return_value=None)
-    @patch("config._get_app_directory")
-    def test_config_failure_calls_show_fatal_error(
-        self, mock_app_dir, mock_load, mock_acquire, mock_release, mock_fatal,
-        tmp_path
+    @patch("main.setup_logging")
+    @patch("main.VoicePasteApp")
+    def test_config_none_falls_back_to_defaults(
+        self, MockApp, mock_setup_log, mock_load, mock_acquire,
+        mock_release, mock_fatal
     ):
-        """When load_config() returns None, _show_fatal_error should be called."""
-        # Patch _get_app_directory on the config module itself, because
-        # main() does 'from config import _get_app_directory' at runtime.
-        mock_app_dir.return_value = tmp_path
-
+        """When load_config() returns None, main() should use default config."""
         from main import main
 
         with patch.object(sys, "argv", ["main.py"]):
-            with pytest.raises(SystemExit) as exc_info:
-                main()
+            main()
 
-        assert exc_info.value.code == 1
-        mock_fatal.assert_called_once()
+        # App should still be created and run
+        MockApp.assert_called_once()
+        MockApp.return_value.run.assert_called_once()
+        # Fatal error should NOT be shown
+        mock_fatal.assert_not_called()
 
     @patch("main._show_fatal_error")
     @patch("main._release_single_instance_mutex")
     @patch("main._acquire_single_instance_mutex", return_value=12345)
     @patch("main.load_config", return_value=None)
-    @patch("config._get_app_directory")
-    def test_config_failure_message_mentions_config_toml(
-        self, mock_app_dir, mock_load, mock_acquire, mock_release, mock_fatal,
-        tmp_path
+    @patch("main.setup_logging")
+    @patch("main.VoicePasteApp")
+    def test_config_none_releases_mutex(
+        self, MockApp, mock_setup_log, mock_load, mock_acquire,
+        mock_release, mock_fatal
     ):
-        """Config failure message should reference config.toml."""
-        mock_app_dir.return_value = tmp_path
-
+        """Mutex should be released after successful run with default config."""
         from main import main
 
         with patch.object(sys, "argv", ["main.py"]):
-            with pytest.raises(SystemExit):
-                main()
-
-        message = mock_fatal.call_args[0][0]
-        assert "config.toml" in message, (
-            f"Message should mention 'config.toml'. Got: {message}"
-        )
-
-    @patch("main._show_fatal_error")
-    @patch("main._release_single_instance_mutex")
-    @patch("main._acquire_single_instance_mutex", return_value=12345)
-    @patch("main.load_config", return_value=None)
-    @patch("config._get_app_directory")
-    def test_config_failure_releases_mutex(
-        self, mock_app_dir, mock_load, mock_acquire, mock_release, mock_fatal,
-        tmp_path
-    ):
-        """Mutex should be released even when config fails."""
-        mock_app_dir.return_value = tmp_path
-
-        from main import main
-
-        with patch.object(sys, "argv", ["main.py"]):
-            with pytest.raises(SystemExit):
-                main()
+            main()
 
         mock_release.assert_called_once_with(12345)
 
@@ -321,50 +300,59 @@ class TestMainConfigFailure:
     @patch("main._release_single_instance_mutex")
     @patch("main._acquire_single_instance_mutex", return_value=12345)
     @patch("main.load_config", return_value=None)
-    @patch("config._get_app_directory")
-    def test_config_missing_file_mentions_create_manually(
-        self, mock_app_dir, mock_load, mock_acquire, mock_release, mock_fatal,
-        tmp_path
+    @patch("main.setup_logging")
+    @patch("main.VoicePasteApp")
+    def test_config_none_still_calls_setup_logging(
+        self, MockApp, mock_setup_log, mock_load, mock_acquire,
+        mock_release, mock_fatal
     ):
-        """When config.toml does not exist, message should mention creating it."""
-        mock_app_dir.return_value = tmp_path
-        # config.toml does NOT exist in tmp_path
-
+        """setup_logging should be called even with default config."""
         from main import main
 
         with patch.object(sys, "argv", ["main.py"]):
-            with pytest.raises(SystemExit):
-                main()
+            main()
 
-        message = mock_fatal.call_args[0][0]
-        assert "could not be created" in message.lower() or "create" in message.lower(), (
-            f"Message should mention creating config.toml. Got: {message}"
-        )
+        mock_setup_log.assert_called_once()
 
     @patch("main._show_fatal_error")
     @patch("main._release_single_instance_mutex")
     @patch("main._acquire_single_instance_mutex", return_value=12345)
     @patch("main.load_config", return_value=None)
-    @patch("config._get_app_directory")
-    def test_config_existing_invalid_file_mentions_api_key(
-        self, mock_app_dir, mock_load, mock_acquire, mock_release, mock_fatal,
-        tmp_path
+    @patch("main.setup_logging")
+    @patch("main.VoicePasteApp")
+    def test_config_none_creates_default_appconfig(
+        self, MockApp, mock_setup_log, mock_load, mock_acquire,
+        mock_release, mock_fatal
     ):
-        """When config.toml exists but is invalid, message should mention API key."""
-        mock_app_dir.return_value = tmp_path
-        # Create a config.toml so the "file exists" branch is taken
-        (tmp_path / "config.toml").write_text("[api]\nopenai_api_key = ''")
-
+        """Fallback config should be a default AppConfig instance."""
+        from config import AppConfig
         from main import main
 
         with patch.object(sys, "argv", ["main.py"]):
-            with pytest.raises(SystemExit):
-                main()
+            main()
 
-        message = mock_fatal.call_args[0][0]
-        assert "api key" in message.lower() or "API key" in message, (
-            f"Message should mention API key. Got: {message}"
-        )
+        # The config passed to VoicePasteApp should be an AppConfig
+        actual_config = MockApp.call_args[0][0]
+        assert isinstance(actual_config, AppConfig)
+        # It should have empty API key (default)
+        assert actual_config.openai_api_key == ""
+
+    @patch("main._show_fatal_error")
+    @patch("main._release_single_instance_mutex")
+    @patch("main._acquire_single_instance_mutex", return_value=12345)
+    @patch("main.load_config", return_value=None)
+    @patch("main.setup_logging")
+    @patch("main.VoicePasteApp")
+    def test_config_none_does_not_exit(
+        self, MockApp, mock_setup_log, mock_load, mock_acquire,
+        mock_release, mock_fatal
+    ):
+        """main() should NOT call sys.exit when config is None."""
+        from main import main
+
+        with patch.object(sys, "argv", ["main.py"]):
+            # Should NOT raise SystemExit
+            main()
 
 
 # =========================================================================

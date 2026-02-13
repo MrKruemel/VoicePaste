@@ -11,6 +11,7 @@ build/
 *.spec
 # BUT track the main build spec file (source of truth for PyInstaller)
 !voice_paste.spec
+!voice_paste_local.spec
 
 # IDE
 .vscode/

@@ -19,8 +19,9 @@ from constants import APP_NAME, AppState
 @pytest.fixture
 def v02_app():
     """Create a fully mocked v0.2 VoicePasteApp for integration tests."""
+    mock_stt_instance = MagicMock()
     with patch("main.AudioRecorder") as MockRecorder, \
-         patch("main.CloudWhisperSTT") as MockSTT, \
+         patch("main.create_stt_backend", return_value=mock_stt_instance) as MockFactory, \
          patch("main.CloudLLMSummarizer") as MockCloudSummarizer, \
          patch("main.PassthroughSummarizer") as MockSummarizer, \
          patch("main.HotkeyManager") as MockHotkey, \
@@ -246,8 +247,9 @@ class TestV02AudioCuesDisabled:
     @pytest.fixture
     def silent_app(self):
         """Create app with audio cues disabled."""
+        mock_stt_instance = MagicMock()
         with patch("main.AudioRecorder") as MockRecorder, \
-             patch("main.CloudWhisperSTT") as MockSTT, \
+             patch("main.create_stt_backend", return_value=mock_stt_instance) as MockFactory, \
              patch("main.CloudLLMSummarizer") as MockCloudSummarizer, \
              patch("main.PassthroughSummarizer") as MockSummarizer, \
              patch("main.HotkeyManager") as MockHotkey, \
@@ -306,8 +308,9 @@ class TestV02SummarizationDisabled:
     @pytest.fixture
     def passthrough_app(self):
         """Create app with summarization disabled."""
+        mock_stt_instance = MagicMock()
         with patch("main.AudioRecorder") as MockRecorder, \
-             patch("main.CloudWhisperSTT") as MockSTT, \
+             patch("main.create_stt_backend", return_value=mock_stt_instance) as MockFactory, \
              patch("main.CloudLLMSummarizer") as MockCloudSummarizer, \
              patch("main.PassthroughSummarizer") as MockSummarizer, \
              patch("main.HotkeyManager") as MockHotkey, \

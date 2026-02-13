@@ -10,10 +10,17 @@ preservation, error handling with toast notifications, Escape cancel.
 v0.2.1: Startup UX improvements -- startup balloon notification, fatal
 error message boxes for --noconsole builds, --debug CLI flag.
 
+v0.3: Settings dialog, keyring integration, OpenRouter support,
+      configurable model/base_url/prompt, hot-reload.
+
+v0.4: Local STT via faster-whisper. Factory-based backend selection,
+      model lifecycle management, dual-mode (cloud/local) support.
+
 Architecture:
     Main thread:   pystray event loop (system tray)
     Thread 1:      keyboard hotkey listener (daemon)
     Thread 2:      Recording + STT + Summarization + Paste pipeline (spawned per session)
+    Thread 3:      Settings dialog (tkinter, spawned on demand, v0.3)
 """
 
 import ctypes
@@ -45,7 +52,7 @@ from constants import (
 )
 from config import AppConfig, load_config
 from audio import AudioRecorder
-from stt import CloudWhisperSTT, STTError
+from stt import CloudWhisperSTT, STTError, create_stt_backend
 from summarizer import CloudLLMSummarizer, PassthroughSummarizer, SummarizerError
 from paste import clipboard_backup, clipboard_restore, paste_text
 from hotkey import HotkeyManager
@@ -246,22 +253,27 @@ class VoicePasteApp:
 
         # Initialize components
         self._recorder = AudioRecorder(on_auto_stop=self._on_auto_stop)
-        self._stt = CloudWhisperSTT(api_key=config.openai_api_key)
 
-        # v0.2: Use CloudLLMSummarizer when enabled, else passthrough
-        if config.summarization_enabled:
-            self._summarizer: PassthroughSummarizer | CloudLLMSummarizer = (
-                CloudLLMSummarizer(api_key=config.openai_api_key)
+        # v0.4: STT backend via factory (cloud or local)
+        self._stt = create_stt_backend(config)
+        if self._stt is None:
+            logger.warning(
+                "No STT backend available (backend=%s). "
+                "Configure via Settings dialog.",
+                config.stt_backend,
             )
-            logger.info("Summarization enabled (CloudLLMSummarizer).")
-        else:
-            self._summarizer = PassthroughSummarizer()
-            logger.info("Summarization disabled (PassthroughSummarizer).")
+
+        # v0.3: Build summarizer from config (provider, model, base_url, prompt)
+        self._rebuild_summarizer()
 
         self._hotkey_manager = HotkeyManager(hotkey=config.hotkey)
+
+        # v0.3: TrayManager gets settings callback and state accessor
         self._tray_manager = TrayManager(
             on_quit=self._shutdown,
+            on_settings=self._open_settings,
             hotkey_label=config.hotkey,
+            get_state=lambda: self.state,
         )
 
         self._shutdown_event = threading.Event()
@@ -289,6 +301,112 @@ class VoicePasteApp:
 
         # Update tray icon to match state
         self._tray_manager.update_state(new_state)
+
+    def _rebuild_summarizer(self) -> None:
+        """(Re)create the summarizer based on current config.
+
+        Called on init and after settings changes (hot-reload).
+        """
+        config = self.config
+        if not config.summarization_enabled:
+            self._summarizer = PassthroughSummarizer()
+            logger.info("Summarization disabled (PassthroughSummarizer).")
+            return
+
+        api_key = config.active_summarization_api_key
+        if not api_key:
+            self._summarizer = PassthroughSummarizer()
+            logger.warning(
+                "No API key for summarization provider '%s'. "
+                "Using PassthroughSummarizer.",
+                config.summarization_provider,
+            )
+            return
+
+        self._summarizer = CloudLLMSummarizer(
+            api_key=api_key,
+            model=config.summarization_model,
+            base_url=config.active_summarization_base_url,
+            system_prompt=config.active_system_prompt,
+        )
+        logger.info(
+            "Summarizer configured: provider=%s, model=%s, base_url=%s",
+            config.summarization_provider,
+            config.summarization_model,
+            config.active_summarization_base_url or "(default)",
+        )
+
+    def _open_settings(self) -> None:
+        """Open the settings dialog. Called from tray menu (pystray thread)."""
+        from settings_dialog import open_settings_dialog
+
+        opened = open_settings_dialog(
+            config=self.config,
+            on_save=self._on_settings_saved,
+        )
+        if not opened:
+            logger.info("Settings dialog already open, request ignored.")
+
+    def _on_settings_saved(self, changed_fields: dict) -> None:
+        """Handle settings save. Recreate API clients as needed.
+
+        Called from the tkinter settings thread. Thread-safe because
+        we only replace object references (atomic under GIL) and the
+        pipeline thread checks are guarded by state.
+
+        v0.4: Also handles STT backend switching and local model lifecycle.
+
+        Args:
+            changed_fields: Dict of field names that were changed.
+        """
+        logger.info(
+            "Settings saved. Changed fields: %s", list(changed_fields.keys())
+        )
+
+        # v0.4: Determine if STT backend needs rebuild
+        stt_keys = {
+            "openai_api_key",
+            "stt_backend",
+            "local_model_size",
+            "local_device",
+            "local_compute_type",
+        }
+        if changed_fields.keys() & stt_keys:
+            # Unload previous local model if switching away from local
+            old_stt = self._stt
+            if old_stt is not None and hasattr(old_stt, "unload_model"):
+                logger.info("Unloading previous local STT model...")
+                try:
+                    old_stt.unload_model()
+                except Exception as e:
+                    logger.warning("Error unloading local model: %s", e)
+
+            self._stt = create_stt_backend(self.config)
+            if self._stt is not None:
+                logger.info(
+                    "STT backend rebuilt: %s", type(self._stt).__name__
+                )
+            else:
+                logger.warning("STT backend unavailable after settings change.")
+
+        # Determine if summarizer needs rebuild
+        summarizer_keys = {
+            "openai_api_key",
+            "openrouter_api_key",
+            "summarization_provider",
+            "summarization_model",
+            "summarization_base_url",
+            "summarization_enabled",
+            "summarization_custom_prompt",
+        }
+        if changed_fields.keys() & summarizer_keys:
+            self._rebuild_summarizer()
+            logger.info("Summarizer rebuilt with updated settings.")
+
+        # Notify user via toast
+        self._tray_manager.notify(
+            APP_NAME, "Settings saved and applied."
+        )
 
     def _play_audio_cue(self, cue_fn: callable) -> None:
         """Play an audio cue if audio cues are enabled in config.
@@ -382,7 +500,55 @@ class VoicePasteApp:
         self._stop_recording_and_process()
 
     def _start_recording(self) -> None:
-        """Transition from IDLE to RECORDING."""
+        """Transition from IDLE to RECORDING.
+
+        Performs pre-flight checks before starting the recording:
+        - STT backend must be available.
+        - For local mode: model must be downloaded and ready.
+        """
+        # v0.4: Check STT backend availability
+        if self._stt is None:
+            if self.config.stt_backend == "local":
+                # Provide specific guidance based on what is missing
+                try:
+                    from local_stt import is_faster_whisper_available
+                    import model_manager
+
+                    if not is_faster_whisper_available():
+                        self._show_error(
+                            "Local STT is not available.\n"
+                            "The faster-whisper library could not be loaded.\n"
+                            "Reinstall it or switch to Cloud mode in Settings."
+                        )
+                    elif not model_manager.is_model_available(
+                        self.config.local_model_size
+                    ):
+                        self._show_error(
+                            f"Whisper model '{self.config.local_model_size}' "
+                            f"is not downloaded.\n"
+                            f"Right-click the tray icon > Settings > "
+                            f"Transcription > Download Model."
+                        )
+                    else:
+                        self._show_error(
+                            "Local STT is not available.\n"
+                            "Check the log file for details.\n"
+                            "Right-click the tray icon > Settings to configure."
+                        )
+                except Exception:
+                    self._show_error(
+                        "Local STT is not available.\n"
+                        "Check that faster-whisper is installed and "
+                        "a model is downloaded.\n"
+                        "Right-click the tray icon > Settings to configure."
+                    )
+            else:
+                self._show_error(
+                    "No OpenAI API key configured.\n"
+                    "Right-click the tray icon > Settings to add your key."
+                )
+            return
+
         logger.debug("Attempting to start audio recording...")
         success = self._recorder.start()
         if success:
@@ -468,15 +634,73 @@ class VoicePasteApp:
 
         except STTError as e:
             logger.error("STT pipeline error: %s", e)
-            self._show_error(f"Transcription error: {e}")
+            self._show_error(f"Transcription error:\n{e}")
 
         except SummarizerError as e:
             logger.error("Summarizer pipeline error: %s", e)
-            self._show_error(f"Summarization error: {e}")
+            self._show_error(f"Summarization error:\n{e}")
+
+        except ImportError as e:
+            # Catches late-binding import failures in local STT (e.g.,
+            # faster-whisper's CTranslate2 DLL not found, numpy ABI
+            # mismatch, etc.)
+            logger.error(
+                "Import error during pipeline: %s: %s",
+                type(e).__name__,
+                e,
+            )
+            error_msg = str(e)
+            if "DLL" in error_msg or "dll" in error_msg:
+                self._show_error(
+                    "A required library (DLL) could not be loaded.\n"
+                    "Install the Visual C++ Redistributable (x64):\n"
+                    "https://aka.ms/vs/17/release/vc_redist.x64.exe"
+                )
+            else:
+                self._show_error(
+                    f"A required module could not be loaded:\n{error_msg}\n\n"
+                    f"Try reinstalling the application."
+                )
+
+        except RuntimeError as e:
+            # CTranslate2 and other native libs raise RuntimeError for
+            # internal failures (CUDA errors, model corruption, etc.)
+            logger.error(
+                "RuntimeError during pipeline: %s: %s",
+                type(e).__name__,
+                e,
+            )
+            error_msg = str(e)
+            if "cuda" in error_msg.lower() or "gpu" in error_msg.lower():
+                self._show_error(
+                    "GPU error during processing.\n"
+                    "Try setting device to 'cpu' in Settings."
+                )
+            elif "out of memory" in error_msg.lower():
+                self._show_error(
+                    "Out of memory.\n"
+                    "Try a smaller model or shorter recording."
+                )
+            else:
+                self._show_error(
+                    "Processing error.\n"
+                    "Check the log file for details."
+                )
+
+        except MemoryError:
+            logger.error("Out of memory during pipeline execution.")
+            self._show_error(
+                "Out of memory.\n"
+                "Try a smaller model or shorter recording, "
+                "or close other applications."
+            )
 
         except Exception:
             logger.exception("Unexpected error in pipeline.")
-            self._show_error("An unexpected error occurred.")
+            self._show_error(
+                "An unexpected error occurred.\n"
+                "Check the log file for details."
+            )
 
         finally:
             # Always restore clipboard and return to IDLE
@@ -493,6 +717,14 @@ class VoicePasteApp:
         # Stop recording if active
         if self._recorder.is_recording:
             self._recorder.stop()
+
+        # v0.4: Unload local STT model to free memory
+        if self._stt is not None and hasattr(self._stt, "unload_model"):
+            try:
+                self._stt.unload_model()
+                logger.info("Local STT model unloaded.")
+            except Exception as e:
+                logger.warning("Error unloading local STT model: %s", e)
 
         # Unregister hotkeys
         self._hotkey_manager.unregister()
@@ -514,10 +746,11 @@ class VoicePasteApp:
                 a user-visible error message.
         """
         logger.info(
-            "Starting %s v%s (hotkey=%s, summarization=%s, audio_cues=%s)",
+            "Starting %s v%s (hotkey=%s, stt=%s, summarization=%s, audio_cues=%s)",
             APP_NAME,
             APP_VERSION,
             self.config.hotkey,
+            self.config.stt_backend,
             "on" if self.config.summarization_enabled else "off",
             "on" if self.config.audio_cues_enabled else "off",
         )
@@ -635,43 +868,26 @@ def main() -> None:
     try:
         # ------------------------------------------------------------
         # Step 3: Load configuration
+        # v0.3: Missing API key is no longer fatal. The user can
+        # enter it via the Settings dialog after the app starts.
         # ------------------------------------------------------------
         config = load_config()
         if config is None:
-            # Determine the specific reason for the failure so we can
-            # show a helpful message to the user.
-            from config import _get_app_directory
-            app_dir = _get_app_directory()
-            config_path = app_dir / "config.toml"
+            # load_config() only returns None on unrecoverable errors.
+            # Use a default config so the Settings dialog can still open.
+            logger.warning(
+                "Could not load config. Starting with defaults. "
+                "Use Settings dialog to configure."
+            )
+            from config import AppConfig as _AC
+            config = _AC()
 
-            if not config_path.exists():
-                # Template creation itself failed (OSError).
-                msg = (
-                    f"config.toml could not be created.\n\n"
-                    f"Expected location:\n"
-                    f"  {config_path}\n\n"
-                    f"Please create the file manually with your "
-                    f"OpenAI API key and restart {APP_NAME}.\n\n"
-                    f"Check the log file for details:\n"
-                    f"  {app_dir / 'voice-paste.log'}"
-                )
-            else:
-                msg = (
-                    f"Configuration error in config.toml.\n\n"
-                    f"Please check the file at:\n"
-                    f"  {config_path}\n\n"
-                    f"Most likely the OpenAI API key is empty.\n"
-                    f"Open config.toml, set your key under [api], "
-                    f"and restart {APP_NAME}.\n\n"
-                    f"Other possible issues:\n"
-                    f"  - TOML syntax error (mismatched quotes, etc.)\n\n"
-                    f"Check the log file for details:\n"
-                    f"  {app_dir / 'voice-paste.log'}"
-                )
-
-            logger.error("Configuration invalid. Exiting.")
-            _show_fatal_error(msg)
-            sys.exit(1)
+        # v0.3: Log warning if no API key (no longer fatal)
+        if not config.openai_api_key:
+            logger.warning(
+                "No OpenAI API key configured. "
+                "Right-click the tray icon > Settings to add your key."
+            )
 
         # ------------------------------------------------------------
         # Step 4: Reconfigure logging with config settings

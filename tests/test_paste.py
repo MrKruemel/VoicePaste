@@ -51,12 +51,10 @@ class TestPasteText:
         mock_kb.send.assert_not_called()
 
     @patch("paste.kb")
-    @patch("paste.ctypes")
+    @patch("paste._open_clipboard", return_value=False)
     @patch("paste.time")
-    def test_clipboard_open_failure(self, mock_time, mock_ctypes, mock_kb):
+    def test_clipboard_open_failure(self, mock_time, mock_open_clip, mock_kb):
         """Clipboard open failure returns False."""
-        mock_ctypes.windll.user32.OpenClipboard.return_value = False
-
         result = paste_text("Test text")
 
         assert result is False

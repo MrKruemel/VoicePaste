@@ -1,7 +1,10 @@
 """Speech-to-Text backend abstraction and implementations.
 
-Provides a Protocol for STT backends and a cloud implementation
-using the OpenAI Whisper API.
+Provides a Protocol for STT backends, a cloud implementation using the
+OpenAI Whisper API, and a factory function that creates the appropriate
+backend based on application configuration.
+
+v0.4: Added create_stt_backend() factory to select cloud or local backend.
 
 REQ-S06: HTTPS only for all API calls.
 REQ-S07: TLS certificate validation is always enabled.
@@ -199,3 +202,100 @@ class CloudWhisperSTT:
             ) from last_exception
         else:
             raise STTError("API call failed after retries.") from last_exception
+
+
+def create_stt_backend(config: "AppConfig") -> "STTBackend | None":
+    """Factory function to create an STT backend based on configuration.
+
+    v0.4: Selects CloudWhisperSTT or LocalWhisperSTT based on config.stt_backend.
+
+    For local mode, this function checks three preconditions:
+      1. faster-whisper must be importable (package installed, DLLs present).
+      2. The selected model must be downloaded (validated via model_manager).
+      3. LocalWhisperSTT must be constructable without errors.
+
+    If any precondition fails, a warning is logged with an actionable message
+    and None is returned. The caller (VoicePasteApp) is expected to show the
+    user a notification when they try to record.
+
+    Args:
+        config: Application configuration with STT settings.
+
+    Returns:
+        An STTBackend implementation, or None if no backend can be created
+        (e.g., no API key for cloud, faster-whisper not installed for local).
+    """
+    if config.stt_backend == "local":
+        try:
+            from local_stt import LocalWhisperSTT, is_faster_whisper_available
+            import model_manager
+
+            if not is_faster_whisper_available():
+                logger.warning(
+                    "faster-whisper is not installed or its native libraries "
+                    "could not be loaded. Cannot use local STT. "
+                    "Install with: pip install faster-whisper"
+                )
+                return None
+
+            model_path = model_manager.get_model_path(config.local_model_size)
+
+            if model_path is None:
+                logger.warning(
+                    "Local Whisper model '%s' is not downloaded. "
+                    "Use Settings > Transcription > Download Model to "
+                    "download it before recording.",
+                    config.local_model_size,
+                )
+                # Still create the backend -- it will raise a clear
+                # STTError with user guidance when transcribe() is called,
+                # but only if we are NOT in a frozen exe. In a frozen exe,
+                # we return None so _start_recording() can show a specific
+                # error immediately.
+                import sys
+
+                if getattr(sys, "frozen", False):
+                    logger.warning(
+                        "Running as frozen executable. Auto-download is "
+                        "not supported. Returning None for STT backend."
+                    )
+                    return None
+
+            return LocalWhisperSTT(
+                model_size=config.local_model_size,
+                device=config.local_device,
+                compute_type=config.local_compute_type,
+                model_path=model_path,
+            )
+
+        except STTError as e:
+            # STTError from LocalWhisperSTT.__init__ (e.g., faster-whisper
+            # not importable at construction time)
+            logger.error(
+                "Local STT backend creation failed: %s", e
+            )
+            return None
+
+        except ImportError as e:
+            logger.error(
+                "Failed to import local STT modules: %s. "
+                "Check that faster-whisper and its dependencies are "
+                "installed.",
+                e,
+            )
+            return None
+
+        except Exception as e:
+            logger.error(
+                "Unexpected error creating local STT backend: %s: %s",
+                type(e).__name__,
+                e,
+            )
+            return None
+
+    else:
+        # Cloud backend
+        if not config.openai_api_key:
+            logger.warning("No API key for cloud STT.")
+            return None
+        return CloudWhisperSTT(api_key=config.openai_api_key)

@@ -103,8 +103,8 @@ class TestOnlySpecificHotkeys:
         if hasattr(mock_kb, "on_press"):
             mock_kb.on_press.assert_not_called()
 
-    def test_default_hotkey_is_ctrl_shift_v(self):
-        """Default hotkey should be ctrl+shift+v (changed from ctrl+windows)."""
+    def test_default_hotkey_is_ctrl_alt_r(self):
+        """Default hotkey should be ctrl+alt+r (safe default, no conflicts)."""
         manager = HotkeyManager()
-        assert manager.hotkey == "ctrl+shift+v"
+        assert manager.hotkey == "ctrl+alt+r"
         assert manager.hotkey == DEFAULT_HOTKEY

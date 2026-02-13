@@ -6,6 +6,7 @@
 # PyInstaller bundling. Do NOT loosen to >= without updating the .spec file
 # and re-testing the built .exe.
 # Last pinned: 2026-02-13 from environment via `pip freeze`
+# Updated: 2026-02-13 for v0.3 (keyring support)
 
 # ---------------------------------------------------------------------------
 # Audio capture
@@ -49,3 +50,9 @@ distro==1.9.0               # OS detection (openai SDK uses for user-agent)
 jiter==0.13.0               # Fast JSON parsing (openai SDK)
 tqdm==4.67.3                # Progress bars (openai SDK file uploads)
 colorama==0.4.6             # ANSI color support on Windows (tqdm dep)
+
+# ---------------------------------------------------------------------------
+# Secure credential storage (v0.3)
+# ---------------------------------------------------------------------------
+keyring==25.6.0             # Windows Credential Manager integration
+pywin32-ctypes==0.2.3       # keyring backend dependency on Windows

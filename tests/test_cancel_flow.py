@@ -91,8 +91,9 @@ class TestCancelFlowStateMachine:
     @pytest.fixture
     def mock_app(self):
         """Create a VoicePasteApp with mocked dependencies."""
+        mock_stt_instance = MagicMock()
         with patch("main.AudioRecorder") as MockRecorder, \
-             patch("main.CloudWhisperSTT") as MockSTT, \
+             patch("main.create_stt_backend", return_value=mock_stt_instance) as MockFactory, \
              patch("main.CloudLLMSummarizer") as MockCloudSummarizer, \
              patch("main.PassthroughSummarizer") as MockSummarizer, \
              patch("main.HotkeyManager") as MockHotkey, \

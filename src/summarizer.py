@@ -2,6 +2,8 @@
 
 v0.1 uses a passthrough summarizer (returns text unchanged).
 v0.2+ adds a cloud LLM summarizer using OpenAI GPT-4o-mini.
+v0.3: Added base_url support for OpenRouter and custom endpoints,
+      and custom system prompt support.
 
 REQ-S24: Never log transcript content.
 """
@@ -72,17 +74,20 @@ class PassthroughSummarizer:
 
 
 class CloudLLMSummarizer:
-    """Cloud LLM summarizer using OpenAI GPT-4o-mini.
+    """Cloud LLM summarizer using OpenAI-compatible APIs.
 
     Cleans up raw STT transcriptions by removing filler words,
     fixing grammar, and producing concise summaries.
+
+    v0.3: Supports OpenRouter and custom endpoints via base_url parameter.
+          Supports custom system prompts.
 
     REQ-S06: Uses HTTPS only (enforced by the openai library).
     REQ-S07: TLS validation is enabled by default.
     REQ-S24: Never logs transcript content.
 
     Attributes:
-        model: OpenAI model identifier.
+        model: Model identifier (e.g., "gpt-4o-mini", "openai/gpt-4o-mini").
         temperature: Sampling temperature.
         max_tokens: Maximum output tokens.
     """
@@ -95,21 +100,34 @@ class CloudLLMSummarizer:
         max_tokens: int = SUMMARIZE_MAX_TOKENS,
         timeout: int = SUMMARIZE_TIMEOUT_SECONDS,
         system_prompt: str = SUMMARIZE_SYSTEM_PROMPT,
+        base_url: str | None = None,
     ) -> None:
         """Initialize the cloud LLM summarizer.
 
         Args:
-            api_key: OpenAI API key (REQ-S02: never hardcoded).
-            model: OpenAI model identifier.
+            api_key: API key (REQ-S02: never hardcoded).
+            model: Model identifier.
             temperature: Sampling temperature (0.0-1.0).
             max_tokens: Maximum output tokens.
             timeout: API call timeout in seconds.
             system_prompt: System prompt for the summarization task.
+            base_url: Custom API base URL (None = OpenAI default).
+                      Use "https://openrouter.ai/api/v1" for OpenRouter.
         """
-        self._client = openai.OpenAI(
-            api_key=api_key,
-            timeout=timeout,
-        )
+        client_kwargs: dict = {
+            "api_key": api_key,
+            "timeout": timeout,
+        }
+        if base_url:
+            client_kwargs["base_url"] = base_url
+            # OpenRouter recommends setting HTTP-Referer and X-Title headers
+            if "openrouter.ai" in base_url:
+                client_kwargs["default_headers"] = {
+                    "HTTP-Referer": "https://github.com/voice-paste",
+                    "X-Title": "Voice Paste",
+                }
+
+        self._client = openai.OpenAI(**client_kwargs)
         self._model = model
         self._temperature = temperature
         self._max_tokens = max_tokens

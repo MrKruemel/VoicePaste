@@ -8,6 +8,7 @@ v0.2.4: Microphone silhouette icon with solid background for Windows 11 visibili
 v0.2.5: Critical fix -- explicitly set icon.visible = True in setup callback.
          pystray only auto-sets visible when NO setup callback is given.
          Also: 32x32 icon size, PID-unique icon name, enhanced diagnostics.
+v0.3: Added "Settings..." menu item with dynamic enable/disable based on app state.
 """
 
 import logging
@@ -187,25 +188,34 @@ class TrayManager:
 
     v0.2: Dynamic icon colors reflecting application state, status menu item,
     and toast notification support via pystray's notify mechanism.
+    v0.3: "Settings..." menu item with dynamic enable/disable.
 
     Attributes:
         on_quit: Callback invoked when user selects Quit.
+        on_settings: Callback invoked when user selects Settings.
         hotkey_label: Display string for the configured hotkey combo.
     """
 
     def __init__(
         self,
         on_quit: Optional[Callable[[], None]] = None,
+        on_settings: Optional[Callable[[], None]] = None,
         hotkey_label: str = "Ctrl+Alt+R",
+        get_state: Optional[Callable[[], AppState]] = None,
     ) -> None:
         """Initialize the tray manager.
 
         Args:
             on_quit: Callback for the Quit menu action.
+            on_settings: Callback for the Settings menu action (v0.3).
             hotkey_label: Human-readable hotkey string for tooltips and
                 notifications (e.g., "ctrl+alt+r").
+            get_state: Callable returning current AppState for dynamic
+                menu enablement (v0.3).
         """
         self._on_quit = on_quit
+        self._on_settings = on_settings
+        self._get_state = get_state
         self._hotkey_label = hotkey_label
         self._icon: Optional[pystray.Icon] = None
         self._running = False
@@ -234,10 +244,39 @@ class TrayManager:
         """
         return _STATE_LABELS.get(self._current_state, "Status: Unknown")
 
+    def _is_settings_enabled(self) -> bool:
+        """Check if the Settings menu item should be enabled.
+
+        Settings is disabled during RECORDING and PROCESSING states to
+        prevent configuration changes while audio is being captured or
+        an API call is in progress.
+
+        Returns:
+            True if Settings should be clickable.
+        """
+        if self._get_state is None:
+            return True
+        state = self._get_state()
+        return state in (AppState.IDLE, AppState.PASTING)
+
+    def _handle_settings(
+        self, icon: pystray.Icon, item: pystray.MenuItem
+    ) -> None:
+        """Handle the Settings menu action.
+
+        Args:
+            icon: The pystray Icon instance.
+            item: The menu item that was clicked.
+        """
+        logger.info("Settings requested from tray menu.")
+        if self._on_settings:
+            self._on_settings()
+
     def _build_menu(self) -> pystray.Menu:
         """Build the system tray context menu.
 
         v0.2: Status display (greyed out) + Quit option.
+        v0.3: Added "Settings..." menu item with dynamic enable/disable.
         The hidden default item prevents pystray from showing its
         internal Win32 window when the user left-clicks or double-clicks
         the tray icon (known pystray issue on Windows).
@@ -258,6 +297,13 @@ class TrayManager:
                 lambda _: self._get_status_text(),
                 None,
                 enabled=False,
+            ),
+            pystray.Menu.SEPARATOR,
+            # v0.3: Settings dialog
+            pystray.MenuItem(
+                "Settings...",
+                self._handle_settings,
+                enabled=lambda _: self._is_settings_enabled(),
             ),
             pystray.Menu.SEPARATOR,
             pystray.MenuItem("Quit", self._handle_quit),

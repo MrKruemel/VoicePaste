@@ -205,8 +205,9 @@ class TestAutoStopInVoicePasteApp:
     @pytest.fixture
     def auto_stop_app(self):
         """Create a VoicePasteApp with all external dependencies mocked."""
+        mock_stt_instance = MagicMock()
         with patch("main.AudioRecorder") as MockRecorder, \
-             patch("main.CloudWhisperSTT") as MockSTT, \
+             patch("main.create_stt_backend", return_value=mock_stt_instance) as MockFactory, \
              patch("main.CloudLLMSummarizer") as MockCloudSummarizer, \
              patch("main.PassthroughSummarizer") as MockSummarizer, \
              patch("main.HotkeyManager") as MockHotkey, \
@@ -346,7 +347,7 @@ class TestAutoStopInVoicePasteApp:
     def test_on_auto_stop_callback_passed_to_recorder(self):
         """VoicePasteApp should pass _on_auto_stop as callback to AudioRecorder."""
         with patch("main.AudioRecorder") as MockRecorder, \
-             patch("main.CloudWhisperSTT"), \
+             patch("main.create_stt_backend", return_value=MagicMock()), \
              patch("main.CloudLLMSummarizer"), \
              patch("main.PassthroughSummarizer"), \
              patch("main.HotkeyManager"), \
