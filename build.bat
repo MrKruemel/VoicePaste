@@ -4,22 +4,18 @@ REM Build script for Voice-to-Summary Paste Tool
 REM ==========================================================================
 REM
 REM Usage:
-REM   build.bat              Build release .exe (cloud-only, windowed, UPX)
+REM   build.bat              Build release .exe (windowed, UPX)
 REM   build.bat release      Build release .exe (same as above)
 REM   build.bat debug        Build debug .exe (console, no UPX, verbose)
-REM   build.bat local        Build local variant .exe (includes faster-whisper)
-REM   build.bat local-debug  Build local variant debug .exe
 REM   build.bat clean        Remove build artifacts (build/, dist/, __pycache__)
 REM
 REM Prerequisites:
 REM   - Python 3.11+ on PATH
 REM   - PyInstaller installed:  pip install pyinstaller
-REM   - For cloud build:  pip install -r requirements.txt
-REM   - For local build:  pip install -r requirements-local.txt
+REM   - pip install -r requirements.txt
 REM
 REM Output:
-REM   dist\VoicePaste.exe         (~40-60 MB, cloud-only)
-REM   dist\VoicePaste-Local.exe   (~150-250 MB, with faster-whisper)
+REM   dist\VoicePaste.exe         (~100-150 MB)
 REM   dist\config.example.toml    (copied alongside the .exe)
 REM ==========================================================================
 
@@ -31,12 +27,9 @@ cd /d "%PROJECT_DIR%"
 
 REM -- Parse command-line argument --
 set "BUILD_MODE=release"
-set "BUILD_VARIANT=cloud"
 if /i "%~1"=="clean"       goto :clean
 if /i "%~1"=="debug"       set "BUILD_MODE=debug"
 if /i "%~1"=="release"     set "BUILD_MODE=release"
-if /i "%~1"=="local"       set "BUILD_VARIANT=local" & set "BUILD_MODE=release"
-if /i "%~1"=="local-debug" set "BUILD_VARIANT=local" & set "BUILD_MODE=debug"
 
 REM ==========================================================================
 REM  BUILD
@@ -44,7 +37,7 @@ REM ==========================================================================
 
 echo.
 echo ======================================================================
-echo  VoicePaste Build (%BUILD_VARIANT% / %BUILD_MODE%)
+echo  VoicePaste Build (%BUILD_MODE%)
 echo ======================================================================
 echo.
 
@@ -62,14 +55,9 @@ if errorlevel 1 (
     exit /b 1
 )
 
-REM -- Select the correct .spec file --
-if /i "%BUILD_VARIANT%"=="local" (
-    set "SPEC_FILE=%PROJECT_DIR%voice_paste_local.spec"
-    set "EXE_NAME=VoicePaste-Local"
-) else (
-    set "SPEC_FILE=%PROJECT_DIR%voice_paste.spec"
-    set "EXE_NAME=VoicePaste"
-)
+REM -- Use the unified .spec file --
+set "SPEC_FILE=%PROJECT_DIR%voice_paste.spec"
+set "EXE_NAME=VoicePaste"
 
 REM -- Verify the .spec file exists --
 if not exist "!SPEC_FILE!" (
@@ -77,13 +65,22 @@ if not exist "!SPEC_FILE!" (
     exit /b 1
 )
 
+REM -- Generate application icon --
+echo [1/5] Generating application icon...
+python "%PROJECT_DIR%assets\generate_icons.py"
+if errorlevel 1 (
+    echo [ERROR] Icon generation failed.
+    exit /b 1
+)
+echo.
+
 REM -- Clean previous build artifacts --
-echo [1/4] Cleaning previous build...
+echo [2/5] Cleaning previous build...
 if exist "%PROJECT_DIR%build"    rmdir /s /q "%PROJECT_DIR%build"
 if exist "%PROJECT_DIR%dist"     rmdir /s /q "%PROJECT_DIR%dist"
 
 REM -- Run PyInstaller --
-echo [2/4] Running PyInstaller (%BUILD_MODE% mode)...
+echo [3/5] Running PyInstaller (%BUILD_MODE% mode)...
 echo.
 
 if /i "%BUILD_MODE%"=="debug" (
@@ -106,7 +103,7 @@ if not exist "%PROJECT_DIR%dist\!EXE_NAME!.exe" (
 )
 
 REM -- Copy config.example.toml alongside the .exe --
-echo [3/4] Copying config.example.toml to dist\...
+echo [4/5] Copying config.example.toml to dist\...
 if exist "%PROJECT_DIR%config.example.toml" (
     copy /y "%PROJECT_DIR%config.example.toml" "%PROJECT_DIR%dist\config.example.toml" >nul
     echo       dist\config.example.toml copied.
@@ -115,7 +112,7 @@ if exist "%PROJECT_DIR%config.example.toml" (
 )
 
 REM -- Report the result --
-echo [4/4] Build complete.
+echo [5/5] Build complete.
 echo.
 echo ======================================================================
 echo  Output:  dist\!EXE_NAME!.exe

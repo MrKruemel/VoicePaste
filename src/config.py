@@ -16,6 +16,7 @@ from typing import Optional
 
 from constants import (
     DEFAULT_HOTKEY,
+    DEFAULT_PROMPT_HOTKEY,
     DEFAULT_STT_BACKEND,
     DEFAULT_SUMMARIZATION_PROVIDER,
     KEYRING_OPENAI_KEY,
@@ -24,9 +25,13 @@ from constants import (
     LOCAL_STT_DEFAULT_COMPUTE_TYPE,
     LOCAL_STT_DEFAULT_DEVICE,
     LOCAL_STT_DEFAULT_MODEL_SIZE,
+    LOCAL_STT_DEFAULT_VAD_FILTER,
+    LOCAL_STT_FROZEN_VAD_FILTER,
     LOCAL_STT_VALID_COMPUTE_TYPES,
     LOCAL_STT_VALID_DEVICES,
     LOG_FILENAME,
+    OLLAMA_DEFAULT_BASE_URL,
+    OLLAMA_DEFAULT_MODEL,
     OPENAI_DEFAULT_BASE_URL,
     OPENROUTER_DEFAULT_BASE_URL,
     OPENROUTER_DEFAULT_MODEL,
@@ -54,6 +59,8 @@ CONFIG_TEMPLATE = """\
 [hotkey]
 # Global hotkey to start/stop recording (default: "ctrl+alt+r")
 combination = "ctrl+alt+r"
+# Voice Prompt hotkey: record speech, send as prompt to LLM, paste answer (default: "ctrl+alt+a")
+prompt_combination = "ctrl+alt+a"
 
 [transcription]
 # Backend: "cloud" (OpenAI Whisper API) or "local" (faster-whisper, offline)
@@ -67,11 +74,17 @@ model_size = "base"
 device = "cpu"
 # Quantization: "int8" (fastest, CPU), "float16" (GPU), "float32" (highest quality)
 compute_type = "int8"
+# Voice Activity Detection (Silero VAD): skip silence before Whisper inference.
+# Improves accuracy on long recordings with pauses. Requires onnxruntime.
+# Set to false if transcription crashes in the .exe build (onnxruntime issue).
+# Default: true for script, false for frozen .exe (auto-detected at startup).
+vad_filter = true
 
 [summarization]
 # Enable text cleanup and summarization (default: true)
 enabled = true
-# Provider: "openai" or "openrouter" (default: "openai")
+# Provider: "openai", "openrouter", or "ollama" (default: "openai")
+# Ollama runs locally (http://localhost:11434) and requires no API key.
 provider = "openai"
 # Model name (default: "gpt-4o-mini")
 model = "gpt-4o-mini"
@@ -133,6 +146,7 @@ class AppConfig:
     openai_api_key: str = ""
     openrouter_api_key: str = ""
     hotkey: str = DEFAULT_HOTKEY
+    prompt_hotkey: str = DEFAULT_PROMPT_HOTKEY
     log_level: str = "INFO"
     summarization_enabled: bool = True
     summarization_provider: str = DEFAULT_SUMMARIZATION_PROVIDER
@@ -147,6 +161,7 @@ class AppConfig:
     local_model_size: str = LOCAL_STT_DEFAULT_MODEL_SIZE
     local_device: str = LOCAL_STT_DEFAULT_DEVICE
     local_compute_type: str = LOCAL_STT_DEFAULT_COMPUTE_TYPE
+    vad_filter: bool = LOCAL_STT_DEFAULT_VAD_FILTER
 
     @property
     def config_path(self) -> Path:
@@ -163,6 +178,10 @@ class AppConfig:
         """Return the API key for the configured summarization provider."""
         if self.summarization_provider == "openrouter":
             return self.openrouter_api_key
+        if self.summarization_provider == "ollama":
+            # Ollama runs locally and needs no real API key.
+            # The OpenAI SDK requires a non-empty string, so use a dummy.
+            return "ollama"
         return self.openai_api_key
 
     @property
@@ -175,6 +194,8 @@ class AppConfig:
             return self.summarization_base_url
         if self.summarization_provider == "openrouter":
             return OPENROUTER_DEFAULT_BASE_URL
+        if self.summarization_provider == "ollama":
+            return OLLAMA_DEFAULT_BASE_URL
         return None  # Use openai library default
 
     @property
@@ -233,6 +254,8 @@ class AppConfig:
 
 [hotkey]
 combination = "{esc(self.hotkey)}"
+# Voice Prompt hotkey: record speech, send as prompt to LLM, paste answer
+prompt_combination = "{esc(self.prompt_hotkey)}"
 
 [transcription]
 # Backend: "cloud" (OpenAI Whisper API) or "local" (faster-whisper, offline)
@@ -243,6 +266,8 @@ model_size = "{esc(self.local_model_size)}"
 device = "{esc(self.local_device)}"
 # Compute type: int8, float16, float32, auto
 compute_type = "{esc(self.local_compute_type)}"
+# Silero VAD: filter silence before Whisper (disable if .exe crashes during transcription)
+vad_filter = {str(self.vad_filter).lower()}
 
 [summarization]
 enabled = {str(self.summarization_enabled).lower()}
@@ -357,6 +382,7 @@ def load_config() -> Optional[AppConfig]:
 
     toml_api_key = api_section.get("openai_api_key", "").strip()
     hotkey = hotkey_section.get("combination", DEFAULT_HOTKEY)
+    prompt_hotkey = hotkey_section.get("prompt_combination", DEFAULT_PROMPT_HOTKEY)
     log_level = logging_section.get("level", "INFO")
     summarization_enabled = summarization_section.get("enabled", True)
     summarization_provider = summarization_section.get("provider", DEFAULT_SUMMARIZATION_PROVIDER)
@@ -366,7 +392,7 @@ def load_config() -> Optional[AppConfig]:
     audio_cues_enabled = feedback_section.get("audio_cues", True)
 
     # Validate provider
-    if summarization_provider not in ("openai", "openrouter"):
+    if summarization_provider not in ("openai", "openrouter", "ollama"):
         logger.warning(
             "Invalid summarization provider '%s'. Falling back to 'openai'.",
             summarization_provider,
@@ -410,7 +436,34 @@ def load_config() -> Optional[AppConfig]:
         )
         local_compute_type = LOCAL_STT_DEFAULT_COMPUTE_TYPE
 
-    # Validate hotkey string using the keyboard library
+    # VAD filter: read from TOML, but override to False in frozen exe unless
+    # explicitly set to True by the user.
+    _vad_raw = transcription_section.get("vad_filter", None)
+    if _vad_raw is not None:
+        # User explicitly set a value in config.toml -- respect it.
+        vad_filter = bool(_vad_raw)
+        logger.info(
+            "VAD filter explicitly configured: %s",
+            "enabled" if vad_filter else "disabled",
+        )
+    else:
+        # No explicit setting: use safe default based on execution context.
+        if getattr(sys, "frozen", False):
+            vad_filter = LOCAL_STT_FROZEN_VAD_FILTER
+            logger.info(
+                "VAD filter defaulting to %s (frozen executable). "
+                "Set [transcription] vad_filter = true in config.toml "
+                "to override.",
+                "enabled" if vad_filter else "disabled",
+            )
+        else:
+            vad_filter = LOCAL_STT_DEFAULT_VAD_FILTER
+            logger.debug(
+                "VAD filter defaulting to %s (script mode).",
+                "enabled" if vad_filter else "disabled",
+            )
+
+    # Validate hotkey strings using the keyboard library
     if hotkey and hotkey.strip():
         hotkey = hotkey.strip()
         try:
@@ -428,6 +481,24 @@ def load_config() -> Optional[AppConfig]:
             hotkey = DEFAULT_HOTKEY
     else:
         hotkey = DEFAULT_HOTKEY
+
+    if prompt_hotkey and prompt_hotkey.strip():
+        prompt_hotkey = prompt_hotkey.strip()
+        try:
+            import keyboard as _kb
+            _kb.parse_hotkey(prompt_hotkey)
+            logger.info("Prompt hotkey configured: '%s'", prompt_hotkey)
+        except Exception as e:
+            logger.warning(
+                "Invalid prompt hotkey '%s' in config.toml: %s. "
+                "Falling back to default '%s'.",
+                prompt_hotkey,
+                e,
+                DEFAULT_PROMPT_HOTKEY,
+            )
+            prompt_hotkey = DEFAULT_PROMPT_HOTKEY
+    else:
+        prompt_hotkey = DEFAULT_PROMPT_HOTKEY
 
     # --- v0.3: Keyring integration for API keys ---
     openai_api_key = ""
@@ -467,6 +538,7 @@ def load_config() -> Optional[AppConfig]:
         openai_api_key=openai_api_key,
         openrouter_api_key=openrouter_api_key,
         hotkey=hotkey,
+        prompt_hotkey=prompt_hotkey,
         log_level=log_level.upper(),
         summarization_enabled=bool(summarization_enabled),
         summarization_provider=summarization_provider,
@@ -479,6 +551,7 @@ def load_config() -> Optional[AppConfig]:
         local_model_size=local_model_size,
         local_device=local_device,
         local_compute_type=local_compute_type,
+        vad_filter=vad_filter,
     )
 
     # REQ-S01: Only log the masked key
@@ -492,11 +565,12 @@ def load_config() -> Optional[AppConfig]:
     )
     logger.debug("Audio cues: %s", "enabled" if config.audio_cues_enabled else "disabled")
     logger.debug(
-        "STT backend: %s (local model=%s, device=%s, compute=%s)",
+        "STT backend: %s (local model=%s, device=%s, compute=%s, vad=%s)",
         config.stt_backend,
         config.local_model_size,
         config.local_device,
         config.local_compute_type,
+        "on" if config.vad_filter else "off",
     )
     logger.debug("App directory: %s", config.app_directory)
 

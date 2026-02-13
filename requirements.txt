@@ -6,7 +6,7 @@
 # PyInstaller bundling. Do NOT loosen to >= without updating the .spec file
 # and re-testing the built .exe.
 # Last pinned: 2026-02-13 from environment via `pip freeze`
-# Updated: 2026-02-13 for v0.3 (keyring support)
+# Updated: 2026-02-13 for v0.3 (keyring support) + v0.4 (local STT)
 
 # ---------------------------------------------------------------------------
 # Audio capture
@@ -24,6 +24,7 @@ keyboard==0.13.5            # System-wide hotkey listener (requires admin on Lin
 # ---------------------------------------------------------------------------
 pystray==0.19.5             # System-tray icon and menu
 Pillow==12.1.1              # Image creation for tray icon (PIL) -- CVE-2026-25990
+sv_ttk==2.6.1               # Sun Valley theme for modern tkinter UI
 
 # ---------------------------------------------------------------------------
 # OpenAI API (Whisper STT + GPT summarization)
@@ -56,3 +57,22 @@ colorama==0.4.6             # ANSI color support on Windows (tqdm dep)
 # ---------------------------------------------------------------------------
 keyring==25.6.0             # Windows Credential Manager integration
 pywin32-ctypes==0.2.3       # keyring backend dependency on Windows
+
+# ---------------------------------------------------------------------------
+# Local STT: faster-whisper (CTranslate2 engine) (v0.4)
+# ---------------------------------------------------------------------------
+faster-whisper==1.1.1       # Whisper reimplementation on CTranslate2 (4x faster)
+ctranslate2==4.6.1          # Inference engine (C++ with Python bindings)
+huggingface-hub==0.29.3     # Model download from Hugging Face Hub
+tokenizers==0.21.1          # Fast tokenizers (ctranslate2/faster-whisper dep)
+onnxruntime==1.24.1         # ONNX runtime (Silero VAD in faster-whisper)
+
+# ---------------------------------------------------------------------------
+# Transitive dependencies for local STT (pinned for PyInstaller)
+# ---------------------------------------------------------------------------
+pyyaml==6.0.2               # YAML parsing (huggingface-hub dep)
+filelock==3.17.0            # File locking (huggingface-hub dep)
+fsspec==2024.12.0           # Filesystem abstraction (huggingface-hub dep)
+requests==2.32.3            # HTTP client (huggingface-hub dep)
+urllib3==2.3.0              # HTTP transport (requests dep)
+charset-normalizer==3.4.1   # Character encoding detection (requests dep)

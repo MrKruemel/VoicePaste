@@ -14,7 +14,7 @@ from typing import Callable, Optional
 
 import keyboard as kb
 
-from constants import CANCEL_HOTKEY, DEFAULT_HOTKEY, HOTKEY_DEBOUNCE_MS
+from constants import CANCEL_HOTKEY, DEFAULT_HOTKEY, DEFAULT_PROMPT_HOTKEY, HOTKEY_DEBOUNCE_MS
 
 logger = logging.getLogger(__name__)
 
@@ -33,23 +33,30 @@ class HotkeyManager:
     def __init__(
         self,
         hotkey: str = DEFAULT_HOTKEY,
+        prompt_hotkey: str = DEFAULT_PROMPT_HOTKEY,
         debounce_ms: int = HOTKEY_DEBOUNCE_MS,
     ) -> None:
         """Initialize the hotkey manager.
 
         Args:
             hotkey: Hotkey combination string (default from constants.DEFAULT_HOTKEY).
+            prompt_hotkey: Voice Prompt hotkey combination string.
             debounce_ms: Debounce window in milliseconds.
         """
         self.hotkey = hotkey
+        self.prompt_hotkey = prompt_hotkey
         self.debounce_ms = debounce_ms
         self._callback: Optional[Callable[[], None]] = None
         self._cancel_callback: Optional[Callable[[], None]] = None
+        self._prompt_callback: Optional[Callable[[], None]] = None
         self._last_trigger_time: float = 0.0
+        self._last_prompt_trigger_time: float = 0.0
         self._registered = False
         self._cancel_registered = False
+        self._prompt_registered = False
         self._hotkey_handle: Optional[object] = None
         self._cancel_handle: Optional[object] = None
+        self._prompt_handle: Optional[object] = None
         self._lock = threading.Lock()
 
     def register(self, callback: Callable[[], None]) -> None:
@@ -130,6 +137,79 @@ class HotkeyManager:
         else:
             logger.warning("Hotkey fired but no callback registered.")
 
+    def register_prompt(self, callback: Callable[[], None]) -> None:
+        """Register the Voice Prompt hotkey with a callback.
+
+        Args:
+            callback: Function to call when the prompt hotkey is pressed.
+        """
+        self._prompt_callback = callback
+
+        logger.info(
+            "Attempting to register prompt hotkey: '%s' (debounce=%dms)",
+            self.prompt_hotkey,
+            self.debounce_ms,
+        )
+
+        try:
+            parsed = kb.parse_hotkey(self.prompt_hotkey)
+            logger.debug("Parsed prompt hotkey scan codes: %s", parsed)
+        except Exception as parse_err:
+            logger.error(
+                "keyboard.parse_hotkey('%s') failed: %s", self.prompt_hotkey, parse_err
+            )
+            raise
+
+        try:
+            self._prompt_handle = kb.add_hotkey(
+                self.prompt_hotkey, self._on_prompt_hotkey, suppress=False
+            )
+            self._prompt_registered = True
+            logger.info(
+                "Prompt hotkey registered successfully: '%s'",
+                self.prompt_hotkey,
+            )
+        except Exception as e:
+            logger.error(
+                "Failed to register prompt hotkey '%s': %s (%s)",
+                self.prompt_hotkey,
+                e,
+                type(e).__name__,
+            )
+            raise
+
+    def _on_prompt_hotkey(self) -> None:
+        """Internal prompt hotkey handler with debounce logic."""
+        logger.debug("Prompt hotkey event received for '%s'.", self.prompt_hotkey)
+
+        with self._lock:
+            now = time.monotonic()
+            elapsed_ms = (now - self._last_prompt_trigger_time) * 1000
+
+            if elapsed_ms < self.debounce_ms:
+                logger.debug(
+                    "Prompt hotkey debounced (%.0fms < %dms).",
+                    elapsed_ms,
+                    self.debounce_ms,
+                )
+                return
+
+            self._last_prompt_trigger_time = now
+
+        logger.info(
+            "Prompt hotkey accepted: '%s' (%.0fms since last trigger)",
+            self.prompt_hotkey,
+            elapsed_ms,
+        )
+
+        if self._prompt_callback:
+            try:
+                self._prompt_callback()
+            except Exception:
+                logger.exception("Error in prompt hotkey callback.")
+        else:
+            logger.warning("Prompt hotkey fired but no callback registered.")
+
     def register_cancel(self, callback: Callable[[], None]) -> None:
         """Register the Escape key as a cancel hotkey.
 
@@ -182,9 +262,21 @@ class HotkeyManager:
                 self._cancel_handle = None
 
     def unregister(self) -> None:
-        """Unregister all hotkeys (main + cancel)."""
+        """Unregister all hotkeys (main + prompt + cancel)."""
         # Unregister cancel first
         self.unregister_cancel()
+
+        # Unregister prompt hotkey
+        if self._prompt_registered and self._prompt_handle is not None:
+            try:
+                kb.remove_hotkey(self._prompt_handle)
+                self._prompt_registered = False
+                self._prompt_handle = None
+                logger.info("Prompt hotkey unregistered: %s", self.prompt_hotkey)
+            except Exception as e:
+                logger.warning("Failed to unregister prompt hotkey: %s", e)
+                self._prompt_registered = False
+                self._prompt_handle = None
 
         # Unregister main hotkey
         if self._registered and self._hotkey_handle is not None:

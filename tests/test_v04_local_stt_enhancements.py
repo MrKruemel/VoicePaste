@@ -132,43 +132,36 @@ class TestMakeProgressTqdmClass:
         assert inst.n == 100
 
     def test_cancel_event_raises_cancelled_error(self):
-        """update() should raise _CancelledError when cancel_event is set."""
+        """_CancelledError raised when cancel_event is set (at init or update)."""
         from model_manager import _make_progress_tqdm_class, _CancelledError
 
         cancel = threading.Event()
         cancel.set()
 
         cls = _make_progress_tqdm_class(None, cancel)
-        inst = cls(total=1000)
-
+        # With cancel already set, __init__ raises immediately
         with pytest.raises(_CancelledError, match="cancelled"):
-            inst.update(100)
+            cls(total=1000)
 
     def test_cancel_event_checked_before_progress(self):
         """Cancellation should be checked before calling on_progress."""
         from model_manager import _make_progress_tqdm_class, _CancelledError
 
         cancel = threading.Event()
-        cancel.set()
         progress_calls = []
 
         def on_progress(downloaded, total):
             progress_calls.append((downloaded, total))
 
         cls = _make_progress_tqdm_class(on_progress, cancel)
+        # Create instance with cancel NOT set, then set it before update
         inst = cls(total=1000)
+        cancel.set()
 
         with pytest.raises(_CancelledError):
             inst.update(100)
 
-        # The progress counter SHOULD be updated before cancellation check...
-        # actually looking at the code, cancel is checked FIRST, so n should
-        # NOT be updated. But let's check the actual behavior:
-        # Code: if cancel_event and cancel_event.is_set(): raise ...
-        # This happens BEFORE self.n += n
-        # Wait, actually looking at the source: the cancel check is first,
-        # then self.n += n. So n should still be 0.
-        # But the callback should NOT have been called.
+        # Cancel is checked before self.n += n, so callback should NOT be called.
         assert len(progress_calls) == 0
 
     def test_cancel_event_not_set_allows_progress(self):
@@ -277,7 +270,7 @@ class TestDownloadModelProgressIntegration:
         def on_progress(downloaded, total):
             progress_calls.append((downloaded, total))
 
-        def fake_download(repo_id, local_dir, tqdm_class=None):
+        def fake_download(repo_id, local_dir, tqdm_class=None, **kwargs):
             Path(local_dir).mkdir(parents=True, exist_ok=True)
             (Path(local_dir) / "model.bin").write_bytes(b"fake")
             (Path(local_dir) / "config.json").write_text("{}")
@@ -308,7 +301,7 @@ class TestDownloadModelProgressIntegration:
 
         cancel = threading.Event()
 
-        def fake_download(repo_id, local_dir, tqdm_class=None):
+        def fake_download(repo_id, local_dir, tqdm_class=None, **kwargs):
             Path(local_dir).mkdir(parents=True, exist_ok=True)
             (Path(local_dir) / "model.bin").write_bytes(b"fake")
             (Path(local_dir) / "config.json").write_text("{}")

@@ -31,6 +31,7 @@ APP_VERSION = "0.4.0"
 # - "ctrl+shift+v": Conflicts with "Paste without formatting" in Chrome/Word.
 # - "ctrl+alt+r": Safe — "Record" mnemonic, no known system conflicts.
 DEFAULT_HOTKEY = "ctrl+alt+r"
+DEFAULT_PROMPT_HOTKEY = "ctrl+alt+a"
 CANCEL_HOTKEY = "escape"
 
 # Audio configuration
@@ -58,6 +59,13 @@ SUMMARIZE_SYSTEM_PROMPT = (
     "4. Kuerze den Text auf das Wesentliche, ohne Informationen zu verlieren.\n"
     "5. Antworte NUR mit dem bereinigten Text. Keine Erklaerungen, keine Kommentare.\n"
     "6. Antworte in derselben Sprache wie die Eingabe."
+)
+
+# Voice Prompt mode system prompt (v0.5)
+# Used when the user speaks a question/command instead of dictating text.
+PROMPT_SYSTEM_PROMPT = (
+    "Du bist ein hilfreicher Assistent. "
+    "Antworte praezise und in derselben Sprache wie die Frage."
 )
 
 # API retry configuration (ADR Section 14: retry with backoff)
@@ -97,7 +105,9 @@ KEYRING_OPENROUTER_KEY = "openrouter_api_key"
 # --- v0.3: Provider configuration ---
 OPENROUTER_DEFAULT_BASE_URL = "https://openrouter.ai/api/v1"
 OPENAI_DEFAULT_BASE_URL = "https://api.openai.com/v1"
-SUMMARIZATION_PROVIDERS = ("openai", "openrouter")
+OLLAMA_DEFAULT_BASE_URL = "http://localhost:11434/v1"
+OLLAMA_DEFAULT_MODEL = "llama3.2"
+SUMMARIZATION_PROVIDERS = ("openai", "openrouter", "ollama")
 DEFAULT_SUMMARIZATION_PROVIDER = "openai"
 OPENROUTER_DEFAULT_MODEL = "openai/gpt-4o-mini"
 
@@ -115,6 +125,18 @@ LOCAL_STT_DEFAULT_COMPUTE_TYPE = "int8"
 LOCAL_STT_DEFAULT_BEAM_SIZE = 5
 LOCAL_STT_VALID_DEVICES = ("cpu", "cuda", "auto")
 LOCAL_STT_VALID_COMPUTE_TYPES = ("int8", "float16", "float32", "auto")
+
+# VAD (Voice Activity Detection) filter using Silero VAD via onnxruntime.
+# When True, faster-whisper runs Silero VAD to skip non-speech segments before
+# Whisper inference.  This improves accuracy on long recordings with silence,
+# but requires onnxruntime and the bundled Silero ONNX model files.
+#
+# KNOWN ISSUE: In PyInstaller --onefile bundles, onnxruntime can crash the
+# process (native segfault, no Python traceback) when loading the Silero ONNX
+# model from the _MEI* temp directory.  The frozen-exe default is therefore
+# False.  Users can re-enable VAD in config.toml once confirmed working.
+LOCAL_STT_DEFAULT_VAD_FILTER = True
+LOCAL_STT_FROZEN_VAD_FILTER = False
 
 # Local model display information (for Settings dialog)
 LOCAL_MODEL_DISPLAY: dict[str, dict[str, str]] = {

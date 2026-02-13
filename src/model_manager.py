@@ -198,19 +198,45 @@ def _make_progress_tqdm_class(
         A class compatible with the tqdm interface expected by HF Hub.
     """
 
+    _class_lock = threading.Lock()
+
     class _ProgressTracker:
-        """Minimal tqdm-compatible progress tracker for HF Hub downloads."""
+        """Full tqdm-compatible progress tracker for HF Hub downloads.
+
+        Implements all methods that huggingface_hub (and its vendored tqdm
+        usage in thread_map / hf_hub_download) may call. Missing methods
+        cause AttributeError crashes during model downloads.
+        """
 
         def __init__(self, *args: object, **kwargs: object) -> None:
+            # Check cancellation when each new tqdm instance is created
+            # (HF Hub creates one per file download)
+            if cancel_event and cancel_event.is_set():
+                raise _CancelledError("Download cancelled by user.")
             self.total: int = int(kwargs.get("total", 0) or 0)
             self.n: int = int(kwargs.get("initial", 0) or 0)
             self.desc: str = str(kwargs.get("desc", "") or "")
             self.disable: bool = bool(kwargs.get("disable", False))
+            self.unit: str = str(kwargs.get("unit", "it") or "it")
+            self.unit_scale: bool = bool(kwargs.get("unit_scale", False))
+            self.pos: int = 0
+            self.last_print_n: int = self.n
 
-        def update(self, n: int = 1) -> None:
-            """Called by HF Hub when a chunk of data is downloaded."""
+        @classmethod
+        def get_lock(cls) -> threading.Lock:
+            return _class_lock
+
+        @classmethod
+        def set_lock(cls, lock: object) -> None:
+            pass
+
+        def _check_cancel(self) -> None:
+            """Raise _CancelledError if cancel_event is set."""
             if cancel_event and cancel_event.is_set():
                 raise _CancelledError("Download cancelled by user.")
+
+        def update(self, n: int = 1) -> None:
+            self._check_cancel()
             self.n += n
             if on_progress and self.total > 0:
                 on_progress(self.n, self.total)
@@ -218,10 +244,34 @@ def _make_progress_tqdm_class(
         def close(self) -> None:
             pass
 
+        def clear(self, nolock: bool = False) -> None:
+            pass
+
+        def display(self, msg: str = "", pos: int = 0) -> None:
+            self._check_cancel()
+
+        def moveto(self, n: int = 0) -> None:
+            self.pos = n
+
         def set_description(self, desc: str = "", refresh: bool = True) -> None:
+            self._check_cancel()
             self.desc = desc
 
+        def set_description_str(self, desc: str = "", refresh: bool = True) -> None:
+            self._check_cancel()
+            self.desc = desc
+
+        def set_postfix(self, ordered_dict: object = None, refresh: bool = True, **kwargs: object) -> None:
+            pass
+
         def set_postfix_str(self, s: str = "", refresh: bool = True) -> None:
+            pass
+
+        def unpause(self) -> None:
+            pass
+
+        @classmethod
+        def write(cls, s: str, file: object = None, end: str = "\n", nolock: bool = False) -> None:
             pass
 
         def __enter__(self) -> "_ProgressTracker":
@@ -230,16 +280,60 @@ def _make_progress_tqdm_class(
         def __exit__(self, *args: object) -> None:
             self.close()
 
-        # Some HF Hub code paths check for 'refresh' or 'reset'
-        def refresh(self) -> None:
-            pass
+        def refresh(self, nolock: bool = False, lock_args: object = None) -> None:
+            self._check_cancel()
 
         def reset(self, total: Optional[int] = None) -> None:
             if total is not None:
                 self.total = total
             self.n = 0
 
+        @property
+        def format_dict(self) -> dict:
+            return {"n": self.n, "total": self.total, "elapsed": 0, "rate": None}
+
     return _ProgressTracker
+
+
+def _clean_hf_lock_files(target_dir: Path) -> None:
+    """Remove stale HF Hub lock and incomplete files from a previous download.
+
+    huggingface_hub uses .lock and .incomplete files in a hidden
+    .cache/huggingface/download/ directory. If a previous download was
+    interrupted, these files block subsequent download attempts and cause
+    the "Connecting..." phase to hang indefinitely.
+
+    Args:
+        target_dir: The model target directory.
+    """
+    cache_dir = target_dir / ".cache" / "huggingface" / "download"
+    if not cache_dir.exists():
+        return
+
+    cleaned = 0
+    for pattern in ("*.lock", "*.incomplete"):
+        for f in cache_dir.glob(pattern):
+            try:
+                f.unlink()
+                cleaned += 1
+            except OSError:
+                pass
+    if cleaned:
+        logger.info(
+            "Cleaned %d stale lock/incomplete files from '%s'.",
+            cleaned, cache_dir,
+        )
+
+
+# Files required for CTranslate2 Whisper models.
+# Only these are downloaded (skips README.md, .gitattributes, etc.)
+_MODEL_ALLOW_PATTERNS: list[str] = [
+    "model.bin",
+    "config.json",
+    "tokenizer.json",
+    "vocabulary.*",
+    "preprocessor_config.json",
+]
 
 
 def download_model(
@@ -296,21 +390,42 @@ def download_model(
             )
             return False
 
+        # Set HTTP timeout for actual file downloads (not just metadata).
+        # Without this, GET requests use no timeout and can hang forever.
+        os.environ.setdefault("HF_HUB_DOWNLOAD_TIMEOUT", "30")
+
+        # Clean stale lock/incomplete files from previous aborted downloads.
+        # These cause the "Connecting..." phase to hang.
+        _clean_hf_lock_files(target_dir)
+
         # Check for cancellation before starting
         if cancel_event and cancel_event.is_set():
             logger.info("Download cancelled before starting.")
+            return False
+
+        # Pre-flight connectivity check (fast fail instead of long hang)
+        logger.info("Testing connectivity to Hugging Face...")
+        try:
+            import requests as _req
+            _req.head("https://huggingface.co", timeout=10)
+            logger.info("Hugging Face reachable.")
+        except Exception as conn_err:
+            logger.error("Cannot reach huggingface.co: %s", conn_err)
             return False
 
         # Build a custom tqdm class that routes progress to our callback
         # and checks for cancellation on every chunk.
         progress_cls = _make_progress_tqdm_class(on_progress, cancel_event)
 
-        # Download the entire model repo as a snapshot
+        # Download only model-essential files (skip README, .gitattributes)
+        logger.info("Starting download (allow_patterns=%s)...", _MODEL_ALLOW_PATTERNS)
         try:
             downloaded_path = snapshot_download(
                 repo_id=repo_id,
                 local_dir=str(target_dir),
                 tqdm_class=progress_cls,
+                etag_timeout=10,
+                allow_patterns=_MODEL_ALLOW_PATTERNS,
             )
 
             logger.info(

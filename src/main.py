@@ -49,6 +49,7 @@ from constants import (
     AppState,
     LOG_DATE_FORMAT,
     LOG_FORMAT,
+    PROMPT_SYSTEM_PROMPT,
 )
 from config import AppConfig, load_config
 from audio import AudioRecorder
@@ -250,6 +251,7 @@ class VoicePasteApp:
         self.config = config
         self._state = AppState.IDLE
         self._state_lock = threading.Lock()
+        self._active_mode: str = "summary"  # "summary" or "prompt"
 
         # Initialize components
         self._recorder = AudioRecorder(on_auto_stop=self._on_auto_stop)
@@ -266,13 +268,17 @@ class VoicePasteApp:
         # v0.3: Build summarizer from config (provider, model, base_url, prompt)
         self._rebuild_summarizer()
 
-        self._hotkey_manager = HotkeyManager(hotkey=config.hotkey)
+        self._hotkey_manager = HotkeyManager(
+            hotkey=config.hotkey,
+            prompt_hotkey=config.prompt_hotkey,
+        )
 
         # v0.3: TrayManager gets settings callback and state accessor
         self._tray_manager = TrayManager(
             on_quit=self._shutdown,
             on_settings=self._open_settings,
             hotkey_label=config.hotkey,
+            prompt_hotkey_label=config.prompt_hotkey,
             get_state=lambda: self.state,
         )
 
@@ -441,7 +447,8 @@ class VoicePasteApp:
         )
 
         if current == AppState.IDLE:
-            logger.info("Transition: IDLE -> RECORDING (starting recording)")
+            logger.info("Transition: IDLE -> RECORDING (summary mode)")
+            self._active_mode = "summary"
             self._start_recording()
 
         elif current == AppState.RECORDING:
@@ -453,6 +460,33 @@ class VoicePasteApp:
 
         elif current == AppState.PASTING:
             logger.info("Hotkey pressed during PASTING state, ignored.")
+
+    def _on_prompt_hotkey(self) -> None:
+        """Handle the Voice Prompt hotkey press.
+
+        Same state machine as _on_hotkey, but sets mode to "prompt"
+        so the pipeline sends the transcript as a prompt to the LLM
+        instead of cleaning/summarizing it.
+        """
+        current = self.state
+        logger.info(
+            "Prompt hotkey callback invoked. Current state: %s", current.value
+        )
+
+        if current == AppState.IDLE:
+            logger.info("Transition: IDLE -> RECORDING (prompt mode)")
+            self._active_mode = "prompt"
+            self._start_recording()
+
+        elif current == AppState.RECORDING:
+            logger.info("Transition: RECORDING -> PROCESSING (stopping recording)")
+            self._stop_recording_and_process()
+
+        elif current == AppState.PROCESSING:
+            logger.info("Prompt hotkey pressed during PROCESSING state, ignored.")
+
+        elif current == AppState.PASTING:
+            logger.info("Prompt hotkey pressed during PASTING state, ignored.")
 
     def _on_cancel(self) -> None:
         """Handle the Escape cancel hotkey.
@@ -613,12 +647,18 @@ class VoicePasteApp:
                 self._set_state(AppState.IDLE)
                 return
 
-            # Step 2: Summarize (v0.2: CloudLLMSummarizer)
-            summary = self._summarizer.summarize(transcript)
+            # Step 2: Summarize or Prompt (v0.5: voice prompt mode)
+            if self._active_mode == "prompt":
+                logger.info("Prompt mode: sending transcript as prompt to LLM.")
+                summary = self._summarizer.summarize(
+                    transcript, system_prompt=PROMPT_SYSTEM_PROMPT
+                )
+            else:
+                summary = self._summarizer.summarize(transcript)
 
-            # Handle empty summary (e.g., all filler words removed)
+            # Handle empty result (e.g., all filler words removed)
             if not summary or not summary.strip():
-                logger.info("Empty summary after processing. Nothing to paste.")
+                logger.info("Empty result after processing. Nothing to paste.")
                 self._tray_manager.notify(APP_NAME, "No speech detected.")
                 self._set_state(AppState.IDLE)
                 return
@@ -772,11 +812,22 @@ class VoicePasteApp:
                 f"Technical detail: {exc}"
             ) from exc
 
+        # Register Voice Prompt hotkey (v0.5)
+        try:
+            self._hotkey_manager.register_prompt(self._on_prompt_hotkey)
+        except Exception as exc:
+            logger.warning(
+                "Failed to register prompt hotkey '%s': %s. "
+                "Voice Prompt mode will not be available.",
+                self.config.prompt_hotkey,
+                exc,
+            )
+
         logger.info(
-            "Hotkey '%s' registered. Waiting for user input. "
-            "If the hotkey does not respond, check the log for errors above, "
-            "try running as Administrator, or change the hotkey in config.toml.",
+            "Hotkeys registered: summary='%s', prompt='%s'. "
+            "Waiting for user input.",
             self.config.hotkey,
+            self.config.prompt_hotkey,
         )
 
         # Run tray on main thread (blocks until stop)

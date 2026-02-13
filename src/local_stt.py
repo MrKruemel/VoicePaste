@@ -32,6 +32,8 @@ from constants import (
     LOCAL_STT_DEFAULT_COMPUTE_TYPE,
     LOCAL_STT_DEFAULT_DEVICE,
     LOCAL_STT_DEFAULT_MODEL_SIZE,
+    LOCAL_STT_DEFAULT_VAD_FILTER,
+    LOCAL_STT_FROZEN_VAD_FILTER,
 )
 from stt import STTError
 
@@ -48,6 +50,57 @@ def _is_frozen() -> bool:
         True if running as a frozen .exe, False otherwise.
     """
     return getattr(sys, "frozen", False)
+
+
+def _configure_onnxruntime_for_frozen() -> None:
+    """Configure onnxruntime to use only CPUExecutionProvider in frozen exes.
+
+    When running inside a PyInstaller --onefile bundle, onnxruntime unpacks
+    into a _MEI* temp directory.  The automatic execution provider discovery
+    can fail (e.g., trying to load CUDA providers that are not bundled),
+    which sometimes causes a native crash (segfault) with no Python traceback.
+
+    This function forces onnxruntime to:
+      1. Disable telemetry (avoid network calls from frozen exe).
+      2. Log a diagnostic message about the provider configuration.
+
+    The actual provider restriction ('CPUExecutionProvider' only) is done
+    at the InferenceSession level by faster-whisper's SileroVAD code.
+    We cannot patch that directly, but we CAN set environment variables
+    that onnxruntime respects before any session is created.
+
+    This function is safe to call even if onnxruntime is not installed
+    (catches ImportError).
+    """
+    if not _is_frozen():
+        return
+
+    try:
+        import os
+
+        # ORT_DISABLE_ALL_TELEMETRY: prevent onnxruntime from making
+        # network calls during provider init (belt-and-suspenders).
+        os.environ.setdefault("ORT_DISABLE_ALL_TELEMETRY", "1")
+
+        import onnxruntime as ort
+
+        # Log available providers for diagnostics
+        available = ort.get_available_providers()
+        logger.info(
+            "onnxruntime providers in frozen exe: %s (version %s)",
+            available,
+            getattr(ort, "__version__", "unknown"),
+        )
+    except ImportError:
+        logger.debug(
+            "onnxruntime not available; Silero VAD will not work."
+        )
+    except Exception as e:
+        logger.warning(
+            "Failed to configure onnxruntime for frozen exe: %s: %s",
+            type(e).__name__,
+            e,
+        )
 
 
 def is_faster_whisper_available() -> bool:
@@ -161,6 +214,25 @@ def _wav_bytes_to_float32(wav_data: bytes) -> np.ndarray:
         ) from e
 
 
+def _flush_all_log_handlers() -> None:
+    """Flush all handlers on the root logger and this module's logger.
+
+    This ensures log messages are written to disk before entering native
+    C++ code (CTranslate2, onnxruntime) that may crash the process.
+    A native segfault would lose any buffered log output.
+    """
+    for handler in logging.getLogger().handlers:
+        try:
+            handler.flush()
+        except Exception:
+            pass
+    for handler in logger.handlers:
+        try:
+            handler.flush()
+        except Exception:
+            pass
+
+
 class LocalWhisperSTT:
     """Local speech-to-text using faster-whisper (CTranslate2 engine).
 
@@ -174,6 +246,7 @@ class LocalWhisperSTT:
         model_size: Whisper model size (tiny, base, small, medium, large-v3).
         device: Inference device ("cpu", "cuda", or "auto").
         compute_type: Quantization type ("int8", "float16", "float32", "auto").
+        vad_filter: Whether to run Silero VAD before Whisper inference.
     """
 
     def __init__(
@@ -183,12 +256,17 @@ class LocalWhisperSTT:
         compute_type: str = LOCAL_STT_DEFAULT_COMPUTE_TYPE,
         model_path: Optional[Path] = None,
         beam_size: int = LOCAL_STT_DEFAULT_BEAM_SIZE,
+        vad_filter: bool = LOCAL_STT_DEFAULT_VAD_FILTER,
     ) -> None:
         """Initialize the local Whisper STT backend.
 
         The model is NOT loaded during __init__. It is loaded lazily on
         the first call to transcribe(). Call load_model() explicitly to
         pre-load (e.g., on app startup in a background thread).
+
+        When running as a frozen PyInstaller executable, VAD is
+        auto-disabled by default (configurable via config.toml) to avoid
+        a known onnxruntime native crash in the _MEI* temp directory.
 
         Args:
             model_size: Whisper model size identifier.
@@ -197,6 +275,8 @@ class LocalWhisperSTT:
             model_path: Explicit path to model directory. If None, uses
                 the model_size string (faster-whisper auto-downloads).
             beam_size: Beam search width (lower = faster, higher = more accurate).
+            vad_filter: Enable Silero VAD to filter silence before Whisper.
+                Defaults to True in script mode, False in frozen exe.
 
         Raises:
             STTError: If faster-whisper is not installed.
@@ -212,17 +292,23 @@ class LocalWhisperSTT:
         self._compute_type = compute_type
         self._model_path = model_path
         self._beam_size = beam_size
+        self._vad_filter = vad_filter
         self._model = None  # Lazy loaded
         self._model_loaded = False
         self._load_lock = threading.Lock()
 
+        # Pre-configure onnxruntime for frozen exe before any model load
+        if self._vad_filter:
+            _configure_onnxruntime_for_frozen()
+
         logger.info(
             "LocalWhisperSTT initialized: model=%s, device=%s, "
-            "compute_type=%s, beam_size=%d, model_path=%s",
+            "compute_type=%s, beam_size=%d, vad_filter=%s, model_path=%s",
             model_size,
             device,
             compute_type,
             beam_size,
+            vad_filter,
             model_path or "(auto/cache)",
         )
 
@@ -429,6 +515,10 @@ class LocalWhisperSTT:
 
         Loads the model lazily on first call if not already loaded.
 
+        Before calling into the native CTranslate2/onnxruntime code, all
+        log handlers are flushed so that diagnostic messages are preserved
+        even if the native call crashes the process (segfault).
+
         Args:
             audio_data: WAV audio file bytes (in-memory, never from disk).
             language: Language code for transcription (default 'de' for German).
@@ -449,23 +539,53 @@ class LocalWhisperSTT:
             # Convert WAV bytes to float32 numpy array
             audio_array = _wav_bytes_to_float32(audio_data)
 
+            audio_duration = len(audio_array) / DEFAULT_SAMPLE_RATE
+
             logger.debug(
                 "Audio converted to float32: %d samples, %.1f seconds.",
                 len(audio_array),
-                len(audio_array) / DEFAULT_SAMPLE_RATE,
+                audio_duration,
             )
+
+            # --- Pre-transcription diagnostic logging ---
+            # Log all parameters BEFORE calling native code so the log
+            # file contains useful information if the process crashes.
+            logger.info(
+                "Calling model.transcribe(): vad_filter=%s, beam_size=%d, "
+                "language=%s, audio_duration=%.1fs, frozen=%s",
+                self._vad_filter,
+                self._beam_size,
+                language,
+                audio_duration,
+                _is_frozen(),
+            )
+
+            # Force-flush ALL log handlers before entering native code.
+            # If CTranslate2 or onnxruntime segfaults, the buffered log
+            # messages would be lost. This ensures they are on disk.
+            _flush_all_log_handlers()
 
             t0 = time.monotonic()
 
-            # Run transcription
-            segments, info = self._model.transcribe(
-                audio_array,
+            # Build transcription kwargs. VAD parameters are only passed
+            # when vad_filter is True to avoid any Silero/onnxruntime
+            # code path whatsoever when disabled.
+            transcribe_kwargs: dict = dict(
                 language=language,
                 beam_size=self._beam_size,
-                vad_filter=True,
-                vad_parameters=dict(
+                vad_filter=self._vad_filter,
+            )
+            if self._vad_filter:
+                transcribe_kwargs["vad_parameters"] = dict(
                     min_silence_duration_ms=500,
-                ),
+                )
+
+            # Run transcription -- this enters native CTranslate2 and
+            # (if VAD enabled) onnxruntime code. A native crash here
+            # will kill the process with no Python traceback.
+            segments, info = self._model.transcribe(
+                audio_array,
+                **transcribe_kwargs,
             )
 
             # Collect all segments into a single string.
@@ -477,7 +597,6 @@ class LocalWhisperSTT:
             transcript = " ".join(transcript_parts).strip()
 
             elapsed = time.monotonic() - t0
-            audio_duration = len(audio_array) / DEFAULT_SAMPLE_RATE
 
             # REQ-S24/S25: Do not log transcript content, only metadata
             logger.info(
@@ -501,12 +620,37 @@ class LocalWhisperSTT:
                 "Out of memory during transcription.\n\n"
                 "Try a smaller model (tiny or base) or a shorter recording."
             ) from e
+        except (SystemError, OSError) as e:
+            # Native DLL crashes sometimes surface as SystemError or
+            # OSError rather than killing the process outright.
+            # This includes onnxruntime provider failures and
+            # CTranslate2 DLL load issues in the _MEI* temp dir.
+            error_msg = str(e)
+            logger.error(
+                "Native library error during transcription (%s): %s",
+                type(e).__name__,
+                error_msg,
+            )
+            # If VAD was enabled, suggest disabling it as a workaround
+            vad_hint = ""
+            if self._vad_filter:
+                vad_hint = (
+                    "\n\nThis may be caused by the Silero VAD component "
+                    "(onnxruntime). Try disabling VAD in config.toml:\n"
+                    '  [transcription]\n  vad_filter = false'
+                )
+            raise STTError(
+                f"A native library crashed during transcription.\n\n"
+                f"{type(e).__name__}: {error_msg}"
+                f"{vad_hint}"
+            ) from e
         except RuntimeError as e:
             # CTranslate2 raises RuntimeError for inference failures
             # (e.g., corrupted model, unsupported audio format, CUDA OOM).
+            # onnxruntime can also raise RuntimeError for provider issues.
             error_msg = str(e)
             logger.error(
-                "CTranslate2 RuntimeError during transcription: %s",
+                "RuntimeError during transcription: %s",
                 error_msg,
             )
             if "cuda" in error_msg.lower() or "gpu" in error_msg.lower():
@@ -521,6 +665,18 @@ class LocalWhisperSTT:
                     "Out of memory during transcription.\n\n"
                     "Try a smaller model (tiny or base) or a shorter "
                     "recording."
+                ) from e
+            # Check for onnxruntime-related RuntimeErrors
+            if "onnx" in error_msg.lower() or "provider" in error_msg.lower():
+                vad_hint = ""
+                if self._vad_filter:
+                    vad_hint = (
+                        "\n\nTry disabling VAD in config.toml:\n"
+                        '  [transcription]\n  vad_filter = false'
+                    )
+                raise STTError(
+                    f"ONNX runtime error during transcription.\n\n"
+                    f"{error_msg}{vad_hint}"
                 ) from e
             raise STTError(
                 f"Local transcription failed: {error_msg}"

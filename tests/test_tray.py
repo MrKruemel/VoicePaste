@@ -209,7 +209,8 @@ class TestCreateIconImage:
         The old icon used RGBA with (0,0,0,0) background which was invisible
         on Windows 11. The new icon uses RGB with a solid dark background.
         """
-        from tray import _create_icon_image, _ICON_BG_COLOR
+        from tray import _create_icon_image
+        from icon_drawing import ICON_BG_COLOR as _ICON_BG_COLOR
 
         img = _create_icon_image((220, 220, 230))
         # Check that the top-left corner pixel matches the background color
@@ -218,7 +219,8 @@ class TestCreateIconImage:
 
     def test_icon_contains_foreground_pixels(self):
         """Icon should contain pixels matching the mic color (not all bg)."""
-        from tray import _create_icon_image, _ICON_BG_COLOR
+        from tray import _create_icon_image
+        from icon_drawing import ICON_BG_COLOR as _ICON_BG_COLOR
 
         mic_color = (230, 50, 50)
         img = _create_icon_image(mic_color)

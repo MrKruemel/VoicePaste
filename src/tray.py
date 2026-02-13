@@ -9,6 +9,7 @@ v0.2.5: Critical fix -- explicitly set icon.visible = True in setup callback.
          pystray only auto-sets visible when NO setup callback is given.
          Also: 32x32 icon size, PID-unique icon name, enhanced diagnostics.
 v0.3: Added "Settings..." menu item with dynamic enable/disable based on app state.
+v0.4: Extracted icon drawing to shared icon_drawing module.
 """
 
 import logging
@@ -16,22 +17,15 @@ import os
 import threading
 from typing import Callable, Optional
 
-from PIL import Image, ImageDraw
 import pystray
 
 from constants import APP_NAME, APP_VERSION, AppState
+from icon_drawing import create_icon_image
 
 logger = logging.getLogger(__name__)
 
 # Icon dimensions -- 32x32 is the standard Windows system tray icon size.
-# Windows 11 expects 16x16 or 32x32; oversized icons (64x64) may not render
-# correctly or may be silently ignored by the shell notification area.
 ICON_SIZE = 32
-
-# Solid dark background for the icon. Provides contrast on both light and
-# dark Windows 11 taskbars. Using RGB mode (no alpha) avoids transparency
-# rendering issues on Windows 11's system tray.
-_ICON_BG_COLOR = (45, 45, 45)  # #2D2D2D -- dark neutral grey
 
 # State-to-color mapping per UX-SPEC.md section 2.1
 # Colors chosen for high contrast against the dark background.
@@ -62,125 +56,11 @@ _STATE_LABELS: dict[AppState, str] = {
 }
 
 
-def _draw_microphone(
-    draw: ImageDraw.ImageDraw,
-    color: tuple[int, int, int],
-    size: int,
-) -> None:
-    """Draw a microphone silhouette on the given ImageDraw canvas.
-
-    The microphone consists of:
-    - A rounded-rectangle body (capsule shape) in the upper portion.
-    - A U-shaped cradle/arc below the body.
-    - A vertical stand line from the cradle bottom.
-    - A horizontal base line at the very bottom.
-
-    All coordinates are computed relative to the icon size so the drawing
-    scales if ICON_SIZE is changed.
-
-    Args:
-        draw: Pillow ImageDraw instance to draw on.
-        color: RGB tuple for the microphone color.
-        size: The icon canvas size (width and height are equal).
-    """
-    # Line width for outlines and stand
-    lw = max(3, size // 16)
-
-    # --- Microphone body (filled rounded rectangle / capsule) ---
-    # Centered horizontally, occupies roughly the top 55% of the icon.
-    body_left = size * 0.30
-    body_right = size * 0.70
-    body_top = size * 0.08
-    body_bottom = size * 0.55
-    # Corner radius makes it a capsule shape
-    body_radius = (body_right - body_left) / 2
-
-    draw.rounded_rectangle(
-        [body_left, body_top, body_right, body_bottom],
-        radius=body_radius,
-        fill=color,
-    )
-
-    # --- U-shaped cradle / arc around the lower half of the mic body ---
-    # This arc extends below the body to suggest a mic stand cradle.
-    arc_left = size * 0.20
-    arc_right = size * 0.80
-    arc_top = size * 0.30
-    arc_bottom = size * 0.72
-
-    draw.arc(
-        [arc_left, arc_top, arc_right, arc_bottom],
-        start=0,
-        end=180,
-        fill=color,
-        width=lw,
-    )
-
-    # --- Vertical stand line from bottom of arc to base ---
-    stand_x = size * 0.50
-    stand_top = arc_bottom * 0.5 + size * 0.36  # bottom of arc
-    stand_bottom = size * 0.85
-
-    draw.line(
-        [(stand_x, stand_top), (stand_x, stand_bottom)],
-        fill=color,
-        width=lw,
-    )
-
-    # --- Horizontal base line ---
-    base_left = size * 0.30
-    base_right = size * 0.70
-    base_y = stand_bottom
-
-    draw.line(
-        [(base_left, base_y), (base_right, base_y)],
-        fill=color,
-        width=lw,
-    )
-
-
 def _create_icon_image(
     color: tuple[int, int, int] = (220, 220, 230),
-) -> Image.Image:
-    """Create a system tray icon with a microphone silhouette.
-
-    Uses RGB mode (no transparency) with a solid dark background to ensure
-    visibility on both dark and light Windows 11 taskbars. The microphone
-    is drawn in the specified state color.
-
-    Args:
-        color: RGB tuple for the microphone foreground color.
-
-    Returns:
-        A 32x32 RGB Pillow Image with a solid background and mic silhouette.
-    """
-    image = Image.new("RGB", (ICON_SIZE, ICON_SIZE), _ICON_BG_COLOR)
-    draw = ImageDraw.Draw(image)
-
-    # Draw a subtle rounded-rectangle border so the icon boundary is
-    # distinguishable from the taskbar on both light and dark themes.
-    # Border radius scales proportionally with icon size (4 at 32, 8 at 64).
-    border_color = (80, 80, 80)  # slightly lighter than background
-    border_radius = max(2, ICON_SIZE // 8)
-    draw.rounded_rectangle(
-        [1, 1, ICON_SIZE - 2, ICON_SIZE - 2],
-        radius=border_radius,
-        outline=border_color,
-        width=2,
-    )
-
-    _draw_microphone(draw, color, ICON_SIZE)
-
-    logger.debug(
-        "Icon created: size=%dx%d, mode=%s, mic_color=%s, bg=%s",
-        image.size[0],
-        image.size[1],
-        image.mode,
-        color,
-        _ICON_BG_COLOR,
-    )
-
-    return image
+) -> "Image.Image":
+    """Create a 32x32 RGB tray icon via the shared icon_drawing module."""
+    return create_icon_image(size=ICON_SIZE, color=color, mode="RGB")
 
 
 class TrayManager:
@@ -201,6 +81,7 @@ class TrayManager:
         on_quit: Optional[Callable[[], None]] = None,
         on_settings: Optional[Callable[[], None]] = None,
         hotkey_label: str = "Ctrl+Alt+R",
+        prompt_hotkey_label: str = "Ctrl+Alt+A",
         get_state: Optional[Callable[[], AppState]] = None,
     ) -> None:
         """Initialize the tray manager.
@@ -208,8 +89,8 @@ class TrayManager:
         Args:
             on_quit: Callback for the Quit menu action.
             on_settings: Callback for the Settings menu action (v0.3).
-            hotkey_label: Human-readable hotkey string for tooltips and
-                notifications (e.g., "ctrl+alt+r").
+            hotkey_label: Human-readable hotkey string for summary mode.
+            prompt_hotkey_label: Human-readable hotkey string for prompt mode.
             get_state: Callable returning current AppState for dynamic
                 menu enablement (v0.3).
         """
@@ -217,6 +98,7 @@ class TrayManager:
         self._on_settings = on_settings
         self._get_state = get_state
         self._hotkey_label = hotkey_label
+        self._prompt_hotkey_label = prompt_hotkey_label
         self._icon: Optional[pystray.Icon] = None
         self._running = False
         self._current_state = AppState.IDLE
@@ -479,8 +361,9 @@ class TrayManager:
         # --- Show startup balloon notification ---
         try:
             icon.notify(
-                f"Press {self._hotkey_label} to start recording.\n"
-                f"Right-click the tray icon for options.",
+                f"{self._hotkey_label}: Record + Summarize\n"
+                f"{self._prompt_hotkey_label}: Record + Ask LLM\n"
+                f"Right-click for options.",
                 f"{APP_NAME} v{APP_VERSION} is running",
             )
             logger.info("Startup notification shown.")

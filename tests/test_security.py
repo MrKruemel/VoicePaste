@@ -93,7 +93,9 @@ class TestREQS06_HTTPSOnly:
                     # Allow comments about HTTP
                     if not line.strip().startswith("#") and \
                        not line.strip().startswith('"') and \
-                       not line.strip().startswith("'"):
+                       not line.strip().startswith("'") and \
+                       "localhost" not in line and \
+                       "127.0.0.1" not in line:
                         pytest.fail(
                             f"{fname}:{i+1} contains http:// URL: {line.strip()}"
                         )

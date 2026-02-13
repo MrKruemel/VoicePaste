@@ -33,12 +33,16 @@ class Summarizer(Protocol):
     Implementations clean up or summarize transcribed text.
     """
 
-    def summarize(self, text: str, language: str = "de") -> str:
+    def summarize(
+        self, text: str, language: str = "de", system_prompt: str | None = None
+    ) -> str:
         """Summarize or clean up transcribed text.
 
         Args:
             text: Raw transcribed text.
             language: Language code (default 'de' for German).
+            system_prompt: Optional override for the system prompt.
+                If None, uses the default prompt configured at init time.
 
         Returns:
             Processed text string.
@@ -59,12 +63,15 @@ class PassthroughSummarizer:
     architecture without requiring an LLM dependency.
     """
 
-    def summarize(self, text: str, language: str = "de") -> str:
+    def summarize(
+        self, text: str, language: str = "de", system_prompt: str | None = None
+    ) -> str:
         """Return text unchanged (passthrough).
 
         Args:
             text: Raw transcribed text.
             language: Language code (unused in passthrough).
+            system_prompt: Ignored in passthrough mode.
 
         Returns:
             The same text, unchanged.
@@ -132,8 +139,11 @@ class CloudLLMSummarizer:
         self._temperature = temperature
         self._max_tokens = max_tokens
         self._system_prompt = system_prompt
+        self._base_url = base_url or ""
 
-    def summarize(self, text: str, language: str = "de") -> str:
+    def summarize(
+        self, text: str, language: str = "de", system_prompt: str | None = None
+    ) -> str:
         """Summarize text using the OpenAI GPT API.
 
         Retries up to API_MAX_RETRIES times with exponential backoff for
@@ -143,6 +153,8 @@ class CloudLLMSummarizer:
         Args:
             text: Raw transcribed text.
             language: Language code (unused; prompt handles language matching).
+            system_prompt: Optional override for the system prompt.
+                If None, uses the prompt configured at init time.
 
         Returns:
             Cleaned and summarized text.
@@ -153,6 +165,8 @@ class CloudLLMSummarizer:
         """
         if not text or not text.strip():
             return ""
+
+        active_prompt = system_prompt if system_prompt is not None else self._system_prompt
 
         # REQ-S24: Do not log transcript content, only metadata
         logger.info(
@@ -168,7 +182,7 @@ class CloudLLMSummarizer:
                 response = self._client.chat.completions.create(
                     model=self._model,
                     messages=[
-                        {"role": "system", "content": self._system_prompt},
+                        {"role": "system", "content": active_prompt},
                         {"role": "user", "content": text},
                     ],
                     temperature=self._temperature,
@@ -192,7 +206,20 @@ class CloudLLMSummarizer:
                 return result
 
             except openai.AuthenticationError as e:
-                # Permanent failure -- do not retry.
+                # For local services (Ollama), auth errors are transient
+                # (e.g., Ollama not running yet). Retry instead of failing.
+                if "localhost" in self._base_url or "127.0.0.1" in self._base_url:
+                    last_exception = e
+                    if attempt <= API_MAX_RETRIES:
+                        backoff = API_INITIAL_BACKOFF_SECONDS * (2 ** (attempt - 1))
+                        logger.warning(
+                            "Local service auth error on attempt %d/%d. "
+                            "Retrying in %.1fs... (Is Ollama running?)",
+                            attempt, API_MAX_RETRIES + 1, backoff,
+                        )
+                        time.sleep(backoff)
+                        continue
+                # Permanent failure for cloud providers -- do not retry.
                 logger.error("Summarizer API authentication failed.")
                 raise SummarizerError(
                     "API authentication failed. Check your API key."
@@ -243,6 +270,11 @@ class CloudLLMSummarizer:
         if isinstance(last_exception, openai.APITimeoutError):
             raise SummarizerError("Summarizer timed out.") from last_exception
         elif isinstance(last_exception, openai.APIConnectionError):
+            if "localhost" in self._base_url or "127.0.0.1" in self._base_url:
+                raise SummarizerError(
+                    "Cannot connect to local Ollama. "
+                    "Is Ollama running? Start it with: ollama serve"
+                ) from last_exception
             raise SummarizerError("Network error.") from last_exception
         elif isinstance(last_exception, openai.RateLimitError):
             raise SummarizerError(

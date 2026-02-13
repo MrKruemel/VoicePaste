@@ -266,6 +266,7 @@ def create_stt_backend(config: "AppConfig") -> "STTBackend | None":
                 device=config.local_device,
                 compute_type=config.local_compute_type,
                 model_path=model_path,
+                vad_filter=config.vad_filter,
             )
 
         except STTError as e:

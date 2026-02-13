@@ -33,7 +33,188 @@ _PROVIDER_DEFAULTS = {
         "model": "openai/gpt-4o-mini",
         "base_url": "https://openrouter.ai/api/v1",
     },
+    "ollama": {
+        "model": "llama3.2",
+        "base_url": "http://localhost:11434/v1",
+    },
 }
+
+# Dark theme color palette (single source of truth for all widgets)
+_DARK_COLORS = {
+    "bg": "#1c1c1c",
+    "fg": "#e0e0e0",
+    "field_bg": "#2d2d2d",
+    "field_fg": "#e0e0e0",
+    "disabled_bg": "#1a1a1a",
+    "disabled_fg": "#666666",
+    "select_bg": "#4a6984",
+    "select_fg": "#ffffff",
+    "accent": "#4a90d9",
+    "border": "#444444",
+    "button_bg": "#333333",
+    "button_active": "#444444",
+    "insert": "#e0e0e0",
+}
+
+
+def _apply_dark_title_bar(widget) -> None:
+    """Apply dark title bar to a tkinter window using the Windows DWM API.
+
+    On Windows 10 build 18985+ and Windows 11, the DWM (Desktop Window
+    Manager) controls the title bar color. By default the title bar stays
+    light even when the app content is dark. This function calls
+    DwmSetWindowAttribute with DWMWA_USE_IMMERSIVE_DARK_MODE (attribute 20)
+    to request a dark title bar.
+
+    Must be called AFTER the window has been created and update_idletasks()
+    has run (so that a valid HWND exists).
+
+    Args:
+        widget: A tkinter Tk or Toplevel instance.
+    """
+    try:
+        import ctypes
+        hwnd = ctypes.windll.user32.GetParent(widget.winfo_id())
+        # DWMWA_USE_IMMERSIVE_DARK_MODE = 20 (Windows 10 18985+, Windows 11)
+        value = ctypes.c_int(1)
+        ctypes.windll.dwmapi.DwmSetWindowAttribute(
+            hwnd, 20, ctypes.byref(value), ctypes.sizeof(value)
+        )
+        logger.debug("Dark title bar applied via DwmSetWindowAttribute.")
+    except Exception:
+        logger.debug("Could not apply dark title bar (non-fatal).")
+
+
+def _configure_dark_style(root, ttk_module, sv_ttk_loaded):
+    """Configure comprehensive dark theme for all tkinter/ttk widgets.
+
+    When sv_ttk is loaded, the key fix is calling sv_ttk's ``configure_colors``
+    Tcl procedure. This procedure calls ``tk_setPalette`` which sets the
+    option database for ALL plain tk widgets (tk.Text, tk.Entry, tk.Toplevel
+    backgrounds, etc.). Without this call, plain tk widgets retain their
+    Windows system colors (SystemButtonFace, SystemWindow) and appear light.
+
+    **Root cause**: sv_ttk binds ``configure_colors`` to the ``<<ThemeChanged>>``
+    virtual event, but on Windows this event is only generated when the
+    *Windows system theme* changes (light/dark mode toggle in Windows Settings),
+    NOT when ``ttk::style theme use`` is called from Python. So the procedure
+    never fires automatically. We must call it explicitly.
+
+    Additionally, sv_ttk uses image-based elements (spritesheet PNGs) for
+    Entry.field and Combobox.field. This means ``style.configure("TEntry",
+    fieldbackground=...)`` is accepted into the style database but IGNORED
+    by the rendering engine -- the spritesheet image is always drawn instead
+    of any color fill. The ttk Entry/Combobox backgrounds are therefore always
+    correct under sv_ttk dark theme. The foreground (text color) is handled
+    by the textarea sub-element and works normally via style.configure.
+
+    When sv_ttk is not available, applies a full manual dark theme for all
+    ttk widget types.
+
+    Args:
+        root: The tk.Tk root instance.
+        ttk_module: The ttk module reference.
+        sv_ttk_loaded: Whether sv_ttk was successfully loaded.
+    """
+    c = _DARK_COLORS
+
+    if sv_ttk_loaded:
+        # CRITICAL: call sv_ttk's configure_colors proc to trigger
+        # tk_setPalette for plain tk widgets. Without this, tk.Text,
+        # Toplevel backgrounds, and any raw tk.* widgets keep their
+        # Windows system colors (light).
+        try:
+            root.tk.call("configure_colors")
+            logger.debug("sv_ttk configure_colors called (tk_setPalette applied).")
+        except Exception:
+            logger.debug("configure_colors proc not found, applying manual tk_setPalette.")
+            # Fallback: call tk_setPalette directly with sv_ttk's dark colors
+            root.tk.call(
+                "tk_setPalette",
+                "background", c["bg"],
+                "foreground", c["fg"],
+                "highlightColor", c["select_bg"],
+                "selectBackground", c["select_bg"],
+                "selectForeground", c["select_fg"],
+                "activeBackground", c["select_bg"],
+                "activeForeground", c["select_fg"],
+            )
+
+        # Combobox dropdown is a plain tk.Listbox -- never themed by sv_ttk.
+        # tk_setPalette sets its bg to the main bg (#1c1c1c) but we want
+        # a slightly lighter field background for dropdown lists.
+        root.option_add("*TCombobox*Listbox.background", c["field_bg"])
+        root.option_add("*TCombobox*Listbox.foreground", c["field_fg"])
+        root.option_add("*TCombobox*Listbox.selectBackground", c["select_bg"])
+        root.option_add("*TCombobox*Listbox.selectForeground", c["select_fg"])
+
+    else:
+        # No sv_ttk: full manual dark theme for all ttk widget types.
+        style = ttk_module.Style()
+
+        style.configure(".", background=c["bg"], foreground=c["fg"])
+        style.configure("TFrame", background=c["bg"])
+        style.configure("TLabelframe", background=c["bg"])
+        style.configure("TLabelframe.Label", background=c["bg"],
+                        foreground=c["fg"])
+        style.configure("TLabel", background=c["bg"], foreground=c["fg"])
+        style.configure("TButton", background=c["button_bg"],
+                        foreground=c["fg"])
+        style.map("TButton",
+                  background=[("disabled", c["disabled_bg"]),
+                              ("active", c["button_active"]),
+                              ("pressed", "#555555")],
+                  foreground=[("disabled", c["disabled_fg"])])
+        style.configure("TCheckbutton", background=c["bg"],
+                        foreground=c["fg"])
+        style.map("TCheckbutton",
+                  background=[("disabled", c["bg"]),
+                              ("active", c["bg"])],
+                  foreground=[("disabled", c["disabled_fg"])])
+        style.configure("Horizontal.TProgressbar",
+                        background=c["accent"], troughcolor=c["button_bg"])
+        style.configure("TSeparator", background=c["border"])
+
+        # For non-sv_ttk, Entry/Combobox use the default "field" element
+        # which DOES respect fieldbackground (it's color-based, not image).
+        style.configure("TEntry",
+                        fieldbackground=c["field_bg"],
+                        foreground=c["field_fg"],
+                        insertcolor=c["insert"])
+        style.map("TEntry",
+                  fieldbackground=[("readonly", c["field_bg"]),
+                                   ("disabled", c["disabled_bg"])],
+                  foreground=[("readonly", c["field_fg"]),
+                              ("disabled", c["disabled_fg"])])
+
+        style.configure("TCombobox",
+                        fieldbackground=c["field_bg"],
+                        foreground=c["field_fg"],
+                        selectbackground=c["select_bg"],
+                        selectforeground=c["select_fg"])
+        style.map("TCombobox",
+                  fieldbackground=[("readonly", c["field_bg"]),
+                                   ("disabled", c["disabled_bg"])],
+                  foreground=[("readonly", c["field_fg"]),
+                              ("disabled", c["disabled_fg"])])
+
+        # Combobox dropdown listbox
+        root.option_add("*TCombobox*Listbox.background", c["field_bg"])
+        root.option_add("*TCombobox*Listbox.foreground", c["field_fg"])
+        root.option_add("*TCombobox*Listbox.selectBackground", c["select_bg"])
+        root.option_add("*TCombobox*Listbox.selectForeground", c["select_fg"])
+
+        # Manual tk_setPalette for plain tk widgets
+        root.tk.call(
+            "tk_setPalette",
+            "background", c["bg"],
+            "foreground", c["fg"],
+            "highlightColor", c["select_bg"],
+            "selectBackground", c["select_bg"],
+            "selectForeground", c["select_fg"],
+            "activeBackground", c["select_bg"],
+            "activeForeground", c["select_fg"],
+        )
 
 
 def open_settings_dialog(
@@ -61,7 +242,24 @@ def open_settings_dialog(
             root = tk.Tk()
             root.withdraw()  # Hide the root window
 
+            # Apply dark theme (sv_ttk + manual overrides for consistency)
+            _sv_ttk_ok = False
+            try:
+                import sv_ttk
+                sv_ttk.set_theme("dark")
+                _sv_ttk_ok = True
+                logger.debug("sv_ttk dark theme applied.")
+            except Exception:
+                logger.debug("sv_ttk not available, applying manual dark theme.")
+
+            _configure_dark_style(root, ttk, _sv_ttk_ok)
+
             dialog = SettingsDialog(root, config, on_save)
+
+            # Apply dark title bar to the dialog window via Windows DWM API.
+            # Must be called after the Toplevel is created and has a valid HWND.
+            dialog._dialog.update_idletasks()
+            _apply_dark_title_bar(dialog._dialog)
 
             def _on_close():
                 root.quit()
@@ -113,9 +311,17 @@ class SettingsDialog:
         self._on_save = on_save
         self._parent = parent
 
+        # Dark theme colors for plain tk widgets (sv_ttk only themes ttk)
+        self._bg_color = _DARK_COLORS["bg"]
+        self._fg_color = _DARK_COLORS["fg"]
+        self._text_bg = _DARK_COLORS["field_bg"]
+        self._text_fg = _DARK_COLORS["field_fg"]
+        self._text_insert = _DARK_COLORS["insert"]
+
         # Create the dialog window
         self._dialog = tk.Toplevel(parent)
         self._dialog.title("Voice Paste - Settings")
+        self._dialog.configure(bg=self._bg_color)
         self._dialog.resizable(False, False)
         self._dialog.minsize(540, 680)
 
@@ -134,6 +340,8 @@ class SettingsDialog:
         # Progress tracking (updated by the download thread, read by UI poll)
         self._download_bytes: int = 0
         self._download_total: int = 0
+        self._download_poll_count: int = 0  # For elapsed-time display
+        self._download_phase: str = "connecting"  # "connecting", "downloading"
 
         # Build the UI
         self._build_ui()
@@ -168,7 +376,7 @@ class SettingsDialog:
 
         # Error label at top (hidden by default)
         self._error_label = ttk.Label(
-            main_frame, text="", foreground="#CC0000", wraplength=480
+            main_frame, text="", foreground="#FF6B6B", wraplength=480
         )
         self._error_label.pack(fill=tk.X, pady=(0, 4))
         self._error_label.pack_forget()  # Hidden initially
@@ -220,7 +428,7 @@ class SettingsDialog:
         cloud_hint = ttk.Label(
             self._cloud_frame,
             text="Required for cloud transcription. Get a key at platform.openai.com",
-            foreground="#666666",
+            foreground="#999999",
             font=("", 8),
         )
         cloud_hint.pack(fill=tk.X, padx=(0, 0), pady=(0, 4))
@@ -268,7 +476,7 @@ class SettingsDialog:
         device_hint = ttk.Label(
             device_row,
             text="cpu = works everywhere, cuda = NVIDIA GPU",
-            foreground="#666666",
+            foreground="#999999",
             font=("", 8),
         )
         device_hint.pack(side=tk.LEFT, padx=(8, 0))
@@ -280,7 +488,7 @@ class SettingsDialog:
         ttk.Label(status_row, text="Status:", width=10, anchor=tk.W).pack(side=tk.LEFT)
 
         self._model_status_label = ttk.Label(
-            status_row, text="Checking...", foreground="#666666"
+            status_row, text="Checking...", foreground="#999999"
         )
         self._model_status_label.pack(side=tk.LEFT, padx=(4, 0))
 
@@ -301,7 +509,7 @@ class SettingsDialog:
         self._progress_bar.pack(side=tk.LEFT, padx=(4, 8))
 
         self._progress_label = ttk.Label(
-            self._progress_frame, text="Downloading...", foreground="#666666",
+            self._progress_frame, text="Downloading...", foreground="#999999",
             font=("", 8),
         )
         self._progress_label.pack(side=tk.LEFT)
@@ -310,14 +518,14 @@ class SettingsDialog:
         local_hint = ttk.Label(
             self._local_frame,
             text="Local mode: audio is never sent to any server. Requires faster-whisper.",
-            foreground="#006600",
+            foreground="#66CC66",
             font=("", 8),
         )
         local_hint.pack(fill=tk.X, pady=(2, 4))
 
         # Transcription error label
         self._transcription_error = ttk.Label(
-            transcription_frame, text="", foreground="#CC0000", font=("", 8)
+            transcription_frame, text="", foreground="#FF6B6B", font=("", 8)
         )
 
         # === Section 2: Summarization ===
@@ -346,7 +554,7 @@ class SettingsDialog:
         self._provider_combo = ttk.Combobox(
             provider_row,
             textvariable=self._provider_var,
-            values=["OpenAI", "OpenRouter"],
+            values=["OpenAI", "OpenRouter", "Ollama"],
             state="readonly",
             width=20,
         )
@@ -375,14 +583,14 @@ class SettingsDialog:
         or_hint = ttk.Label(
             self._openrouter_key_frame,
             text="Required for OpenRouter. Get a key at openrouter.ai",
-            foreground="#666666",
+            foreground="#999999",
             font=("", 8),
         )
         or_hint.pack(fill=tk.X, pady=(0, 4))
 
         # OpenRouter error label
         self._openrouter_error = ttk.Label(
-            self._openrouter_key_frame, text="", foreground="#CC0000", font=("", 8)
+            self._openrouter_key_frame, text="", foreground="#FF6B6B", font=("", 8)
         )
 
         # Model row
@@ -412,7 +620,7 @@ class SettingsDialog:
         url_hint = ttk.Label(
             summarization_frame,
             text="Advanced. Change only if using a custom endpoint.",
-            foreground="#666666",
+            foreground="#999999",
             font=("", 8),
         )
         url_hint.pack(fill=tk.X, pady=(0, 6))
@@ -439,13 +647,23 @@ class SettingsDialog:
             width=50,
             wrap=tk.WORD,
             font=("", 9),
+            bg=self._text_bg,
+            fg=self._text_fg,
+            insertbackground=self._text_insert,
+            selectbackground=_DARK_COLORS["select_bg"],
+            selectforeground=_DARK_COLORS["select_fg"],
+            highlightbackground=_DARK_COLORS["border"],
+            highlightcolor=_DARK_COLORS["accent"],
+            highlightthickness=1,
+            relief=tk.FLAT,
+            borderwidth=4,
         )
         self._prompt_text.pack(fill=tk.X, pady=(0, 2))
 
         prompt_hint = ttk.Label(
             summarization_frame,
             text="Instructs the LLM how to clean up the transcription. Leave empty for default.",
-            foreground="#666666",
+            foreground="#999999",
             font=("", 8),
         )
         prompt_hint.pack(fill=tk.X, pady=(0, 4))
@@ -471,14 +689,21 @@ class SettingsDialog:
         hotkey_row = ttk.Frame(general_frame)
         hotkey_row.pack(fill=tk.X, pady=(0, 2))
 
-        ttk.Label(hotkey_row, text="Hotkey:", width=10, anchor=tk.W).pack(side=tk.LEFT)
+        ttk.Label(hotkey_row, text="Summarize:", width=10, anchor=tk.W).pack(side=tk.LEFT)
         self._hotkey_label = ttk.Label(hotkey_row, text="", font=("", 9, "bold"))
         self._hotkey_label.pack(side=tk.LEFT, padx=(4, 0))
+
+        prompt_hotkey_row = ttk.Frame(general_frame)
+        prompt_hotkey_row.pack(fill=tk.X, pady=(0, 2))
+
+        ttk.Label(prompt_hotkey_row, text="Ask LLM:", width=10, anchor=tk.W).pack(side=tk.LEFT)
+        self._prompt_hotkey_label = ttk.Label(prompt_hotkey_row, text="", font=("", 9, "bold"))
+        self._prompt_hotkey_label.pack(side=tk.LEFT, padx=(4, 0))
 
         hotkey_hint = ttk.Label(
             general_frame,
             text="Change in config.toml (requires restart)",
-            foreground="#666666",
+            foreground="#999999",
             font=("", 8),
         )
         hotkey_hint.pack(fill=tk.X, pady=(0, 4))
@@ -550,7 +775,8 @@ class SettingsDialog:
         self._summarization_enabled_var.set(config.summarization_enabled)
 
         # Provider
-        provider_display = "OpenAI" if config.summarization_provider == "openai" else "OpenRouter"
+        _provider_display_map = {"openai": "OpenAI", "openrouter": "OpenRouter", "ollama": "Ollama"}
+        provider_display = _provider_display_map.get(config.summarization_provider, "OpenAI")
         self._provider_var.set(provider_display)
 
         # OpenRouter API Key
@@ -585,8 +811,9 @@ class SettingsDialog:
             from constants import SUMMARIZE_SYSTEM_PROMPT
             self._prompt_text.insert("1.0", SUMMARIZE_SYSTEM_PROMPT)
 
-        # Hotkey
+        # Hotkeys
         self._hotkey_label.config(text=config.hotkey)
+        self._prompt_hotkey_label.config(text=config.prompt_hotkey)
 
         # Audio cues
         self._audio_cues_var.set(config.audio_cues_enabled)
@@ -632,7 +859,7 @@ class SettingsDialog:
             if model_manager.is_model_available(model_key):
                 self._model_status_label.config(
                     text="Model downloaded and ready.",
-                    foreground="#006600",
+                    foreground="#66CC66",
                 )
                 self._download_btn.pack_forget()
                 self._progress_frame.pack_forget()
@@ -641,7 +868,7 @@ class SettingsDialog:
                 size_mb = info.get("download_mb", "?")
                 self._model_status_label.config(
                     text=f"Not downloaded (~{size_mb} MB).",
-                    foreground="#CC6600",
+                    foreground="#FFB347",
                 )
                 self._download_btn.config(text="Download Model", state="normal")
                 self._download_btn.pack(side=self._tk.LEFT, padx=(8, 0))
@@ -650,7 +877,7 @@ class SettingsDialog:
             logger.debug("Could not check model status: %s", e)
             self._model_status_label.config(
                 text="Could not check model status.",
-                foreground="#CC0000",
+                foreground="#FF6B6B",
             )
             self._download_btn.pack_forget()
 
@@ -675,11 +902,12 @@ class SettingsDialog:
         self._download_error_msg = ""
         self._download_bytes = 0
         self._download_total = 0
+        self._download_poll_count = 0
 
         # Update UI to show progress
         self._download_btn.config(text="Cancel", state="normal")
         self._model_status_label.config(
-            text="Downloading...", foreground="#0066CC",
+            text="Downloading...", foreground="#66B3FF",
         )
         self._progress_frame.pack(
             fill=self._tk.X, pady=(0, 4),
@@ -718,6 +946,7 @@ class SettingsDialog:
             bytes_downloaded: Bytes downloaded so far for the current file.
             total_bytes: Total bytes for the current file being downloaded.
         """
+        self._download_phase = "downloading"
         self._download_bytes = bytes_downloaded
         self._download_total = total_bytes
 
@@ -749,6 +978,14 @@ class SettingsDialog:
         finally:
             self._download_done.set()
 
+    def _reset_download_ui(self) -> None:
+        """Reset download UI controls to idle state."""
+        self._progress_bar.config(mode="determinate", value=0)
+        self._progress_frame.pack_forget()
+        self._local_model_combo.config(state="readonly")
+        self._local_device_combo.config(state="readonly")
+        self._backend_combo.config(state="readonly")
+
     def _poll_download(self) -> None:
         """Poll the download thread from the tkinter thread.
 
@@ -756,41 +993,60 @@ class SettingsDialog:
         label with real download progress, then checks if the download
         is complete.
         """
+        # Respond to cancel immediately — don't wait for download thread
+        if self._download_cancel.is_set() and not self._download_done.is_set():
+            self._reset_download_ui()
+            self._model_status_label.config(
+                text="Download cancelled.", foreground="#FFB347",
+            )
+            self._download_btn.config(text="Download Model", state="normal")
+            self._download_thread = None
+            return
+
         if not self._download_done.is_set():
+            self._download_poll_count += 1
             # Update progress bar from shared counters
             total = self._download_total
             downloaded = self._download_bytes
             if total > 0:
                 pct = min(100.0, (downloaded / total) * 100.0)
-                self._progress_bar.config(value=pct)
+                self._progress_bar.config(mode="determinate", value=pct)
                 downloaded_mb = downloaded / (1024 * 1024)
                 total_mb = total / (1024 * 1024)
                 self._progress_label.config(
                     text=f"Downloading: {downloaded_mb:.1f} / {total_mb:.1f} MB "
                     f"({pct:.0f}%)"
                 )
+            else:
+                # No data yet — show elapsed time so user knows it's working
+                elapsed_s = self._download_poll_count * 250 // 1000
+                self._progress_bar.config(mode="indeterminate")
+                self._progress_bar.step(2)
+                if elapsed_s >= 30:
+                    self._progress_label.config(
+                        text=f"Connection slow ({elapsed_s}s). "
+                        f"Check internet or try again."
+                    )
+                else:
+                    self._progress_label.config(
+                        text=f"Connecting to Hugging Face... ({elapsed_s}s)"
+                    )
             # Still downloading -- schedule next poll
             self._dialog.after(250, self._poll_download)
             return
 
         # Download finished -- update UI
-        self._progress_bar.config(value=0)
-        self._progress_frame.pack_forget()
-
-        # Re-enable combos
-        self._local_model_combo.config(state="readonly")
-        self._local_device_combo.config(state="readonly")
-        self._backend_combo.config(state="readonly")
+        self._reset_download_ui()
 
         if self._download_cancel.is_set():
             self._model_status_label.config(
-                text="Download cancelled.", foreground="#CC6600",
+                text="Download cancelled.", foreground="#FFB347",
             )
             self._download_btn.config(text="Download Model", state="normal")
         elif self._download_success:
             self._model_status_label.config(
                 text="Model downloaded and ready.",
-                foreground="#006600",
+                foreground="#66CC66",
             )
             self._download_btn.pack_forget()
         else:
@@ -801,7 +1057,7 @@ class SettingsDialog:
                 error_hint = error_hint[:77] + "..."
             self._model_status_label.config(
                 text=f"Download failed. {error_hint}",
-                foreground="#CC0000",
+                foreground="#FF6B6B",
             )
             self._download_btn.config(text="Retry Download", state="normal")
 
@@ -830,7 +1086,8 @@ class SettingsDialog:
     def _on_provider_changed(self, event=None) -> None:
         """Handle provider dropdown change."""
         provider = self._provider_var.get()
-        provider_key = "openai" if provider == "OpenAI" else "openrouter"
+        _key_map = {"OpenAI": "openai", "OpenRouter": "openrouter", "Ollama": "ollama"}
+        provider_key = _key_map.get(provider, "openai")
 
         defaults = _PROVIDER_DEFAULTS.get(provider_key, {})
         self._model_var.set(defaults.get("model", ""))
@@ -848,7 +1105,8 @@ class SettingsDialog:
                     if widget == self._provider_combo:
                         widget.config(state="readonly")
                     elif widget == self._prompt_text:
-                        widget.config(state="normal")
+                        widget.config(state="normal",
+                                      bg=self._text_bg, fg=self._text_fg)
                     elif widget in (self._openrouter_key_entry,):
                         # Respect editing state
                         if self._openrouter_key_editing:
@@ -859,7 +1117,10 @@ class SettingsDialog:
                         widget.config(state="normal")
                 else:
                     if widget == self._prompt_text:
-                        widget.config(state="disabled")
+                        # tk.Text has no disabledbackground — set manually
+                        widget.config(state="disabled",
+                                      bg=_DARK_COLORS["disabled_bg"],
+                                      fg=_DARK_COLORS["disabled_fg"])
                     else:
                         widget.config(state="disabled")
             except Exception:
@@ -953,10 +1214,11 @@ class SettingsDialog:
             if not base_url:
                 self._base_url_entry.focus_set()
                 return "Base URL is required."
-            # SEC-014: Enforce HTTPS only (REQ-S06)
-            if not base_url.startswith("https://"):
+            # SEC-014: Enforce HTTPS only (REQ-S06), except for local services
+            is_local = ("localhost" in base_url or "127.0.0.1" in base_url)
+            if not base_url.startswith("https://") and not is_local:
                 self._base_url_entry.focus_set()
-                return "Base URL must start with https:// for security."
+                return "Base URL must start with https:// for security (except localhost)."
 
         return None
 
@@ -1022,7 +1284,8 @@ class SettingsDialog:
 
         # Provider
         provider_display = self._provider_var.get()
-        new_provider = "openai" if provider_display == "OpenAI" else "openrouter"
+        _save_key_map = {"OpenAI": "openai", "OpenRouter": "openrouter", "Ollama": "ollama"}
+        new_provider = _save_key_map.get(provider_display, "openai")
         if new_provider != config.summarization_provider:
             changed_fields["summarization_provider"] = new_provider
             config.summarization_provider = new_provider
