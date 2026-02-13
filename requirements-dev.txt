@@ -1,0 +1,25 @@
+# Voice-to-Summary Paste Tool - Development & Test Dependencies
+# Install: pip install -r requirements-dev.txt
+#
+# This file includes production deps plus tools needed for testing,
+# linting, and building. Versions pinned for reproducibility.
+# Last pinned: 2026-02-13 from environment via `pip freeze`
+
+# Pull in all production dependencies first
+-r requirements.txt
+
+# ---------------------------------------------------------------------------
+# Testing
+# ---------------------------------------------------------------------------
+pytest==9.0.2               # Test runner
+pytest-cov==7.0.0           # Coverage reporting plugin
+pytest-mock==3.15.1         # Mock/patch helpers for pytest
+pytest-timeout==2.4.0       # Per-test timeout safety net (prevents hangs)
+coverage==7.13.1            # Code coverage measurement
+
+# ---------------------------------------------------------------------------
+# Test infrastructure dependencies (pinned for reproducibility)
+# ---------------------------------------------------------------------------
+iniconfig==2.3.0            # pytest config file parsing
+pluggy==1.6.0               # pytest plugin system
+packaging==25.0             # Version parsing (pytest dependency)

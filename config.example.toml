@@ -1,0 +1,31 @@
+# Voice-to-Summary Paste Tool Configuration
+# Copy this file to config.toml and fill in your API key.
+#
+# IMPORTANT: Keep your config.toml private.
+# Never share it or commit it to version control.
+
+[hotkey]
+# Global hotkey to start/stop recording (default: ctrl+shift+v)
+# Use format: "ctrl+shift+v", "ctrl+alt+m", "windows+shift+a", etc.
+# Supported modifiers: ctrl, shift, alt, windows
+# Separate multiple modifiers with +. Key names are case-insensitive.
+combination = "ctrl+shift+v"
+
+[api]
+# Your OpenAI API key (required)
+# Get one at https://platform.openai.com/api-keys
+openai_api_key = ""
+
+[summarization]
+# Enable text cleanup and summarization via GPT-4o-mini (default: true)
+# When disabled, raw transcription is pasted without cleanup.
+enabled = true
+
+[feedback]
+# Play audio cues on recording start/stop (default: true)
+# Set to false for silent operation.
+audio_cues = true
+
+[logging]
+# Log level: DEBUG, INFO, WARNING, ERROR
+level = "INFO"

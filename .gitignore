@@ -1,0 +1,36 @@
+# Configuration (contains API keys)
+config.toml
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+dist/
+build/
+*.spec
+# BUT track the main build spec file (source of truth for PyInstaller)
+!voice_paste.spec
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Logs
+*.log
+
+# Virtual environments
+venv/
+.venv/
+env/
+
+# PyInstaller
+*.exe
+*.dll
+
+# OS
+Thumbs.db
+desktop.ini
+.DS_Store
