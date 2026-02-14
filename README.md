@@ -1,6 +1,12 @@
-# Voice Paste
+<p align="center">
+  <img src="assets/icon-readme.png" alt="Voice Paste icon" width="96" />
+</p>
 
-A Windows desktop utility that records your speech, transcribes it with AI, optionally summarizes it, and pastes the result at your cursor—all with a hotkey. Runs entirely in the system tray.
+<h1 align="center">Voice Paste</h1>
+
+<p align="center">
+  A Windows desktop utility that records your speech, transcribes it with AI, optionally summarizes it, and pastes the result at your cursor—all with a hotkey. Runs entirely in the system tray.
+</p>
 
 **Current version**: 0.5.0 (Voice Prompts & UI Polish)
 
@@ -259,11 +265,10 @@ If the app is running but the icon is missing, check `voice-paste.log` for tray 
 The `keyboard` library uses low-level Windows hooks (same as system-level hotkey managers). Some antivirus software flags this as suspicious.
 
 **Solutions**:
-1. **Whitelist the tool**: Add the `.exe` or `python.exe` to your antivirus whitelist.
-2. **Disable temporarily**: Temporarily disable your antivirus while testing.
-3. **Exclude folder**: Use Settings > Virus & threat protection > Manage settings to exclude the application folder.
+1. **Whitelist the tool**: Add the `.exe` or `python.exe` to your antivirus exclusion list.
+2. **Exclude folder**: In Windows Security → Virus & threat protection → Manage settings → Exclusions, add the application folder.
 
-If you cannot resolve antivirus issues, the tool will not work until the library is whitelisted.
+If the `keyboard` library remains blocked by your antivirus, the global hotkey will not function until the application is whitelisted.
 
 ### Microphone Not Detected
 
