@@ -1,9 +1,10 @@
 # UX Specification
 
-## Voice-to-Summary Paste Tool
+## Voice Paste Tool
 
-**Date**: 2026-02-13
+**Date**: 2026-02-14
 **Author**: UX Designer
+**Current Version**: 0.5.0
 
 ---
 
@@ -15,83 +16,66 @@
 
 3. **Never steal focus.** The tool must never bring a window to the foreground, move the cursor, or change the active application. The user's current context is sacred.
 
-4. **Fail gracefully and visibly.** Errors are communicated via non-intrusive toast notifications. The tool returns to idle state. No silent failures, no modal dialogs, no crashes.
+4. **Configuration without configuration.** Settings are available but optional. Defaults work out-of-the-box. Advanced users can customize via Settings dialog (no need to edit config files).
 
-5. **Zero learning curve.** One hotkey does everything. The interaction is: press, speak, press, done. No modes to remember, no configuration required beyond the API key.
+5. **Fail gracefully and visibly.** Errors are communicated via non-intrusive toast notifications. The tool returns to idle state. No silent failures, no modal dialogs, no crashes.
+
+6. **Zero learning curve for core task.** One hotkey does everything for the main use case: record → transcribe → paste. Voice Prompt mode (Ctrl+Alt+A) is optional for advanced users.
 
 ---
 
 ## 2. State Definitions and Visual Feedback
 
-### 2.1 States
+### 2.1 States (v0.5)
 
 | State | Tray Icon | Tooltip | Audio Cue | Duration |
 |-------|-----------|---------|-----------|----------|
-| **IDLE** | Grey microphone | "Voice Paste - Ready (Ctrl+Shift+V)" | None | Indefinite |
-| **RECORDING** | Red microphone (solid) | "Voice Paste - Recording..." | Short rising tone on enter | Until user stops |
-| **PROCESSING** | Yellow microphone | "Voice Paste - Processing..." | Short falling tone on enter | 2-10 seconds |
+| **IDLE** | Grey microphone | "Voice Paste - Ready (Ctrl+Alt+R)" | None | Indefinite |
+| **RECORDING** | Red microphone (solid) | "Voice Paste - Recording..." | Short rising tone on enter | Until user stops or 5-min max |
+| **PROCESSING** | Yellow microphone | "Voice Paste - Processing..." | Short falling tone on enter | 2-30 seconds (depends on STT backend) |
 | **PASTING** | Green microphone (flash) | N/A (too brief) | None | <200ms |
-| **ERROR** | Red exclamation icon (3s) | Error description | Error tone | 3 seconds, then IDLE |
-| **CANCELLED** | Grey microphone | "Voice Paste - Cancelled" | Two short low tones | Immediate return to IDLE |
+| **ERROR** | Red exclamation icon | Error description | Error tone | 3 seconds, then IDLE |
+| **CANCELLED** | Grey microphone | "Voice Paste - Ready" | Two short low tones | Immediate return to IDLE |
 
-### 2.2 v0.1 Simplified States
+**Icon Colors (v0.5):**
+- Grey: IDLE (ready for input)
+- Red: RECORDING (actively capturing audio)
+- Yellow: PROCESSING (transcribing or summarizing)
+- Green: PASTING (briefly shown during paste execution)
+- Red exclamation: ERROR (transient, 3s)
 
-For the MVP, only these states need visual distinction:
-- **IDLE**: Static tray icon (any simple icon). Tooltip: "Voice Paste - Ready".
-- **RECORDING/PROCESSING/PASTING**: No visual distinction from idle in v0.1.
-- No audio cues in v0.1.
-
-The tray icon in v0.1 is purely for the context menu (Quit) and to indicate the app is running.
+**Note**: Icons are generated dynamically at runtime via `icon_drawing.py`. No bundled .png files.
 
 ---
 
 ## 3. Interaction Flows
 
-### 3.1 Happy Path (v0.1)
+### 3.1 Normal Mode - Transcribe & Paste (Ctrl+Alt+R)
 
 ```
 User                          Tool                          System
  |                              |                              |
- |-- Press Ctrl+Shift+V ------->|                              |
- |                              |-- Start mic recording ------>|
- |                              |                              |
- |   (user speaks)              |   (audio captured)           |
- |                              |                              |
- |-- Press Ctrl+Shift+V ------->|                              |
- |                              |-- Stop recording             |
- |                              |-- Send audio to Whisper API  |
- |                              |   ...waiting...              |
- |                              |<- Transcript received         |
- |                              |-- Write to clipboard         |
- |                              |-- Simulate Ctrl+V ---------->|
- |                              |                              |-- Text appears at cursor
- |                              |-- Return to IDLE             |
-```
-
-### 3.2 Happy Path (v0.2+)
-
-```
-User                          Tool                          System
- |                              |                              |
- |-- Press Ctrl+Shift+V ------->|                              |
+ |-- Press Ctrl+Alt+R -------->|                              |
  |                              |-- [AUDIO] Rising tone        |
  |                              |-- [ICON] Red microphone      |
  |                              |-- Start mic recording ------>|
  |                              |                              |
  |   (user speaks)              |   (audio captured)           |
  |                              |                              |
- |-- Press Ctrl+Shift+V ------->|                              |
+ |-- Press Ctrl+Alt+R -------->|                              |
  |                              |-- [AUDIO] Falling tone       |
  |                              |-- [ICON] Yellow microphone   |
  |                              |-- Stop recording             |
  |                              |-- Backup clipboard           |
- |                              |-- Send audio to Whisper API  |
+ |                              |-- Send audio to Whisper      |
+ |                              |   (cloud or local)           |
  |                              |   ...waiting...              |
  |                              |<- Transcript received         |
- |                              |-- Send to summarizer          |
+ |                              |-- Send to Summarizer (optional)|
  |                              |   ...waiting...              |
- |                              |<- Summary received            |
- |                              |-- Write summary to clipboard |
+ |                              |<- Summary/cleaned text        |
+ |                              |-- Write to clipboard         |
+ |                              |-- [ICON] Green microphone    |
  |                              |-- Simulate Ctrl+V ---------->|
  |                              |                              |-- Text appears at cursor
  |                              |-- Wait 150ms                 |
@@ -100,12 +84,42 @@ User                          Tool                          System
  |                              |-- Return to IDLE             |
 ```
 
-### 3.3 Cancel Flow (v0.2+)
+### 3.2 Voice Prompt Mode - Q&A (Ctrl+Alt+A, v0.5)
+
+```
+User                          Tool                          System
+ |                              |                              |
+ |-- Press Ctrl+Alt+A -------->|                              |
+ |                              |-- [AUDIO] Rising tone        |
+ |                              |-- [ICON] Red microphone      |
+ |                              |-- Start mic recording ------>|
+ |                              |                              |
+ |   (user speaks question)     |   (audio captured)           |
+ |                              |                              |
+ |-- Press Ctrl+Alt+A -------->|                              |
+ |                              |-- [AUDIO] Falling tone       |
+ |                              |-- [ICON] Yellow microphone   |
+ |                              |-- Stop recording             |
+ |                              |-- Send audio to Whisper      |
+ |                              |   ...waiting...              |
+ |                              |<- Transcript received         |
+ |                              |-- Send transcript to LLM     |
+ |                              |   as prompt (not cleanup)    |
+ |                              |   ...waiting...              |
+ |                              |<- LLM answer received         |
+ |                              |-- Write answer to clipboard  |
+ |                              |-- [ICON] Green microphone    |
+ |                              |-- Simulate Ctrl+V ---------->|
+ |                              |                              |-- Answer appears at cursor
+ |                              |-- Return to IDLE             |
+```
+
+### 3.3 Cancel Flow (Escape)
 
 ```
 User                          Tool
  |                              |
- |-- Press Ctrl+Shift+V ------->|
+ |-- Press Ctrl+Alt+R -------->|
  |                              |-- [AUDIO] Rising tone
  |                              |-- [ICON] Red microphone
  |                              |-- Start recording
@@ -116,6 +130,34 @@ User                          Tool
  |                              |-- [ICON] Grey microphone
  |                              |-- Return to IDLE
  |                              |   (nothing pasted)
+```
+
+### 3.4 Settings Dialog (Right-click → Settings, v0.3+)
+
+```
+User                          Tool
+ |                              |
+ |-- Right-click tray -------->|
+ |   icon                       |
+ |                              |-- Show context menu
+ |-- Click "Settings" -------->|
+ |                              |-- Spawn tkinter dialog on
+ |                              |   dedicated thread
+ |                              |   (does NOT block tray)
+ |                              |
+ |-- (User adjusts tabs)       |-- Display tabs:
+ |   - Credentials             |   Credentials, Transcription,
+ |   - Transcription           |   Summarization, Feedback
+ |   - Summarization           |
+ |   - Feedback                |-- Hot-reload: changes
+ |                              |   apply immediately
+ |-- Click "Save" ------------>|
+ |                              |-- Write non-secrets to
+ |                              |   config.toml
+ |                              |-- Store secrets in keyring
+ |                              |-- Apply changes (no restart)
+ |-- Close dialog ------------>|
+ |                              |-- Singleton lock released
 ```
 
 ---
@@ -200,44 +242,30 @@ User                          Tool
 
 ---
 
-## 5. System Tray Menu
+## 5. System Tray Menu (v0.5)
 
-### v0.1 Menu
-```
-Right-click tray icon:
-+------------------+
-| Quit             |
-+------------------+
-```
-
-### v0.2+ Menu
 ```
 Right-click tray icon:
 +------------------+
 | Status: Idle     |  (greyed out, informational)
 +------------------+
+| Settings         |  (v0.3+, opens dialog)
++------------------+
 | Quit             |
 +------------------+
 ```
 
-### v1.0 Menu
-```
-Right-click tray icon:
-+------------------+
-| Status: Idle     |  (greyed out, informational)
-+------------------+
-| Open Log File    |
-| Open Config      |
-+------------------+
-| Quit             |
-+------------------+
-```
+**Status line** shows current state: "Status: Idle", "Status: Recording", "Status: Processing", "Status: Pasting", or "Status: Error".
+
+**Settings** opens the tkinter settings dialog on a dedicated thread (non-blocking tray).
+
+**v1.0 future enhancements**: Open Log File, Open Config, Model Manager UI.
 
 ---
 
-## 6. Audio Cue Specification (v0.2+)
+## 6. Audio Cue Specification (v0.2+, v0.5 unchanged)
 
-All audio cues are synthesized programmatically (no bundled .wav files) to minimize binary size.
+All audio cues are synthesized programmatically via `notifications.py` to minimize binary size.
 
 | Cue | Description | Frequency | Duration |
 |-----|-------------|-----------|----------|
@@ -248,7 +276,9 @@ All audio cues are synthesized programmatically (no bundled .wav files) to minim
 
 **Volume**: System notification volume. Not independently configurable.
 
-**Implementation note**: Use `winsound.Beep()` or generate tones via `sounddevice` playback. `winsound.Beep()` is simpler and has zero dependency cost but is blocking -- must be called from a non-UI thread.
+**Disable**: Users can disable audio cues in Settings > Feedback tab or via `[feedback] audio_cues = false` in config.toml.
+
+**Implementation**: `notifications.py` uses `winsound.Beep()` or numpy-generated sine waves via sounddevice. Called from worker threads to avoid blocking.
 
 ---
 
@@ -268,7 +298,7 @@ Toast notifications are Windows 10/11 native notifications.
 
 ---
 
-## 8. Timing Constraints
+## 8. Timing Constraints (v0.5)
 
 | Event | Maximum Acceptable Latency |
 |-------|---------------------------|
@@ -276,16 +306,70 @@ Toast notifications are Windows 10/11 native notifications.
 | Hotkey press to recording stop | 200ms |
 | Icon state change | 200ms |
 | Audio cue playback | 200ms from trigger |
-| STT API call (30s audio) | 10 seconds |
+| STT (cloud, 30s audio) | 10 seconds |
+| STT (local, 30s audio) | 15-60 seconds (depends on model size) |
 | Summarization API call | 5 seconds |
+| Prompt (Q&A) API call | 5-10 seconds |
 | Paste execution | 200ms |
-| Full pipeline (30s audio) | 15 seconds (v0.1), 18 seconds (v0.2 with summarization) |
+| **Full pipeline (cloud STT + summarization)** | 18 seconds (typical) |
+| **Full pipeline (local STT, base model)** | 30 seconds (typical) |
+
+**Note**: Users can configure timeouts in config.toml if they need different limits.
 
 ---
 
-## 9. Accessibility Notes
+## 9. Settings Dialog Tabs (v0.3+, v0.5)
 
-- The tool is primarily hotkey-driven. No mouse interaction required for core workflow.
-- Tray icon tooltips provide state information for screen reader users.
-- Audio cues provide non-visual feedback (can be disabled for users who don't want sound).
-- All error information is both logged (persistent) and notified (ephemeral).
+### Credentials Tab
+- OpenAI API Key (masked input, stored in keyring)
+- OpenRouter API Key (masked input, stored in keyring)
+- Help text: "Keys are stored securely in Windows Credential Manager."
+- Test button: "Test API Key" (makes a small API call to verify)
+
+### Transcription Tab
+- Backend selection: Radio buttons (Cloud / Local)
+- Model size (Local only): Dropdown (tiny, base, small, medium, large-v2, large-v3)
+- Device (Local only): Radio buttons (CPU / CUDA)
+- Quantization (Local only): Dropdown (int8, float16, float32)
+- VAD Filter toggle (Local only): Checkbox
+- Download Model button (Local mode): Opens progress dialog, downloads from Hugging Face
+
+### Summarization Tab
+- Summarization enabled: Toggle
+- Provider: Radio buttons (OpenAI / OpenRouter / Ollama)
+- Model: Text input (with provider-specific defaults suggested)
+- Custom Base URL: Text input (optional)
+- Custom Prompt: Text area (optional, shows default if empty)
+- Test button: "Test Summarization" (uses test text)
+
+### Feedback Tab
+- Audio cues enabled: Toggle
+- Log level: Dropdown (DEBUG / INFO / WARNING / ERROR)
+- Help text: Links to log file location
+
+---
+
+## 10. Accessibility Notes (v0.5)
+
+- The tool is primarily hotkey-driven. No mouse interaction required for core workflow (normal mode or voice prompt mode).
+- Tray icon tooltips provide state information.
+- Audio cues provide non-visual feedback (can be disabled in Settings for users who don't want sound).
+- Settings dialog is keyboard-navigable (Tab, Enter, Spacebar).
+- All error information is both logged (persistent) and notified (ephemeral via toast).
+- Toast notifications display for 3-5 seconds (configurable system setting).
+
+---
+
+## 11. First-Run Experience (v0.3+)
+
+1. User runs the tool for the first time.
+2. No config.toml exists → tool creates a template.
+3. Tray icon appears.
+4. Right-click tray → "Settings" opens automatically (or can be triggered on first hotkey press).
+5. Settings dialog: Credentials tab highlighted.
+6. User enters OpenAI API key → click Save.
+7. Key is stored in keyring. Settings dialog closes.
+8. User can now press Ctrl+Alt+R to record.
+9. On first recording, tool defaults to cloud STT + summarization enabled.
+
+**Fallback**: If settings dialog fails to open, a startup notification directs user to Settings menu later.

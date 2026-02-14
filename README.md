@@ -1,25 +1,33 @@
-# Voice-to-Summary Paste Tool
+# Voice Paste
 
-A Windows desktop utility that records your speech, transcribes it with cloud AI, optionally summarizes it, and pastes the result at your cursor—all with a single hotkey.
+A Windows desktop utility that records your speech, transcribes it with AI, optionally summarizes it, and pastes the result at your cursor—all with a hotkey. Runs entirely in the system tray.
+
+**Current version**: 0.5.0 (Voice Prompts & UI Polish)
 
 ## Features
 
-- **One-hotkey workflow**: Press Ctrl+Shift+V to record, press again to transcribe and paste.
-- **Cloud transcription**: OpenAI Whisper API for accurate speech-to-text.
-- **Automatic summarization**: GPT-4o-mini cleans up filler words and grammar (v0.2+).
-- **Silent operation**: Runs entirely in the system tray. Never steals focus.
-- **Audio feedback**: Beeps confirm recording start/stop. Disable in config if you prefer silence.
-- **Clipboard preservation**: Original clipboard contents are restored after pasting (v0.2+).
+- **Transcribe with a hotkey**: Press Ctrl+Alt+R to record, press again to transcribe and paste.
+- **Ask questions with Voice Prompt**: Press Ctrl+Alt+A to record a question, get an AI answer, and paste it.
+- **Choose your transcription source**: Cloud (OpenAI Whisper API) or offline (local faster-whisper with Silero VAD).
+- **Multiple summarization backends**: OpenAI, OpenRouter (Claude, Llama), or local Ollama.
+- **Settings dialog**: Configure everything via GUI (right-click tray → Settings). No config file editing needed.
+- **Secure credential storage**: API keys stored in Windows Credential Manager, never in plain text files.
+- **Silent operation**: Runs in system tray. Never steals focus.
+- **Audio feedback**: Beeps confirm recording start/stop/cancel/error. Disable in settings for silent mode.
+- **Visual feedback**: Tray icon color changes per state (grey=idle, red=recording, yellow=processing, green=pasting).
 - **Cancel anytime**: Press Escape during recording to discard and return to idle.
-- **Toast notifications**: Errors appear as Windows notifications, not modal dialogs (v0.2+).
+- **Clipboard safety**: Original clipboard contents restored after pasting.
+- **Toast notifications**: Errors appear as Windows notifications, not modal dialogs.
 
 ## Requirements
 
 - **Windows 10 or 11**
 - **Python 3.11+** (for running from source)
 - **Microphone**: Connected and working
-- **OpenAI API key**: Required for cloud transcription. Get one at https://platform.openai.com/api-keys
-- **Internet connection**: Required for Whisper API and summarization
+- **For cloud transcription**: OpenAI API key (get one at https://platform.openai.com/api-keys)
+- **For local transcription**: Disk space for Whisper model (75MB–3GB depending on size)
+- **For local summarization**: Ollama running locally (http://localhost:11434) if using Ollama provider
+- **Internet connection**: Required only for cloud transcription and cloud summarization
 
 ## Quick Start
 
@@ -29,20 +37,15 @@ A Windows desktop utility that records your speech, transcribes it with cloud AI
 pip install -r requirements.txt
 ```
 
-### 2. Create Configuration
+### 2. Create Configuration (Optional)
 
-Copy `config.example.toml` to `config.toml` and add your OpenAI API key:
+Copy `config.example.toml` to `config.toml` and customize if needed:
 
 ```bash
 copy config.example.toml config.toml
 ```
 
-Edit `config.toml` in a text editor and fill in your API key:
-
-```toml
-[api]
-openai_api_key = "sk-..."
-```
+Edit `config.toml` in a text editor (optional — you can do this in the Settings dialog later).
 
 ### 3. Run the Application
 
@@ -59,65 +62,166 @@ The Voice Paste icon appears in your system tray (bottom right of taskbar). If y
 1. **Check the overflow area**: Click the **^** (arrow) icon in the taskbar to reveal hidden system tray icons.
 2. **Pin the icon** (Windows 11): Right-click the taskbar → **Taskbar settings** → **Other system tray icons** → Turn on **VoicePaste**.
 
-Once visible, press **Ctrl+Shift+V** to start recording.
+### 5. Set Up Your API Key (First Run)
+
+When you press Ctrl+Alt+R for the first time, the Settings dialog opens (or right-click tray → Settings). Add your OpenAI API key:
+
+1. Click **Credentials** tab
+2. Paste your API key in the OpenAI field
+3. Click **Save**
+
+Your key is stored securely in Windows Credential Manager (not in config.toml).
+
+### 6. Start Recording
+
+Press **Ctrl+Alt+R** to start recording. Speak into your microphone. Press **Ctrl+Alt+R** again to stop, transcribe, and paste.
 
 ## How It Works
 
+### Normal Mode (Ctrl+Alt+R)
+
 ```
-Press Ctrl+Shift+V
+Press Ctrl+Alt+R
     ↓
 Record audio from microphone (in-memory only)
     ↓
-Press Ctrl+Shift+V to stop recording
+Press Ctrl+Alt+R to stop recording
     ↓
-Send audio to OpenAI Whisper API
+Send audio to Whisper (cloud or local)
     ↓
-(Optional) Send transcript to GPT-4o-mini for cleanup
+(Optional) Send transcript to LLM for cleanup/summarization
     ↓
 Write result to clipboard
     ↓
 Simulate Ctrl+V to paste at cursor
+    ↓
+Restore original clipboard contents
+    ↓
+Return to idle
+```
+
+### Voice Prompt Mode (Ctrl+Alt+A)
+
+```
+Press Ctrl+Alt+A
+    ↓
+Record speech as a question or command
+    ↓
+Press Ctrl+Alt+A to stop recording
+    ↓
+Send audio to Whisper for transcription
+    ↓
+Send transcript as a prompt to LLM
+    ↓
+LLM generates an answer
+    ↓
+Write answer to clipboard
+    ↓
+Simulate Ctrl+V to paste answer at cursor
     ↓
 Return to idle
 ```
 
 ## Configuration Reference
 
-All options go in `config.toml`. See `config.example.toml` for a full template.
+All options can be set via the **Settings dialog** (right-click tray → Settings) or by editing `config.toml` directly.
+
+### Hotkeys
 
 | Key | Type | Default | Description |
 |-----|------|---------|-------------|
-| `[hotkey]` `combination` | string | `"ctrl+shift+v"` | Global hotkey to start/stop recording. Use format: `"ctrl+..."`, `"shift+..."`, `"alt+..."`, `"windows+..."`. |
-| `[api]` `openai_api_key` | string | *(required)* | Your OpenAI API key. Must be set to use the tool. |
-| `[summarization]` `enabled` | boolean | `true` | Enable GPT-4o-mini summarization. Set `false` to paste raw transcript. |
-| `[feedback]` `audio_cues` | boolean | `true` | Play audio beeps on recording start/stop. Set `false` for silent operation. |
+| `[hotkey]` `combination` | string | `"ctrl+alt+r"` | Global hotkey to start/stop recording. Use format: `"ctrl+alt+r"`, `"ctrl+shift+v"`, `"windows+shift+a"`, etc. |
+| `[hotkey]` `prompt_combination` | string | `"ctrl+alt+a"` | Voice Prompt hotkey: record speech, send as question to LLM, paste answer. Set to empty string to disable. |
+
+### Transcription (Speech-to-Text)
+
+| Key | Type | Default | Description |
+|-----|------|---------|-------------|
+| `[transcription]` `backend` | string | `"cloud"` | Transcription source: `"cloud"` (OpenAI Whisper API) or `"local"` (faster-whisper, offline). |
+| `[transcription]` `model_size` | string | `"base"` | Local model size: `"tiny"` (~75MB, fast), `"base"` (~145MB, recommended), `"small"` (~480MB), `"medium"` (~1.5GB), `"large-v2"` (~3GB), `"large-v3"` (~3GB). Only used when `backend = "local"`. |
+| `[transcription]` `device` | string | `"cpu"` | Compute device: `"cpu"` (works everywhere) or `"cuda"` (NVIDIA GPU, faster). Only for local backend. |
+| `[transcription]` `compute_type` | string | `"int8"` | Quantization: `"int8"` (fastest, CPU), `"float16"` (GPU), `"float32"` (highest quality). Only for local backend. |
+| `[transcription]` `vad_filter` | boolean | `true` (script) / `false` (.exe) | Voice Activity Detection: skip silence before transcription. Improves accuracy. Auto-disabled in frozen .exe. |
+
+### Summarization (Text Cleanup & Summarization)
+
+| Key | Type | Default | Description |
+|-----|------|---------|-------------|
+| `[summarization]` `enabled` | boolean | `true` | Enable text cleanup and summarization. Set `false` for raw transcript. |
+| `[summarization]` `provider` | string | `"openai"` | LLM provider: `"openai"` (GPT-4o-mini), `"openrouter"` (Claude, Llama, etc.), or `"ollama"` (local). |
+| `[summarization]` `model` | string | `"gpt-4o-mini"` | Model name. Examples: `"gpt-4o-mini"` (OpenAI), `"claude-3-haiku"` (OpenRouter), `"llama3.2"` (Ollama). |
+| `[summarization]` `base_url` | string | (empty) | Custom API endpoint (for proxies, self-hosted, or OpenRouter). Leave empty to use provider default. |
+| `[summarization]` `custom_prompt` | string | (empty) | Custom system prompt for LLM. Leave empty to use the default cleanup prompt. |
+
+### Feedback & Logging
+
+| Key | Type | Default | Description |
+|-----|------|---------|-------------|
+| `[feedback]` `audio_cues` | boolean | `true` | Play audio beeps on recording start/stop/cancel/error. Set `false` for silent operation. |
 | `[logging]` `level` | string | `"INFO"` | Log level: `"DEBUG"`, `"INFO"`, `"WARNING"`, or `"ERROR"`. |
 
-### Customizing the Hotkey
+## Choosing a Transcription Backend
 
-To change the hotkey from the default `Ctrl+Shift+V`, edit the `[hotkey]` section in your `config.toml`:
+### Cloud Transcription (Default: OpenAI Whisper API)
 
-```toml
-[hotkey]
-combination = "ctrl+alt+v"
-```
+**Pros:**
+- Excellent quality for all languages, including German
+- Fast (2–5 seconds per minute of audio)
+- Works immediately, no setup
+- No local disk space needed
 
-Use these modifier prefixes: `ctrl`, `shift`, `alt`, `windows`. Separate multiple modifiers with `+`. Key names are case-insensitive.
+**Cons:**
+- Requires internet connection
+- Requires OpenAI API key and account credit
+- ~$0.006 per minute of audio ($0.36 per hour)
+- Audio leaves your machine (sent to OpenAI)
 
-Examples:
-- `"ctrl+shift+v"` – Ctrl+Shift+V (default)
-- `"ctrl+win+v"` – Ctrl+Windows+V
-- `"alt+shift+a"` – Alt+Shift+A
-- `"ctrl+alt+m"` – Ctrl+Alt+M
+**Best for:** Quick transcription, high quality, German language.
 
-**Caution**: Avoid hotkeys that conflict with your applications or Windows shortcuts. If your hotkey does not work, check the log file for conflict warnings.
+### Local Transcription (faster-whisper)
+
+**Pros:**
+- Works offline (no internet needed)
+- No per-use cost
+- Audio stays on your machine
+- Supports all languages
+- Customizable model size/quality tradeoff
+
+**Cons:**
+- Slower (3–60 seconds depending on model size and CPU)
+- Uses disk space (75MB–3GB)
+- Requires more RAM (150MB–1.2GB depending on model)
+- Requires onnxruntime (bundled with PyInstaller)
+
+**Best for:** Privacy, offline use, cost-sensitive workflows.
+
+**How to enable:**
+1. Open Settings (right-click tray → Settings)
+2. Go to **Transcription** tab
+3. Change `backend` from "Cloud" to "Local"
+4. Select a model size (recommended: Base ~145MB)
+5. Click **Download Model** (one-time, ~2–5 minutes)
+6. Click **Save**
 
 ## Keyboard Shortcuts
 
 | Hotkey | Action |
 |--------|--------|
-| **Ctrl+Shift+V** | Start recording. Press again to stop and transcribe. |
+| **Ctrl+Alt+R** | Start/stop recording for transcription and paste. |
+| **Ctrl+Alt+A** | Start/stop recording for voice prompt (question → answer). |
 | **Escape** | Cancel active recording (discard audio, don't paste). |
+| **Right-click tray** | Show menu (Settings, Quit). |
+
+## Settings Dialog
+
+Right-click the tray icon and select **Settings** to open the configuration dialog. Tabs:
+
+- **Credentials**: Manage API keys (OpenAI, OpenRouter). Keys stored in Windows Credential Manager, not config.toml.
+- **Transcription**: Choose cloud or local Whisper. Download local models, set device/compute type.
+- **Summarization**: Enable/disable cleanup. Choose provider (OpenAI, OpenRouter, Ollama). Custom prompts.
+- **Feedback**: Toggle audio cues and set log level.
+
+Changes save immediately. No restart needed (hot-reload).
 
 ## Troubleshooting
 
@@ -129,7 +233,7 @@ Examples:
 1. **Check the overflow area**: Click the **^** (arrow) icon in the taskbar to reveal hidden icons. Voice Paste may be there.
 2. **Pin the icon**: Right-click your taskbar → **Taskbar settings** → **Other system tray icons** → Enable **VoicePaste** to keep it always visible.
 3. **Verify the app is running**: Open Task Manager (Ctrl+Shift+Esc) and look for `python.exe` or `voice_paste.exe` in the Processes tab. If you don't see it, the app may have crashed.
-4. **Debug mode**: Run the application with debug output to see startup messages:
+4. **Debug mode**: Run the application with debug output:
    ```bash
    python src/main.py --debug
    ```
@@ -138,17 +242,17 @@ Examples:
    VoicePaste.exe --debug
    ```
 
-If the app appears to be running but the icon is missing, check `voice-paste.log` for tray initialization errors.
+If the app is running but the icon is missing, check `voice-paste.log` for tray initialization errors.
 
 ### Hotkey Not Working
 
-**Problem**: Your configured hotkey (default Ctrl+Shift+V) does nothing when you press it.
+**Problem**: Your configured hotkey (default Ctrl+Alt+R) does nothing when you press it.
 
 **Solutions**:
 1. **Run as Administrator**: The `keyboard` library requires elevated permissions to register global hotkeys. Run Command Prompt as Administrator and start the tool from there. Without admin privileges, hotkeys may not work in elevated windows (like Administrator PowerShell or UAC prompts).
-2. **Verify the configuration**: Check that `[hotkey] combination` in `config.toml` is set correctly. Restart the tool after any config changes.
-3. **Keyboard library issue**: Some Windows configurations have trouble with the `keyboard` library. Antivirus software may block it. See below.
-4. **Hotkey conflict**: Your hotkey may conflict with other Windows shortcuts or applications. Try changing it in `config.toml` to a different combination (e.g., `"ctrl+alt+v"`). Check Windows Settings > Keyboard > Advanced > App Shortcuts for conflicts.
+2. **Verify the configuration**: Check `[hotkey] combination` in `config.toml` or Settings → Hotkey tab. Restart the tool after changing the hotkey.
+3. **Check for conflicts**: Your hotkey may conflict with other Windows shortcuts or applications. Try a different combination (e.g., `"ctrl+alt+v"` or `"windows+shift+r"`). See Windows Settings > Keyboard > Advanced > App Shortcuts.
+4. **Keyboard library issue**: Some Windows configurations have trouble with the `keyboard` library. Antivirus software may block it. See below.
 
 **Windows Defender / Antivirus Blocking**
 
@@ -157,19 +261,19 @@ The `keyboard` library uses low-level Windows hooks (same as system-level hotkey
 **Solutions**:
 1. **Whitelist the tool**: Add the `.exe` or `python.exe` to your antivirus whitelist.
 2. **Disable temporarily**: Temporarily disable your antivirus while testing.
-3. **Use Settings > Virus & threat protection > Manage settings** to exclude the application folder.
+3. **Exclude folder**: Use Settings > Virus & threat protection > Manage settings to exclude the application folder.
 
 If you cannot resolve antivirus issues, the tool will not work until the library is whitelisted.
 
 ### Microphone Not Detected
 
-**Problem**: Recording fails with "No microphone detected."
+**Problem**: Recording fails with "No microphone detected" error.
 
 **Solutions**:
 1. **Check Settings > System > Sound** to verify your microphone is connected and enabled.
-2. **Restart the tool** after plugging in a microphone (the tool checks for devices at recording start, not at launch).
+2. **Restart the tool** after plugging in a microphone (the tool detects devices when recording starts, not at launch).
 3. **Test your microphone** in Windows Sound Settings or another application first.
-4. **Check microphone permissions**: Some applications (especially in sandboxed environments) require explicit microphone access.
+4. **Check microphone permissions**: Some applications require explicit microphone access. Grant permission if prompted.
 
 ### API Errors
 
@@ -177,106 +281,105 @@ If you cannot resolve antivirus issues, the tool will not work until the library
 
 **Solutions**:
 1. **Check your API key**:
-   - Make sure you copied it correctly into `config.toml`.
-   - API keys start with `sk-`. If yours doesn't, you have the wrong key.
-   - Log in to https://platform.openai.com/api-keys to verify your key is valid.
+   - Verify it's correct in Settings > Credentials tab
+   - API keys start with `sk-` (OpenAI) or have a specific format per provider
+   - Log in to your provider's website to confirm the key is valid
 
-2. **Check API billing**:
-   - Visit https://platform.openai.com/account/billing/overview.
-   - Ensure you have available credits or a valid payment method.
+2. **Check account status**:
+   - Visit https://platform.openai.com/account/billing/overview (OpenAI) or your provider's dashboard
+   - Ensure you have available credits or a valid payment method
 
 3. **Check internet connection**:
-   - Verify you can reach https://api.openai.com in a browser.
-   - Check if your firewall or proxy is blocking the connection.
+   - Verify you can reach the API in a browser (https://api.openai.com or your provider)
+   - Check if your firewall or proxy is blocking the connection
 
 4. **Rate limiting**:
-   - If you see "Rate limit exceeded", wait a moment and try again.
-   - The tool retries failed API calls automatically (up to 2 retries with exponential backoff).
+   - If you see "Rate limit exceeded", wait a moment and try again
+   - The tool automatically retries failed calls (up to 2 retries with exponential backoff)
 
 5. **Check log file**:
-   - Look at `voice-paste.log` in your application directory for detailed error messages.
-   - Search for `ERROR` to find the root cause.
+   - Open `voice-paste.log` in your application directory for detailed error messages
+   - Search for `ERROR` to find the root cause
 
-### Paste Not Working in Terminal or Terminal Emulator
+### Transcription Empty or Failed
 
-**Problem**: Text appears on clipboard but doesn't paste into a terminal.
+**Problem**: Recording completes but nothing is transcribed or pasted.
+
+**Solutions**:
+1. **Silent recording**: If you didn't speak (only silence), Whisper returns an empty transcript. This is correct behavior. Speak clearly into the microphone.
+2. **Check microphone level**: Verify your microphone input level is adequate in Windows Sound Settings.
+3. **Recording too short**: Minimum recording duration is 0.5 seconds. Try speaking longer or at normal volume.
+4. **Wrong transcription backend**: If using local mode, verify the model is downloaded (Settings > Transcription > Download Model).
+
+Check `voice-paste.log` for "Empty recording" messages.
+
+### Local Transcription Crashes in .exe
+
+**Problem**: Using local transcription in the frozen .exe causes a crash (segfault, no Python error).
+
+**Cause**: onnxruntime (used for VAD filter) has a known issue with PyInstaller --onefile bundles.
+
+**Solution**:
+1. **Disable VAD filter**: Open Settings > Transcription tab, uncheck "Voice Activity Detection", click Save.
+2. **Use cloud transcription**: Switch to cloud mode (Settings > Transcription > Backend = Cloud)
+3. **Report the issue**: If disabling VAD doesn't help, see Build Troubleshooting below
+
+See [constants.py](src/constants.py) for VAD handling details.
+
+### Paste Not Working in Terminal
+
+**Problem**: Text appears on clipboard but doesn't paste into a terminal window.
 
 **Cause**: Many terminal emulators (Windows Terminal, ConEmu, PowerShell ISE) use Ctrl+Shift+V for paste instead of Ctrl+V.
 
 **Solutions**:
 1. **Use Ctrl+Shift+V** manually if the tool's Ctrl+V doesn't work.
 2. **Right-click paste** in the terminal (if available).
-3. **Check terminal settings** for a custom paste keybind.
+3. **Change terminal settings** to use Ctrl+V for paste (usually an option in terminal preferences).
 
-This is a known limitation of terminal emulators, not the tool itself.
+This is a limitation of terminal emulators, not the tool itself.
 
-### Recording Is Too Long (Continues Past Intent)
+### Clipboard Contents Lost
 
-**Problem**: Recording keeps going even though you pressed the hotkey to stop.
+**Problem**: Your clipboard contents disappeared after using the tool.
 
-**Solutions**:
-1. **Check the hotkey registration**: Verify your configured hotkey is registered correctly. Check `voice-paste.log` for hotkey registration messages.
-2. **Slow API response**: If transcription is taking a long time, the tool appears to still be recording while processing. Check the tray icon: if it's yellow, it's processing (not recording). Wait for it to return to grey.
-3. **5-minute auto-stop**: The tool automatically stops recording after 5 minutes to prevent accidental endless recordings. You'll see a notification if this triggers.
+**Cause**: v0.1 did not preserve the clipboard. v0.2+ automatically backs it up and restores it.
 
-### Nothing Happens When I Paste
-
-**Problem**: Recording and transcription complete, but no text appears.
-
-**Causes**:
-1. **Empty recording**: If you didn't speak (silence only), Whisper returns an empty transcript and nothing is pasted. This is correct behavior.
-2. **Wrong focus**: Verify the window where you want the text pasted had focus when you completed the recording. If you switched windows during processing, the paste goes to the currently active window.
-3. **Application doesn't accept Ctrl+V**: Some custom text controls don't respond to simulated paste. Try right-clicking and selecting Paste manually.
-
-Check the log file for "Empty recording" messages.
-
-### Clipboard Contents Were Lost
-
-**Problem**: Your clipboard contents disappeared after pasting.
-
-**Cause (v0.1)**: v0.1 does not preserve the original clipboard. The tool overwrites it with the transcript. This is expected.
-
-**Solution (v0.2+)**: Upgrade to v0.2+, which automatically backs up and restores your clipboard. If using v0.2+, this should not happen. Report it as a bug with your log file.
+**Solution**: Upgrade to v0.2 or later. If you're already on v0.2+ and this happens, report it as a bug with your `voice-paste.log`.
 
 **Workaround**: Use Ctrl+Z in most applications to undo the paste and recover your clipboard if you made a mistake.
 
 ## Privacy & Security
 
-### What Data Is Collected?
+### What Data Leaves Your Machine?
 
-- **Audio recordings**: Captured only when you press your configured hotkey. Stored in memory only (never to disk).
-- **Transcripts and summaries**: Generated from your speech. Sent to OpenAI for processing.
-- **API key**: Stored locally in `config.toml`. Never sent anywhere except to OpenAI's servers.
-- **Logs**: Written to `voice-paste.log`. Contains state changes and errors only. Never includes audio, transcripts, or your API key.
+When you use the tool:
+- **Cloud transcription**: Audio is sent to OpenAI's Whisper API via HTTPS
+- **Cloud summarization**: Transcript is sent to OpenAI's GPT-4o-mini API (or your chosen provider) via HTTPS
+- **Settings dialog**: No data leaves your machine. Everything is local.
+- **Logs**: Stored locally in `voice-paste.log`. Never uploaded.
 
-### Where Does Data Go?
-
-When you record and press the hotkey to stop:
-1. Audio is sent to OpenAI's Whisper API via HTTPS.
-2. Transcript is sent to OpenAI's GPT-4o-mini API via HTTPS (if summarization enabled).
-3. Text is placed on your local clipboard.
-4. Nothing is stored on disk except your config and logs (no audio, no transcripts).
-
-OpenAI's privacy policy applies to data sent to their services. Review it at https://openai.com/policies/privacy-policy.
+**Audio is never written to disk.** It stays in memory only.
 
 ### API Key Safety
 
-Your OpenAI API key grants access to your paid API account. **Protect it like a password.**
+Your OpenAI API key grants access to your paid API account and incurs charges. **Protect it like a password.**
 
 **Do NOT:**
-- Share your config.toml with anyone
+- Share your config.toml or Credential Manager with anyone
 - Commit config.toml to version control (use `config.example.toml` instead)
 - Post your config in screenshots or error reports
 - Store the key in sync services (OneDrive, Google Drive) without encryption
 
 **Do:**
-- Keep config.toml readable only by your user account
+- Use the Settings dialog (stores keys in Windows Credential Manager, encrypted by Windows)
+- Keep your config.toml readable only by your user account
 - Rotate your API key if you suspect compromise (https://platform.openai.com/api-keys)
 - Use a low-privilege API key if possible (OpenAI supports organization-level key scoping)
 
 ### No Telemetry
 
-The tool does not phone home, does not collect analytics, and does not track your usage. The only external communication is to OpenAI's API when you explicitly use the tool.
+The tool does not phone home, does not collect analytics, and does not track your usage. The only external communication is to your chosen API provider (OpenAI, OpenRouter, or Ollama) when you explicitly use the tool.
 
 ## Building from Source
 
@@ -286,13 +389,13 @@ The tool does not phone home, does not collect analytics, and does not track you
 - pip (Python package manager)
 - For PyInstaller builds: PyInstaller 6.0+
 
-### Development Build
+### Development Build (From Source)
 
 ```bash
 # Clone or download the project
-cd C:\develop\speachtoText
+cd C:\path\to\speachtoText
 
-# Create a virtual environment (optional but recommended)
+# Create a virtual environment (recommended)
 python -m venv venv
 venv\Scripts\activate
 
@@ -305,24 +408,26 @@ python src/main.py
 
 ### Single-File Executable Build
 
-The project includes a PyInstaller configuration for bundling into a single .exe file:
+The project includes a PyInstaller configuration to bundle into a single .exe file:
 
 ```bash
-# Install PyInstaller (if not already in requirements.txt)
+# Install PyInstaller if not in requirements.txt
 pip install pyinstaller==6.x
 
 # Run the build script
 build.bat
 ```
 
-Output: `dist\voice_paste.exe`
+**Output**: `dist\voice_paste.exe`
 
-**Note**: The build process may take 2-3 minutes. The resulting .exe is ~50-60 MB (includes Python runtime, dependencies, and audio libraries).
+**Build time**: 2–3 minutes.
+
+**Binary size**: ~50–60 MB (includes Python runtime, dependencies, and audio libraries).
 
 **Requirements**:
 - PyInstaller must be able to find your Python installation
-- All dependencies must be installed in the current environment
-- Antivirus software may flag the build temporarily (common for newly built executables; it's safe)
+- All dependencies must be installed in the current environment (pip install -r requirements.txt)
+- Antivirus software may flag the .exe temporarily (common for newly built executables; it's safe)
 
 ### Build Troubleshooting
 
@@ -330,15 +435,34 @@ Output: `dist\voice_paste.exe`
 
 **Solution**: Ensure all dependencies are installed: `pip install -r requirements.txt`
 
-**Error**: PyInstaller cannot find `sounddevice`
+**Error**: PyInstaller cannot find `sounddevice` or `openai`
 
-**Solution**: This is a known issue with certain sounddevice versions. The build.bat specifies hidden imports. If it fails, update your .spec file to include:
+**Solution**: These are common hidden imports. The build.bat and voice_paste.spec already include them. If it fails, update `voice_paste.spec` to add:
 
 ```python
-hiddenimports=['_sounddevice_data', 'numpy', 'openai']
+hiddenimports=['_sounddevice_data', 'numpy', 'openai', 'faster_whisper', 'onnxruntime']
 ```
 
 See `voice_paste.spec` for the current configuration.
+
+**Error**: `.exe crashes immediately or hangs during startup`
+
+**Solution**: Run from command prompt to see startup errors:
+
+```cmd
+VoicePaste.exe
+```
+
+Check `voice-paste.log` for details. Common issues:
+- Missing config.toml (the tool creates a template automatically)
+- API key validation failure (check Credential Manager)
+- Tray icon initialization error (check log for details)
+
+**Error**: `onnxruntime` crashes in frozen .exe
+
+**Cause**: onnxruntime has a known issue with PyInstaller --onefile when loading ONNX model files from the temporary _MEI* directory.
+
+**Solution**: Disable VAD filter in settings or use cloud transcription. See [constants.py](src/constants.py) line 138–139 for details.
 
 ## License
 
@@ -350,11 +474,22 @@ For issues, questions, or feedback:
 
 1. Check the **Troubleshooting** section above
 2. Review `voice-paste.log` for detailed error information
-3. Verify your configuration in `config.toml`
-4. Ensure your OpenAI API key is valid and has available credits
+3. Verify your configuration in Settings dialog or `config.toml`
+4. Ensure your API key is valid and has available credits
+5. Check the [GitHub repository](https://github.com/) for known issues and updates
 
-## Version
+## Version History
 
-**Current version**: 0.2.0 (v0.2: Core Experience)
+See [CHANGELOG.md](CHANGELOG.md) for release notes and what changed between versions.
 
-See CHANGELOG.md for release notes.
+**Current version**: 0.5.0 (Voice Prompts & UI Polish)
+- Voice Prompt mode (Ctrl+Alt+A)
+- Dynamic icon drawing
+- Settings dialog enhancements
+- Build consolidation
+
+**Previous versions**:
+- 0.4.0: Local STT, model manager, VAD filter
+- 0.3.0: Settings dialog, keyring, multiple providers
+- 0.2.0: Summarization, audio cues, visual feedback
+- 0.1.0: Basic transcribe and paste

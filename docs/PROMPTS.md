@@ -1,15 +1,15 @@
-# Summarization Prompt Templates
+# Prompt Templates
 
-## Voice-to-Summary Paste Tool
+## Voice Paste Tool
 
 **Date**: 2026-02-13
 **Author**: Prompt Engineer
-**Target Model**: OpenAI GPT-4o-mini
-**Target Language**: German (primary), language-matching for others
+**Target Models**: OpenAI GPT-4o-mini, OpenRouter (Claude, Llama), Ollama
+**Target Languages**: German (primary), language-matching for others
 
 ---
 
-## 1. Default Prompt: Clean Summary
+## 1. Summarization Prompt: Clean Summary (Normal Mode)
 
 This is the production prompt used in v0.2. Optimized for token efficiency (<120 system prompt tokens), German language fidelity, and output-only behavior.
 
@@ -160,3 +160,104 @@ SUMMARIZE_TIMEOUT_SECONDS = 15
 ```
 
 The user prompt is simply the raw transcript text with no wrapping.
+
+---
+
+## 7. Voice Prompt Mode System Prompt (v0.5)
+
+Voice Prompt mode (Ctrl+Alt+A) uses a different system prompt than summarization. The user speaks a question or command, and the LLM generates a direct answer. This prompt emphasizes being helpful and concise.
+
+### System Prompt
+
+```
+Du bist ein hilfreicher Assistent. Antworte praezise und in derselben Sprache wie die Frage.
+```
+
+### English Translation
+
+```
+You are a helpful assistant. Answer precisely and in the same language as the question.
+```
+
+### User Prompt Template
+
+The user prompt is the transcript of the spoken question, without wrapping or modification.
+
+### Configuration
+
+| Parameter | Value | Rationale |
+|-----------|-------|-----------|
+| model | gpt-4o-mini (default) or user-selected | Cost-effective and fast for Q&A |
+| temperature | 0.3 | Consistent answers while avoiding robotic tone |
+| max_tokens | 2048 | Allows detailed answers to complex questions |
+| top_p | 1.0 | Default, not needed with temperature control |
+
+### Examples
+
+**Example 1: Information Request**
+
+**Input (spoken)**: "What are the main features of Python?"
+
+**Output (LLM)**: "Python has several main features: it's easy to read and learn, it's dynamically typed, it has a rich standard library, it supports multiple programming paradigms (OOP, functional), it's cross-platform, and it has excellent community support."
+
+**Example 2: Creative Prompt**
+
+**Input (spoken)**: "Give me a creative idea for a product that helps with time management."
+
+**Output (LLM)**: "A product called 'TimeFlow' could combine a physical desktop object with smart notifications. The object uses LED colors and haptic vibrations to indicate urgency of tasks, syncing with your calendar and to-do apps. It gently pulses when deadlines approach, eliminating the need to check your phone constantly."
+
+**Example 3: Technical Question**
+
+**Input (spoken)**: "How do I handle errors in Python?"
+
+**Output (LLM)**: "In Python, you handle errors using try-except blocks. Wrap code that might raise an exception in a try block, then catch specific exceptions in except blocks. You can also use a finally block for cleanup code that runs regardless. For example: try: risky_operation() except ValueError: handle_value_error() finally: cleanup()"
+
+**Example 4: Language-Agnostic**
+
+**Input (spoken, German)**: "Wie schreibe ich einen professionellen Brief?"
+
+**Output (LLM, German)**: "Ein professioneller Brief sollte klar strukturiert sein: Absender und Empfänger oben, Datum, Anrede, Betreffzeile, höfliche Eröffnung, Hauptteil mit klarer Botschaft, höflicher Abschluss, und formelle Grüße. Verwenden Sie prägnante Sätze, vermeiden Sie Jargon, und überprüfen Sie Grammatik und Rechtschreibung."
+
+### Integration Notes
+
+The Voice Prompt system prompt is stored in `constants.py` as `PROMPT_SYSTEM_PROMPT` (line 66–69):
+
+```python
+PROMPT_SYSTEM_PROMPT = (
+    "Du bist ein hilfreicher Assistent. "
+    "Antworte praezise und in derselben Sprache wie die Frage."
+)
+```
+
+This prompt is used when:
+1. User presses Ctrl+Alt+A (Voice Prompt hotkey)
+2. Audio is transcribed to text
+3. Transcript is sent to the configured LLM provider (OpenAI, OpenRouter, Ollama)
+4. LLM generates an answer using this system prompt
+5. Answer is pasted at cursor
+
+Users can customize this prompt in Settings > Summarization > Custom Prompt, or via the `[summarization] custom_prompt` field in config.toml (only for summarization; Voice Prompt uses the built-in prompt for now).
+
+---
+
+## 8. Comparison: Summarization vs. Voice Prompt Prompts
+
+| Aspect | Summarization | Voice Prompt |
+|--------|---------------|--------------|
+| **User Input** | Speech (dictation) | Speech (question/command) |
+| **Primary Goal** | Clean up and shorten transcript | Answer the question |
+| **System Prompt** | "Text cleanup assistant" | "Helpful assistant" |
+| **Output Style** | Concise, factual, cleaned text | Conversational, detailed answer |
+| **Hotkey** | Ctrl+Alt+R | Ctrl+Alt+A |
+| **Use Case** | Notes, minutes, voice memo | Q&A, brainstorming, information lookup |
+| **Customizable** | Yes (Settings > Custom Prompt) | No (built-in, non-configurable for now) |
+
+---
+
+## 9. Future Enhancements (v1.0 Roadmap)
+
+- **Streaming responses**: LLM answers appear in real-time as they are generated, rather than waiting for the full response.
+- **Context retention**: Voice Prompt history (previous questions and answers) passed to the LLM for multi-turn conversation.
+- **Custom Voice Prompt templates**: Users define their own system prompts for Voice Prompt mode (e.g., "technical expert", "creative brainstormer").
+- **Conditional summarization**: Different cleanup prompts based on detected language (German vs. English vs. other).
+- **Intent detection**: Automatically switch between Summarization and Voice Prompt based on spoken content (statements vs. questions).

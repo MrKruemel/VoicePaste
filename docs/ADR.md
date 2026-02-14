@@ -1,29 +1,33 @@
 # Architecture Decision Record (ADR)
 
-## Voice-to-Summary Paste Tool
+## Voice Paste Tool
 
-**Date**: 2026-02-13
+**Date**: 2026-02-14
 **Status**: Accepted
 **Author**: Solution Architect
+**Current Version**: 0.5.0
 
 ---
 
 ## 1. Context and Problem Statement
 
 We are building a Windows desktop tool that:
-1. Captures a global hotkey (Ctrl+Win) to start/stop recording
+1. Captures global hotkeys to start/stop recording (default: Ctrl+Alt+R for normal mode, Ctrl+Alt+A for voice prompt mode)
 2. Records microphone audio to an in-memory buffer
-3. Transcribes speech to text
-4. Optionally summarizes the transcript (v0.2+)
-5. Pastes the result at the current cursor position
+3. Transcribes speech to text (cloud or local)
+4. Optionally summarizes/cleans the transcript (v0.2+)
+5. Optionally sends transcript as a prompt to LLM for Q&A (v0.5+)
+6. Pastes the result at the current cursor position
+7. Provides a settings dialog for easy configuration (v0.3+)
+8. Stores API keys securely in Windows Credential Manager (v0.3+)
 
-The tool must ship as a **single-file .exe** via PyInstaller, support **German** as the primary language, and never steal focus or disrupt the user's workflow.
+The tool must ship as a **single-file .exe** via PyInstaller, support multiple transcription and summarization backends, and never steal focus or disrupt the user's workflow.
 
 ---
 
 ## 2. Architecture Overview
 
-### Component Diagram
+### Component Diagram (v0.5)
 
 ```
 +------------------------------------------------------------------+
@@ -49,54 +53,80 @@ The tool must ship as a **single-file .exe** via PyInstaller, support **German**
 |              +-----+------+         |  Ctrl+V sim) |              |
 |                    |                 +--------------+               |
 |              +-----v------+                                        |
-|              | STT Backend |  <-- Protocol/ABC                     |
+|              | STT Backend |  <-- Factory + Protocol               |
 |              +-----+------+                                        |
 |                    |                                                |
 |         +----------+----------+                                    |
 |         |                     |                                     |
 |  +------v-------+   +--------v--------+                            |
-|  | Cloud Whisper |   | Local Whisper   |  (v1.0)                   |
-|  | (OpenAI API)  |   | (faster-whisper)|                           |
+|  | Cloud Whisper|   | Local Whisper   |                            |
+|  | (OpenAI API) |   | (faster-whisper)|  (v0.4+)                   |
 |  +--------------+   +-----------------+                            |
+|        |                     |                                      |
+|        +----------+----------+                                      |
+|                   |                                                |
+|              +----v--------+                                      |
+|              | Model Manager|  (v0.4+, downloads from HF)          |
+|              +--------------+                                      |
 |                                                                    |
 |              +----------------+                                    |
-|              | Summarizer     |  <-- Protocol/ABC (v0.2+)          |
+|              | Summarizer     |  <-- Factory + Protocol            |
 |              +-------+--------+                                    |
 |                      |                                             |
 |           +----------+----------+                                  |
-|           |                     |                                   |
-|  +--------v-------+   +--------v--------+                          |
-|  | Cloud LLM      |   | Passthrough     |                         |
-|  | (OpenAI API)   |   | (no-op, v0.1)   |                         |
-|  +----------------+   +-----------------+                          |
+|           |          |          |                                   |
+|  +--------v--+  +----v----+  +--v--------+                         |
+|  | OpenAI    |  |OpenRouter|  | Ollama   |                         |
+|  | GPT-4o-mi |  | Claude   |  | Local    |  (v0.3+)                |
+|  | (API)     |  | (API)    |  | (local)  |                         |
+|  +-----------+  +----------+  +----------+                          |
 |                                                                    |
 |  +------------------+                                              |
-|  |  System Tray     |                                              |
-|  |  (pystray)       |                                              |
+|  |  Settings Dialog |  (v0.3+, tkinter, dedicated thread)         |
+|  |  (Credentials,   |   - Manage API keys via keyring             |
+|  |   Transcription, |   - Configure transcription/summarization   |
+|  |   Summarization, |   - Hot-reload without restart              |
+|  |   Feedback)      |                                              |
+|  +------------------+                                              |
+|                                                                    |
+|  +------------------+                                              |
+|  |  Keyring Store   |  (v0.3+, Windows Credential Manager)        |
+|  +------------------+                                              |
+|                                                                    |
+|  +------------------+     +------------------+                     |
+|  |  Icon Drawing    |     |  System Tray     |                     |
+|  |  (icon_drawing)  |     |  (pystray)       |  (v0.5 dynamic)    |
+|  +------------------+     +------------------+                     |
+|                                                                    |
+|  +------------------+                                              |
+|  | Notifications    |  (audio cues + toast notifications)          |
 |  +------------------+                                              |
 +--------------------------------------------------------------------+
 ```
 
-### State Machine
+### State Machine (v0.5)
 
 ```
                     +-------+
                     | IDLE  |<-----------------------+
                     +---+---+                        |
                         |                            |
-                   Ctrl+Win                          |
+                   Hotkey press                      |
+                   (Ctrl+Alt+R or A)                |
                         |                            |
                     +---v-------+                    |
                     | RECORDING |----Escape---->(CANCELLED)
                     +---+-------+                    |
                         |                            |
-                   Ctrl+Win                          |
+                   Hotkey press                      |
                         |                            |
                     +---v--------+                   |
                     | PROCESSING |                   |
                     +---+--------+                   |
                         |                            |
-                   STT complete                      |
+                   STT + optional                    |
+                   Summarization or                  |
+                   Prompt complete                   |
                         |                            |
                     +---v-----+                      |
                     | PASTING  |-----done------------+
@@ -104,46 +134,60 @@ The tool must ship as a **single-file .exe** via PyInstaller, support **German**
 ```
 
 **States:**
-- **IDLE**: Waiting for hotkey. Tray icon is default.
-- **RECORDING**: Capturing audio from microphone. Tray icon is red (v0.2+).
-- **PROCESSING**: Audio sent to STT (and summarizer in v0.2+). Tray icon is yellow (v0.2+).
-- **PASTING**: Text placed on clipboard and Ctrl+V simulated. Transitions to IDLE immediately.
-- **CANCELLED**: Recording discarded (v0.2+, via Escape). Returns to IDLE.
+- **IDLE**: Waiting for hotkey. Tray icon is grey.
+- **RECORDING**: Capturing audio from microphone. Tray icon is red.
+- **PROCESSING**: Audio sent to STT, transcript sent to summarizer or prompt handler. Tray icon is yellow.
+- **PASTING**: Text placed on clipboard and Ctrl+V simulated. Tray icon is green. Returns to IDLE immediately.
+- **CANCELLED**: Recording discarded (via Escape). Returns to IDLE with notification.
 
-**Error handling**: If any state encounters an error (API failure, mic error), log it, show notification (v0.2+), and return to IDLE.
+**Error handling**: If any state encounters an error (API failure, mic error, model load failure), log it, show toast notification, and return to IDLE.
 
 ---
 
 ## 3. Decision: Speech-to-Text Backend
 
-### Options Evaluated
+### Options Evaluated (v0.1–v0.4)
 
 | Option | Quality | Binary Size | Latency | Offline | Complexity |
 |--------|---------|-------------|---------|---------|------------|
-| **OpenAI Whisper API** | Excellent | +0 MB | 2-5s (cloud) | No | Low |
-| faster-whisper (tiny) | Good | +75 MB | 3-8s (local) | Yes | Medium |
-| faster-whisper (base) | Very Good | +150 MB | 5-15s (local) | Yes | Medium |
-| Deepgram API | Excellent | +0 MB | 1-3s (cloud) | No | Low |
+| **OpenAI Whisper API (cloud)** | Excellent | +0 MB | 2-5s | No | Low |
+| faster-whisper (tiny) | Good | +75 MB | 3-8s | Yes | Medium |
+| faster-whisper (base) | Very Good | +145 MB | 5-15s | Yes | Medium |
+| Deepgram API | Excellent | +0 MB | 1-3s | No | Low |
 
-### Decision: OpenAI Whisper API (cloud) for v0.1 and v0.2. Local faster-whisper as v1.0 option.
+### Decision: Cloud default (v0.1–v0.4). Local option available (v0.4+).
 
 **Rationale:**
-1. **Binary size**: Cloud API adds zero bytes to the .exe. Local whisper adds 75-150 MB minimum.
-2. **Quality**: Whisper API has excellent German transcription quality out of the box.
-3. **Simplicity**: Single HTTP POST with an audio file. No model loading, no GPU detection, no CTranslate2 DLL bundling.
-4. **User already needs API key**: For summarization (v0.2+), the user needs an OpenAI key anyway. No additional setup burden.
-5. **Backend abstraction**: We define an `STTBackend` Protocol so swapping to local is a clean implementation change, not a refactor.
+1. **Binary size**: Cloud adds zero bytes. Local adds 75–3000 MB.
+2. **Quality**: Whisper API has excellent German transcription.
+3. **Simplicity**: Single HTTP POST. No model loading, no GPU detection.
+4. **User choice**: v0.4 allows users to opt-in to local transcription.
+5. **Backend abstraction**: Factory function `create_stt_backend()` cleanly selects implementation.
 
 **Tradeoffs accepted:**
-- Requires internet connection (acceptable for v0.1/v0.2; local option addresses this in v1.0)
-- Requires OpenAI API key and incurs per-use cost (~$0.006 per minute of audio)
-- Audio leaves the user's machine (security implication documented in threat model)
+- Cloud requires internet and API key
+- Audio leaves the machine (addressed in threat model)
+- Cost ~$0.006 per minute of audio
+
+### v0.4 Enhancement: Local Transcription
+
+**New capabilities:**
+- `LocalWhisperSTT` class using faster-whisper (CTranslate2)
+- Model Manager downloads models from Hugging Face Hub
+- 6 model sizes (tiny ~75MB to large-v3 ~3GB)
+- Silero VAD filter (via onnxruntime) to skip silence
+- Configurable device (CPU, CUDA)
+- Configurable quantization (int8, float16, float32)
+- Lazy model loading on first transcription
+- Thread-safe design
+
+**Known issue**: onnxruntime crashes in PyInstaller --onefile builds. VAD auto-disabled in frozen .exe (users can re-enable if stable).
 
 ---
 
 ## 4. Decision: Summarization Backend
 
-### Options Evaluated
+### Options Evaluated (v0.1–v0.3)
 
 | Option | Quality (German) | Cost | Latency | Binary Impact |
 |--------|-------------------|------|---------|---------------|
@@ -151,52 +195,80 @@ The tool must ship as a **single-file .exe** via PyInstaller, support **German**
 | OpenAI GPT-4o | Excellent | ~$0.005/call | 2-4s | +0 MB |
 | Claude 3.5 Haiku | Very Good | ~$0.0003/call | 1-2s | +0 MB |
 | Local (llama-cpp) | Moderate | Free | 5-30s | +2-4 GB |
-| No summarization | N/A | Free | 0s | +0 MB |
 
-### Decision: OpenAI GPT-4o-mini for v0.2+. No summarization in v0.1 (passthrough).
+### Decision: Cloud by default (v0.2+). Multiple providers in v0.3+.
+
+**v0.2 Decision**: OpenAI GPT-4o-mini for summarization.
 
 **Rationale:**
-1. **Quality/cost ratio**: GPT-4o-mini provides excellent German summarization at negligible cost.
-2. **Same API key**: Uses the same OpenAI key as Whisper API. No additional credential management.
-3. **Speed**: 1-2 second response time keeps total pipeline under 5 seconds.
-4. **Binary size**: Zero impact. Pure HTTP call.
-5. **v0.1 simplicity**: v0.1 uses a passthrough (no-op) summarizer that returns raw transcript. This validates the pipeline without the LLM dependency.
+1. **Quality/cost**: Excellent German output at ~$0.0001 per call.
+2. **Same API key**: Uses existing OpenAI credential.
+3. **Speed**: 1-2 seconds fits pipeline latency budget.
+4. **v0.1 simplicity**: Passthrough (no-op) summarizer validates pipeline.
 
-**Tradeoffs accepted:**
-- Cloud dependency for summarization (acceptable; local summarization is v1.x backlog)
-- Transcript content sent to OpenAI (documented in threat model; user must consent)
+**v0.3 Enhancement**: Multiple providers
+
+**New capabilities:**
+- `CloudLLMSummarizer` supports OpenAI, OpenRouter, Ollama
+- Custom base URLs for proxies or self-hosted
+- Custom system prompts per user
+- Hot-reload from Settings dialog
+
+**Supported providers:**
+- **OpenAI**: gpt-4o-mini (default), other models
+- **OpenRouter**: Access to Claude, Llama, etc. Requires OpenRouter API key.
+- **Ollama**: Local LLM at localhost:11434. No API key needed.
 
 ---
 
-## 5. Decision: Global Hotkey Library
+## 5. Decision: Voice Prompt Mode (v0.5)
+
+### New Feature: Interactive Q&A
+
+**Use case**: User speaks a question, LLM generates answer, answer is pasted.
+
+**Implementation:**
+- Separate hotkey: Ctrl+Alt+A (configurable)
+- Same pipeline: Record → Transcribe → Send to LLM → Paste
+- Different system prompt: "helpful assistant" (not "text cleanup assistant")
+- Uses same provider configuration as summarization
+- Can be disabled by setting `prompt_combination = ""` in config
+
+**System Prompt (German):**
+```
+Du bist ein hilfreicher Assistent. Antworte praezise und in derselben Sprache wie die Frage.
+```
+
+**Stored in**: `constants.py` line 66-69 as `PROMPT_SYSTEM_PROMPT`
+
+---
+
+## 6. Decision: Global Hotkey Library
 
 ### Options Evaluated
 
 | Option | Global Hotkey | Reliability | PyInstaller | Windows Focus |
 |--------|---------------|-------------|-------------|---------------|
 | **keyboard** | Yes | High | Good | Does not steal |
-| pynput | Yes | Medium | Medium | May steal on some configs |
+| pynput | Yes | Medium | Medium | May steal |
 | win32api (ctypes) | Yes | High | Excellent | Does not steal |
-| system_hotkey | Yes | Low | Unknown | Unknown |
 
 ### Decision: `keyboard` library
 
 **Rationale:**
-1. **Proven reliability** for global hotkeys on Windows without admin rights.
-2. **Simple API**: `keyboard.add_hotkey('ctrl+win', callback)` -- one line.
+1. **Proven reliability** for global hotkeys without admin rights.
+2. **Simple API**: `keyboard.add_hotkey('ctrl+alt+r', callback)`
 3. **PyInstaller compatible**: No known bundling issues.
-4. **Does not steal focus**: Hooks at the OS level without affecting window focus.
-5. **Also handles Escape**: Can register Escape to cancel recording (v0.2).
+4. **Does not steal focus**: Hooks at OS level.
+5. **Multi-hotkey support**: Handles both normal and voice prompt hotkeys in v0.5.
 
 **Tradeoffs accepted:**
-- The `keyboard` library uses low-level Windows hooks, which some antivirus software may flag. This is documented in the README as a known issue.
-- Requires the `keyboard` library as a dependency (pure Python, small).
-
-**Alternative considered**: Raw Win32 API via `ctypes` would eliminate the dependency but adds significant implementation complexity for no user-facing benefit in v0.1.
+- Some antivirus software may flag low-level hooks (documented in README)
+- Requires explicit permission handling (admin recommended)
 
 ---
 
-## 6. Decision: Audio Capture Library
+## 7. Decision: Audio Capture Library
 
 ### Options Evaluated
 
@@ -204,86 +276,135 @@ The tool must ship as a **single-file .exe** via PyInstaller, support **German**
 |--------|-------------|-------------|---------|--------------|
 | **sounddevice** | Clean | Good | Low | PortAudio (bundled) |
 | pyaudio | Functional | Complex | Low | PortAudio (manual) |
-| wave + winsound | Limited | Excellent | N/A | None (record not supported) |
 
 ### Decision: `sounddevice`
 
 **Rationale:**
-1. **Clean API**: `sd.rec()` / stream-based recording with NumPy arrays.
-2. **Bundles PortAudio**: No manual DLL management unlike pyaudio.
-3. **PyInstaller friendly**: Works with `--onefile` with known hidden imports.
-4. **Low latency**: Suitable for real-time recording start/stop.
+1. **Clean API**: `sd.rec()` with NumPy arrays.
+2. **Bundles PortAudio**: No manual DLL management.
+3. **PyInstaller friendly**: Works with hidden imports.
+4. **Low latency**: Suitable for real-time start/stop.
 
-**Known PyInstaller requirement**: Must include `_sounddevice_data` as hidden import or data file. The Build Engineer must handle this in the .spec file.
+**PyInstaller requirement**: Must include `_sounddevice_data` as hidden import or data file.
 
 ---
 
-## 7. Decision: Clipboard and Paste Strategy
+## 8. Decision: Clipboard and Paste Strategy
 
-### Strategy: Backup -> Write -> Simulate Ctrl+V -> Restore
+### Strategy: Backup → Write → Simulate Ctrl+V → Restore (v0.2+)
 
 **Implementation:**
 1. Read current clipboard contents (backup)
-2. Write transcript/summary text to clipboard
-3. Simulate Ctrl+V keystroke via `keyboard` library
-4. Wait brief delay (100-200ms) for paste to complete
+2. Write text to clipboard
+3. Simulate Ctrl+V keystroke
+4. Wait 150ms for paste to complete
 5. Restore original clipboard contents
 
-**Library**: `win32clipboard` (from `pywin32`) for clipboard read/write. This gives full control over clipboard formats and is more reliable than `pyperclip` for backup/restore.
+**Library**: `win32clipboard` (pywin32) for reliable read/write.
 
-**v0.1 simplification**: Skip backup/restore. Just write to clipboard and paste. Clipboard preservation is a v0.2 feature (US-0.2.5).
+**v0.1 simplification**: Skip backup/restore.
 
 **Tradeoffs:**
-- The paste delay (step 4) is a heuristic. Too short and the paste may not complete before clipboard is restored. Too long and the user notices a lag. Default: 150ms, configurable.
-- Some applications (e.g., terminals with custom paste handling) may not respond to simulated Ctrl+V. This is documented as a known limitation.
+- Paste delay is a heuristic (150ms default)
+- Some terminals may not respond to simulated Ctrl+V (documented)
 
 ---
 
-## 8. Decision: System Tray Library
+## 9. Decision: System Tray Library
 
-### Decision: `pystray` with `Pillow` for icon generation
+### Decision: `pystray` with Pillow icon generation (v0.5)
 
 **Rationale:**
-1. **Cross-platform** (Windows focus, but no Windows-only lock-in).
-2. **Clean API**: Create icon, define menu, run. Integrates with threading.
-3. **Dynamic icons**: Using Pillow, we generate simple colored circle icons for state changes (v0.2+).
-4. **PyInstaller compatible**: No known bundling issues.
+1. **Cross-platform**: Good Windows support.
+2. **Clean API**: Create icon, menu, run.
+3. **Dynamic icons**: Programmatically generated colors via Pillow.
+4. **PyInstaller compatible**: No bundling issues.
 
-**v0.1**: Single static icon. Right-click menu with "Quit".
-**v0.2**: Dynamic icon colors (grey=idle, red=recording, yellow=processing).
+**v0.1–v0.2**: Static or simple Pillow-generated icons.
+
+**v0.5 enhancement**: All icons generated at runtime with no bundled .png files. Icon colors:
+- Grey: IDLE
+- Red: RECORDING
+- Yellow: PROCESSING
+- Green: PASTING
+- Red exclamation: ERROR
+
+**Icon drawing module**: `icon_drawing.py` creates state-aware tray icons.
 
 ---
 
-## 9. Decision: Configuration Format
+## 10. Decision: Settings Dialog (v0.3+)
 
-### Decision: TOML (`config.toml`)
+### New Feature: Configuration via GUI
+
+**Implementation:**
+- tkinter-based dialog on dedicated thread
+- Does NOT block pystray main thread
+- Singleton guard (only one dialog at a time)
+- Hot-reload: Changes apply immediately without restart
+
+**Tabs:**
+1. **Credentials**: Manage OpenAI and OpenRouter API keys via keyring
+2. **Transcription**: Cloud/Local backend, model size, device, VAD filter
+3. **Summarization**: Enable/disable, provider, model, custom prompt
+4. **Feedback**: Audio cues, log level
+
+**Threading model:**
+- Main thread: pystray event loop
+- Settings thread: tkinter Tcl event loop (spawned on demand)
+- Lock: `_settings_lock` prevents concurrent dialogs
+
+---
+
+## 11. Decision: Credential Storage (v0.3+)
+
+### Windows Credential Manager via Keyring
 
 **Rationale:**
-1. **Human-readable** and easy to edit in any text editor.
-2. **Python stdlib**: `tomllib` available in Python 3.11+ (no dependency).
-3. **Flat structure**: Our config is simple enough for flat TOML.
-4. **Convention**: `.toml` is standard for Python project configuration.
+1. **Security**: Credentials encrypted by Windows, not plain text
+2. **User expectation**: Integrates with Windows built-in Credential Manager
+3. **Backwards compatible**: Legacy config.toml keys auto-migrate to keyring on first load
+4. **No additional UI**: Settings dialog handles everything
 
-**Config structure (v0.1):**
+**Implementation**: `keyring_store.py` wraps Windows Credential Manager access.
+
+**Credentials stored:**
+- `VoicePaste:openai_api_key`
+- `VoicePaste:openrouter_api_key`
+
+**Config.toml changes:**
+- v0.3+: API keys NOT stored in config.toml (moved to keyring)
+- Legacy config.toml keys are migrated on first startup
+- config.example.toml notes this clearly
+
+---
+
+## 12. Decision: Configuration Format and Hot-Reload
+
+### Decision: TOML with hot-reload (v0.3+)
+
+**Config structure (v0.5):**
 ```toml
+[hotkey]
+combination = "ctrl+alt+r"
+prompt_combination = "ctrl+alt+a"
+
 [api]
-openai_api_key = ""
+# Legacy location (migrated to Credential Manager automatically)
 
-[logging]
-level = "INFO"  # DEBUG, INFO, WARNING, ERROR
-```
-
-**Config structure (v0.2+):**
-```toml
-[api]
-openai_api_key = ""
-
-[recording]
-sample_rate = 16000
+[transcription]
+backend = "cloud"  # or "local"
+model_size = "base"
+device = "cpu"
+compute_type = "int8"
+vad_filter = true
 
 [summarization]
 enabled = true
-prompt = "default"  # or custom prompt text
+provider = "openai"
+model = "gpt-4o-mini"
+base_url = ""
+custom_prompt = ""
 
 [feedback]
 audio_cues = true
@@ -292,119 +413,159 @@ audio_cues = true
 level = "INFO"
 ```
 
----
-
-## 10. Decision: Threading Model
-
-### Decision: Main thread for pystray, worker thread for pipeline
-
-**Architecture:**
-- `pystray` requires running on the main thread (Windows message loop).
-- Hotkey listener runs in a daemon thread via the `keyboard` library.
-- Recording, transcription, and pasting run in a worker thread to avoid blocking the tray.
-- State machine is the central coordinator, accessed with a threading lock.
-
-```
-Main Thread:     pystray event loop (system tray)
-Thread 1:        keyboard hotkey listener
-Thread 2:        Recording + STT + Paste pipeline (spawned per session)
-```
-
-**Synchronization**: A simple `threading.Lock` protects the `AppState` enum. State transitions are atomic.
+**Hot-reload mechanism:**
+- Settings dialog modifies AppConfig (dataclass, unfrozen in v0.3+)
+- Non-secret fields written back to config.toml
+- Secrets stored in keyring
+- No restart required; changes take effect immediately
 
 ---
 
-## 11. Decision: Python Version and Key Dependencies
+## 13. Decision: Threading Model
+
+### Architecture (v0.1–v0.5)
+
+```
+Main Thread:     pystray event loop (system tray, message pump)
+Thread 1:        keyboard hotkey listener (daemon)
+Thread 2:        Recording + STT + Summarization + Paste (per session)
+Thread 3:        Settings dialog tkinter loop (on demand, v0.3+)
+```
+
+**Synchronization:**
+- `threading.Lock` protects AppState enum
+- State transitions are atomic
+- Settings dialog uses `_settings_lock` singleton guard
+
+---
+
+## 14. Decision: Python Version and Key Dependencies
 
 | Dependency | Version | Purpose | Size Impact |
 |------------|---------|---------|-------------|
-| Python | 3.11+ | Runtime (tomllib in stdlib) | Base |
+| Python | 3.11+ | Runtime (tomllib, Protocol in stdlib) | Base |
 | sounddevice | latest | Audio capture | ~5 MB (with PortAudio) |
 | numpy | latest | Audio buffer handling | ~30 MB |
 | keyboard | latest | Global hotkey | ~0.5 MB |
 | pystray | latest | System tray | ~0.5 MB |
-| Pillow | latest | Tray icon generation | ~5 MB |
-| openai | latest | Whisper API + GPT API | ~2 MB |
-| pywin32 | latest | Clipboard (v0.2+) | ~10 MB |
+| Pillow | latest | Icon generation | ~5 MB |
+| openai | latest | Whisper + GPT APIs | ~2 MB |
+| pywin32 | latest | Clipboard, Credential Manager | ~10 MB |
+| faster-whisper | optional | Local STT (v0.4+) | +~0.5 MB (loader only) |
+| onnxruntime | optional | VAD filter (v0.4+) | +~50 MB |
+| huggingface-hub | optional | Model downloads (v0.4+) | +~1 MB |
 
-**Estimated .exe size (cloud-only)**: 40-60 MB (acceptable).
-**With local whisper (v1.0)**: 120-200 MB (acceptable for optional feature).
+**Estimated .exe size:**
+- Cloud-only: 50–60 MB
+- With local STT: 150–200 MB (optional)
 
 ---
 
-## 12. Project File Structure
+## 15. Project File Structure (v0.5)
 
 ```
 C:\develop\speachtoText\
 |-- src\
-|   |-- main.py              # Entry point, state machine, tray setup
-|   |-- audio.py             # Audio recording module
-|   |-- stt.py               # STT backend protocol + implementations
-|   |-- summarizer.py        # Summarizer protocol + implementations
-|   |-- paste.py             # Clipboard + paste logic
-|   |-- config.py            # Config loading and validation
-|   |-- hotkey.py            # Hotkey registration
-|   |-- tray.py              # System tray setup and icon management
-|   |-- constants.py         # Shared constants, enums (AppState)
-|   |-- notifications.py    # Audio cues and toast notification interface (winsound)
+|   |-- main.py                      # Entry point, state machine
+|   |-- audio.py                     # Audio recording
+|   |-- stt.py                       # Cloud STT (OpenAI Whisper)
+|   |-- local_stt.py                 # Local STT (faster-whisper, v0.4+)
+|   |-- summarizer.py                # Summarizer (OpenAI, OpenRouter, Ollama)
+|   |-- paste.py                     # Clipboard + paste
+|   |-- config.py                    # Config loading, AppConfig dataclass
+|   |-- hotkey.py                    # Hotkey registration (keyboard lib)
+|   |-- tray.py                      # System tray + context menu
+|   |-- constants.py                 # Shared constants, AppState enum
+|   |-- notifications.py             # Audio cues + toast notifications
+|   |-- settings_dialog.py           # Settings GUI (tkinter, v0.3+)
+|   |-- keyring_store.py             # Keyring integration (v0.3+)
+|   |-- model_manager.py             # Model download/caching (v0.4+)
+|   |-- icon_drawing.py              # Tray icon generation (v0.5+)
 |-- docs\
-|   |-- BACKLOG.md           # Product backlog (this file)
-|   |-- ADR.md               # Architecture decisions (this file)
-|   |-- UX-SPEC.md           # UX specification
-|   |-- THREAT-MODEL.md      # Security threat model
+|   |-- ADR.md                       # This file
+|   |-- UX-SPEC.md                   # UX specification
+|   |-- THREAT-MODEL.md              # Security threat model
+|   |-- PROMPTS.md                   # Prompt templates (summarization + voice prompt)
+|   |-- BACKLOG.md                   # Product backlog
 |-- tests\
 |   |-- test_config.py
 |   |-- test_state_machine.py
 |   |-- test_audio.py
 |   |-- test_paste.py
-|-- config.example.toml      # Template config file
-|-- build.bat                # PyInstaller build script
-|-- voice_paste.spec         # PyInstaller spec file
-|-- requirements.txt         # Python dependencies
-|-- README.md
-|-- CHANGELOG.md
+|   |-- (13+ test files total)
+|-- config.example.toml              # Configuration template
+|-- build.bat                        # PyInstaller build script
+|-- voice_paste.spec                 # PyInstaller spec file
+|-- rthook_onnxruntime.py            # PyInstaller runtime hook (v0.4+)
+|-- requirements.txt                 # Python dependencies
+|-- requirements-dev.txt             # Development dependencies
+|-- README.md                        # User documentation
+|-- CHANGELOG.md                     # Release notes
 ```
 
-**Note**: Despite the multi-file source structure, PyInstaller bundles everything into a single .exe. The multi-file structure is for development clarity only.
+**Note**: PyInstaller bundles everything into a single .exe. Multi-file structure is for development clarity.
 
 ---
 
-## 13. Backend Abstraction Pattern
+## 16. Backend Abstraction Pattern
 
-Both STT and Summarizer use the Python Protocol pattern for clean swapping:
+### STT Backend (Cloud + Local)
 
 ```python
-from typing import Protocol
-
 class STTBackend(Protocol):
-    def transcribe(self, audio_data: bytes, language: str = "de") -> str:
+    def transcribe(self, audio_data: bytes, language: str = "en") -> str:
         """Transcribe audio bytes to text."""
-        ...
-
-class Summarizer(Protocol):
-    def summarize(self, text: str, language: str = "de") -> str:
-        """Summarize/clean up transcribed text."""
         ...
 ```
 
-**v0.1 implementations:**
-- `CloudWhisperSTT` -- calls OpenAI Whisper API
-- `PassthroughSummarizer` -- returns text unchanged
+**Factory function:**
+```python
+def create_stt_backend(config: AppConfig) -> STTBackend:
+    if config.stt_backend == "local":
+        return LocalWhisperSTT(config)
+    return CloudWhisperSTT(config)
+```
 
-**v0.2 implementations:**
-- `CloudLLMSummarizer` -- calls OpenAI GPT-4o-mini
+**Implementations:**
+- `CloudWhisperSTT` (v0.1+): OpenAI Whisper API
+- `LocalWhisperSTT` (v0.4+): faster-whisper with CTranslate2
 
-**v1.0 implementations:**
-- `LocalWhisperSTT` -- uses faster-whisper locally
+### Summarizer (Multiple Providers)
+
+```python
+class Summarizer(Protocol):
+    def summarize(self, text: str) -> str:
+        """Summarize/clean up text."""
+        ...
+```
+
+**Implementations:**
+- `PassthroughSummarizer` (v0.1): Returns text unchanged
+- `CloudLLMSummarizer` (v0.2+): OpenAI, OpenRouter, Ollama
 
 ---
 
-## 14. Open Questions / Risks
+## 17. Known Issues & Mitigations
 
-| Risk | Impact | Mitigation |
-|------|--------|------------|
-| Antivirus flags keyboard hooks | Users cannot use tool | Document in README, provide signing guidance |
-| PyInstaller + sounddevice bundling issues | Build fails | Build Engineer tests early in Phase 2 |
-| Ctrl+Win conflicts with Windows shortcuts | Hotkey unreliable | Test on Win10/11; provide configurable hotkey in v1.0 |
-| Clipboard restore timing | Paste incomplete or clipboard corrupted | Configurable delay; extensive QA testing |
-| OpenAI API rate limits | Degraded experience | Implement retry with backoff; document in error handling |
+| Issue | Impact | Mitigation |
+|-------|--------|-----------|
+| Antivirus flags keyboard hooks | Users cannot use tool | Document in README; provide signing/whitelist guidance |
+| onnxruntime crashes in .exe (--onefile) | Local STT fails | Auto-disable VAD in frozen builds; users can opt-in |
+| Ctrl+Alt+R conflicts with some apps | Hotkey unreliable | Configurable hotkey in config.toml and Settings |
+| Clipboard restore timing race | Paste incomplete or clipboard corrupted | Configurable delay (default 150ms); extensive QA |
+| OpenAI API rate limits | Degraded experience | Implement retry with exponential backoff (2 retries) |
+| Terminal emulators don't respond to Ctrl+V | Paste doesn't work in terminal | Document; user can manually paste or use Ctrl+Shift+V |
+
+---
+
+## 18. Future Enhancements (v1.0 Roadmap)
+
+- Code signing to reduce antivirus false positives
+- Multi-language UI (localization)
+- Bundled language models in single-file .exe
+- Advanced model management (delete models, clear cache)
+- Usage statistics and cost tracking
+- Dark/light theme toggle
+- Custom keybinds for all actions
+- Streaming response output (LLM answers appear in real-time)
+- Context retention for Voice Prompt (multi-turn conversation)
