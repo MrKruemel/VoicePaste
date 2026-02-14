@@ -23,7 +23,7 @@ class AppState(enum.Enum):
 
 # Application metadata
 APP_NAME = "Voice Paste"
-APP_VERSION = "0.4.0"
+APP_VERSION = "0.5.0"
 
 # Hotkey configuration
 # Hotkey history:
