@@ -24,6 +24,7 @@ prompt_combination = "ctrl+alt+a"
 tts_combination = "ctrl+alt+t"
 # Ask AI a question and hear the answer via TTS (default: "ctrl+alt+y")
 tts_ask_combination = "ctrl+alt+y"
+# Note: These hotkeys only work when TTS is enabled. Disable TTS to free up these hotkeys.
 
 [api]
 # Legacy API key location (migrated to Credential Manager automatically in v0.3+)
@@ -99,34 +100,44 @@ custom_prompt = ""
 enabled = false
 
 # TTS provider: "elevenlabs" (cloud, requires API key) or "piper" (local, offline)
-# - "elevenlabs": High-quality cloud voices via ElevenLabs API. Requires internet + API key.
+# - "elevenlabs": High-quality cloud voices via ElevenLabs API. Requires internet + ElevenLabs API key.
 # - "piper": Local offline synthesis via Piper ONNX models. No API key needed.
-#   Download voice models via Settings dialog > Text-to-Speech > Download Model.
+#   Download voice models via Settings dialog > Text-to-Speech > Download Model before first use.
 provider = "elevenlabs"
 
 # --- Cloud (ElevenLabs) settings ---
 # ElevenLabs Voice ID (default: "pFZP5JQG7iQjIQuC4Bku" = Lily)
 # Browse voices at: https://elevenlabs.io/voice-library
 # You can use any voice ID from your ElevenLabs account.
+# Only used when provider = "elevenlabs".
 voice_id = "pFZP5JQG7iQjIQuC4Bku"
 
 # ElevenLabs model (default: "eleven_flash_v2_5" = fast, low latency)
 # Options:
-# - "eleven_flash_v2_5": Fast synthesis, low latency, good quality
+# - "eleven_flash_v2_5": Fast synthesis, low latency, good quality (recommended)
 # - "eleven_multilingual_v2": Higher quality, supports more languages, slower
+# Only used when provider = "elevenlabs".
 model_id = "eleven_flash_v2_5"
 
-# Audio output format
+# Audio output format for ElevenLabs.
+# Only used when provider = "elevenlabs".
 output_format = "mp3_44100_128"
 
 # --- Local (Piper) settings (v0.7) ---
 # Piper voice model name. Download models via Settings dialog before first use.
-# Available voices:
-# - "de_DE-thorsten-medium" (DE, ~63 MB, recommended)
-# - "de_DE-thorsten-high" (DE, ~114 MB, higher quality)
-# - "de_DE-thorsten_emotional-medium" (DE, ~77 MB, multi-emotion)
-# - "en_US-lessac-medium" (EN, ~64 MB, male)
-# - "en_US-amy-medium" (EN, ~64 MB, female)
+# Models are cached in %LOCALAPPDATA%\VoicePaste\models\tts\.
+# Only used when provider = "piper".
+#
+# Available German voices (recommended):
+# - "de_DE-thorsten-medium" (DE, ~63 MB, recommended, neutral)
+# - "de_DE-thorsten-high" (DE, ~114 MB, higher quality, neutral)
+# - "de_DE-thorsten_emotional-medium" (DE, ~77 MB, multi-emotion support)
+#
+# Available English voices:
+# - "en_US-lessac-medium" (EN, ~64 MB, male voice)
+# - "en_US-amy-medium" (EN, ~64 MB, female voice)
+#
+# Full list: See PIPER_VOICE_MODELS in src/constants.py.
 local_voice = "de_DE-thorsten-medium"
 
 [feedback]

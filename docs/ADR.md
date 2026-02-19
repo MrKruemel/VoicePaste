@@ -5,7 +5,7 @@
 **Date**: 2026-02-14
 **Status**: Accepted
 **Author**: Solution Architect
-**Current Version**: 0.5.0
+**Current Version**: 0.7.0
 
 ---
 
@@ -27,7 +27,7 @@ The tool must ship as a **single-file .exe** via PyInstaller, support multiple t
 
 ## 2. Architecture Overview
 
-### Component Diagram (v0.5)
+### Component Diagram (v0.7)
 
 ```
 +------------------------------------------------------------------+
@@ -81,12 +81,29 @@ The tool must ship as a **single-file .exe** via PyInstaller, support multiple t
 |  | (API)     |  | (API)    |  | (local)  |                         |
 |  +-----------+  +----------+  +----------+                          |
 |                                                                    |
+|              +----------------+                                    |
+|              | TTS Backend    |  <-- Factory + Protocol (v0.6+)   |
+|              +-------+--------+                                    |
+|                      |                                             |
+|           +----------+----------+                                  |
+|           |                     |                                   |
+|  +--------v--+         +--------v--------+                         |
+|  | ElevenLabs |        | Piper (ONNX)   |                         |
+|  | (cloud,    |        | (local, v0.7+) |                         |
+|  |  MP3)      |        | espeak-ng      |  (v0.6+)                |
+|  +-----------+         +--------+-------+                          |
+|                                |                                   |
+|                        +-------v-------+                          |
+|                        | Model Manager |  (v0.7+, HF HTTPS)       |
+|                        +--------------+                          |
+|                                                                    |
 |  +------------------+                                              |
-|  |  Settings Dialog |  (v0.3+, tkinter, dedicated thread)         |
-|  |  (Credentials,   |   - Manage API keys via keyring             |
-|  |   Transcription, |   - Configure transcription/summarization   |
-|  |   Summarization, |   - Hot-reload without restart              |
-|  |   Feedback)      |                                              |
+|  |  Settings Dialog |  (v0.7+, ttk.Notebook, tabbed)             |
+|  |  Tabs:           |   - Transcription, Summarization           |
+|  |  - Transcript    |   - Text-to-Speech (v0.6+)                 |
+|  |  - Summary       |   - General (credentials, feedback, logging)|
+|  |  - Text-to-Speech|   - Hot-reload without restart              |
+|  |  - General       |   - Dark theme via sv_ttk                  |
 |  +------------------+                                              |
 |                                                                    |
 |  +------------------+                                              |
@@ -104,43 +121,48 @@ The tool must ship as a **single-file .exe** via PyInstaller, support multiple t
 +--------------------------------------------------------------------+
 ```
 
-### State Machine (v0.5)
+### State Machine (v0.7)
 
 ```
                     +-------+
-                    | IDLE  |<-----------------------+
-                    +---+---+                        |
-                        |                            |
-                   Hotkey press                      |
-                   (Ctrl+Alt+R or A)                |
-                        |                            |
-                    +---v-------+                    |
-                    | RECORDING |----Escape---->(CANCELLED)
-                    +---+-------+                    |
-                        |                            |
-                   Hotkey press                      |
-                        |                            |
-                    +---v--------+                   |
-                    | PROCESSING |                   |
-                    +---+--------+                   |
-                        |                            |
-                   STT + optional                    |
-                   Summarization or                  |
-                   Prompt complete                   |
-                        |                            |
-                    +---v-----+                      |
-                    | PASTING  |-----done------------+
-                    +---------+
+                    | IDLE  |<--------+
+                    +---+---+         |
+                        |             |
+                   Hotkey press       |
+                   (Ctrl+Alt+R/A/T/Y) |
+                        |             |
+                    +---v-------+     |
+                    | RECORDING |--Escape->(CANCELLED)
+                    +---+-------+     |
+                        |             |
+                   Hotkey press       |
+                        |             |
+                    +---v--------+    |
+                    | PROCESSING |    |
+                    +---+--------+    |
+                        |             |
+                    +---+---+         |
+                    |       |         |
+              (No TTS)  (With TTS)    |
+                    |       |         |
+              +-----v+ +----v----+    |
+              |PASTING| |SPEAKING |   |
+              +-----+-+ +----+----+   |
+                    |        |        |
+                    +---+----+--------+
+                        |
+                       IDLE
 ```
 
-**States:**
+**States (v0.7):**
 - **IDLE**: Waiting for hotkey. Tray icon is grey.
-- **RECORDING**: Capturing audio from microphone. Tray icon is red.
-- **PROCESSING**: Audio sent to STT, transcript sent to summarizer or prompt handler. Tray icon is yellow.
-- **PASTING**: Text placed on clipboard and Ctrl+V simulated. Tray icon is green. Returns to IDLE immediately.
+- **RECORDING**: Capturing audio from microphone. Tray icon is red. Active for normal mode (Ctrl+Alt+R), voice prompt (Ctrl+Alt+A), or TTS ask (Ctrl+Alt+Y).
+- **PROCESSING**: Audio sent to STT; transcript sent to summarizer, prompt handler, or TTS synthesis. Tray icon is yellow.
+- **PASTING**: Text placed on clipboard and Ctrl+V simulated. Tray icon is green. Returns to IDLE immediately after paste.
+- **SPEAKING** (v0.6+): TTS audio playback in progress. Tray icon is blue. Triggered by Ctrl+Alt+T (read clipboard) or Ctrl+Alt+Y (ask AI + TTS). Returns to IDLE on completion or Escape.
 - **CANCELLED**: Recording discarded (via Escape). Returns to IDLE with notification.
 
-**Error handling**: If any state encounters an error (API failure, mic error, model load failure), log it, show toast notification, and return to IDLE.
+**Error handling**: If any state encounters an error (API failure, mic error, model load failure, TTS synthesis error), log it, show toast notification, and return to IDLE.
 
 ---
 
@@ -243,7 +265,46 @@ Du bist ein hilfreicher Assistent. Antworte praezise und in derselben Sprache wi
 
 ---
 
-## 6. Decision: Global Hotkey Library
+## 6. Decision: Text-to-Speech Backend (v0.6+)
+
+### Options Evaluated (v0.6–v0.7)
+
+| Option | Quality | Binary Size | Latency | Offline | Complexity | Cost |
+|--------|---------|-------------|---------|---------|------------|------|
+| **ElevenLabs API (cloud)** | Excellent (human-quality) | +0 MB | 2-4s | No | Low | ~$0.30/1M chars |
+| Piper ONNX (local) | Good | +50–120 MB per voice | 1-3s | Yes | Medium | Free |
+| Google Cloud TTS | Excellent | +0 MB | 2-3s | No | Low | ~$16/1M chars |
+| Azure Speech | Good | +0 MB | 2-3s | No | Low | Varies |
+
+### Decision: Cloud default (ElevenLabs, v0.6). Local option available (Piper, v0.7+).
+
+**v0.6 Decision**: ElevenLabs for cloud TTS.
+
+**Rationale:**
+1. **Quality**: Human-quality, natural-sounding voices (especially for German).
+2. **Binary size**: Zero impact on .exe size.
+3. **Voice selection**: Rich library of voices, easy voice ID browsing.
+4. **Latency**: 2-4 seconds acceptable for typical clipboard text.
+5. **Cost**: Low per-use cost (~$0.30/1M characters).
+
+**v0.7 Enhancement**: Piper local TTS
+
+**New capabilities:**
+- `PiperLocalTTS` class using ONNX inference + espeak-ng phonemization (ctypes)
+- 5 pre-configured German voices (thorsten variants, kerstin, eva_k)
+- Direct HTTPS downloads from Hugging Face (bypasses Xet Storage issues)
+- Model caching in `%LOCALAPPDATA%\VoicePaste\models\tts\`
+- Zero cost, works offline, no API key needed
+- Binary impact: only loader (~0.5 MB); models downloaded on demand
+
+**Download Fix (v0.7)**:
+- Replaced `hf_hub_download` with direct HTTPS streaming from Hugging Face CDN
+- Fixes: AttributeError with Xet Storage repos, stale .lock file infinite retries
+- Benefits: Simpler, faster, more reliable
+
+---
+
+## 7. Decision: Audio Playback Library
 
 ### Options Evaluated
 
@@ -268,7 +329,20 @@ Du bist ein hilfreicher Assistent. Antworte praezise und in derselben Sprache wi
 
 ---
 
-## 7. Decision: Audio Capture Library
+### Audio Playback Library (v0.6+)
+
+**Decision**: miniaudio (C library via ctypes) for audio playback.
+
+**Rationale:**
+1. **Format support**: Handles both MP3 (ElevenLabs) and WAV (Piper) transparently.
+2. **Low latency**: Suitable for real-time TTS response playback.
+3. **Minimal dependencies**: Single shared library, no Python wrappers needed.
+4. **PyInstaller friendly**: Bundled or dynamically loaded.
+5. **Cross-platform**: Available on Windows, macOS, Linux.
+
+---
+
+## 8. Decision: Audio Capture Library
 
 ### Options Evaluated
 
@@ -289,7 +363,7 @@ Du bist ein hilfreicher Assistent. Antworte praezise und in derselben Sprache wi
 
 ---
 
-## 8. Decision: Clipboard and Paste Strategy
+## 9. Decision: Clipboard and Paste Strategy
 
 ### Strategy: Backup → Write → Simulate Ctrl+V → Restore (v0.2+)
 
@@ -310,7 +384,7 @@ Du bist ein hilfreicher Assistent. Antworte praezise und in derselben Sprache wi
 
 ---
 
-## 9. Decision: System Tray Library
+## 10. Decision: System Tray Library
 
 ### Decision: `pystray` with Pillow icon generation (v0.5)
 
@@ -333,21 +407,26 @@ Du bist ein hilfreicher Assistent. Antworte praezise und in derselben Sprache wi
 
 ---
 
-## 10. Decision: Settings Dialog (v0.3+)
+## 11. Decision: Settings Dialog (v0.3–v0.7)
 
-### New Feature: Configuration via GUI
+### Evolution of Settings Dialog
+
+**v0.3 (Initial)**: tkinter-based dialog with vertical LabelFrame sections for Credentials, Transcription, Summarization, Feedback.
+
+**v0.6 (TTS Addition)**: Added Text-to-Speech tab for ElevenLabs configuration (voice ID, model, API key).
+
+**v0.7 (Tabbed Redesign)**: Migrated to ttk.Notebook (modern tabbed interface) with sv_ttk dark theme. Reorganized into 4 clear tabs:
+1. **Transcription**: Cloud/Local backend selection, model size, device, compute type, VAD filter, download progress
+2. **Summarization**: Enable/disable, provider selection, model, custom base URL, custom prompt
+3. **Text-to-Speech**: Enable/disable, cloud/local provider toggle, voice selection, model download (v0.6+)
+4. **General**: Audio cues toggle, log level dropdown, API credential management (OpenAI, OpenRouter, ElevenLabs)
 
 **Implementation:**
 - tkinter-based dialog on dedicated thread
 - Does NOT block pystray main thread
 - Singleton guard (only one dialog at a time)
 - Hot-reload: Changes apply immediately without restart
-
-**Tabs:**
-1. **Credentials**: Manage OpenAI and OpenRouter API keys via keyring
-2. **Transcription**: Cloud/Local backend, model size, device, VAD filter
-3. **Summarization**: Enable/disable, provider, model, custom prompt
-4. **Feedback**: Audio cues, log level
+- Dark theme via sv_ttk for modern appearance
 
 **Threading model:**
 - Main thread: pystray event loop
@@ -356,7 +435,7 @@ Du bist ein hilfreicher Assistent. Antworte praezise und in derselben Sprache wi
 
 ---
 
-## 11. Decision: Credential Storage (v0.3+)
+## 12. Decision: Credential Storage (v0.3+)
 
 ### Windows Credential Manager via Keyring
 
@@ -379,7 +458,7 @@ Du bist ein hilfreicher Assistent. Antworte praezise und in derselben Sprache wi
 
 ---
 
-## 12. Decision: Configuration Format and Hot-Reload
+## 13. Decision: Configuration Format and Hot-Reload
 
 ### Decision: TOML with hot-reload (v0.3+)
 
@@ -421,7 +500,7 @@ level = "INFO"
 
 ---
 
-## 13. Decision: Threading Model
+## 14. Decision: Threading Model
 
 ### Architecture (v0.1–v0.5)
 
@@ -439,7 +518,7 @@ Thread 3:        Settings dialog tkinter loop (on demand, v0.3+)
 
 ---
 
-## 14. Decision: Python Version and Key Dependencies
+## 15. Decision: Python Version and Key Dependencies
 
 | Dependency | Version | Purpose | Size Impact |
 |------------|---------|---------|-------------|
@@ -461,53 +540,58 @@ Thread 3:        Settings dialog tkinter loop (on demand, v0.3+)
 
 ---
 
-## 15. Project File Structure (v0.5)
+## 16. Project File Structure (v0.7)
 
 ```
 C:\develop\speachtoText\
 |-- src\
-|   |-- main.py                      # Entry point, state machine
-|   |-- audio.py                     # Audio recording
+|   |-- main.py                      # Entry point, state machine orchestrator
+|   |-- audio.py                     # Audio recording (microphone)
+|   |-- audio_playback.py            # Audio playback for TTS (miniaudio via ctypes, v0.6+)
 |   |-- stt.py                       # Cloud STT (OpenAI Whisper)
 |   |-- local_stt.py                 # Local STT (faster-whisper, v0.4+)
+|   |-- tts.py                       # TTS backend factory + protocol (v0.6+)
+|   |-- local_tts.py                 # Local TTS (Piper ONNX + espeak-ng, v0.7+)
 |   |-- summarizer.py                # Summarizer (OpenAI, OpenRouter, Ollama)
 |   |-- paste.py                     # Clipboard + paste
 |   |-- config.py                    # Config loading, AppConfig dataclass
 |   |-- hotkey.py                    # Hotkey registration (keyboard lib)
 |   |-- tray.py                      # System tray + context menu
-|   |-- constants.py                 # Shared constants, AppState enum
+|   |-- constants.py                 # Shared constants, AppState enum, prompts, voices
 |   |-- notifications.py             # Audio cues + toast notifications
-|   |-- settings_dialog.py           # Settings GUI (tkinter, v0.3+)
+|   |-- settings_dialog.py           # Settings GUI (tkinter, v0.3+; tabbed v0.7+)
 |   |-- keyring_store.py             # Keyring integration (v0.3+)
-|   |-- model_manager.py             # Model download/caching (v0.4+)
+|   |-- model_manager.py             # STT model download/caching (v0.4+)
+|   |-- tts_model_manager.py         # TTS model download/caching (v0.7+)
 |   |-- icon_drawing.py              # Tray icon generation (v0.5+)
 |-- docs\
-|   |-- ADR.md                       # This file
-|   |-- UX-SPEC.md                   # UX specification
-|   |-- THREAT-MODEL.md              # Security threat model
-|   |-- PROMPTS.md                   # Prompt templates (summarization + voice prompt)
-|   |-- BACKLOG.md                   # Product backlog
+|   |-- ADR.md                       # This file (Architecture Decision Record)
+|   |-- UX-SPEC.md                   # UX specification and flows
+|   |-- THREAT-MODEL.md              # Security threat model and privacy
+|   |-- PROMPTS.md                   # System prompts (summarization + voice prompt)
+|   |-- BACKLOG.md                   # Product backlog (v1.0 roadmap)
 |-- tests\
 |   |-- test_config.py
 |   |-- test_state_machine.py
 |   |-- test_audio.py
 |   |-- test_paste.py
+|   |-- test_tts.py                  # TTS backend tests (v0.6+)
 |   |-- (13+ test files total)
-|-- config.example.toml              # Configuration template
+|-- config.example.toml              # Configuration template (all options with comments)
 |-- build.bat                        # PyInstaller build script
 |-- voice_paste.spec                 # PyInstaller spec file
 |-- rthook_onnxruntime.py            # PyInstaller runtime hook (v0.4+)
 |-- requirements.txt                 # Python dependencies
 |-- requirements-dev.txt             # Development dependencies
-|-- README.md                        # User documentation
-|-- CHANGELOG.md                     # Release notes
+|-- README.md                        # User documentation (features, quick start, troubleshooting)
+|-- CHANGELOG.md                     # Release notes (all versions)
 ```
 
 **Note**: PyInstaller bundles everything into a single .exe. Multi-file structure is for development clarity.
 
 ---
 
-## 16. Backend Abstraction Pattern
+## 17. Backend Abstraction Pattern
 
 ### STT Backend (Cloud + Local)
 
@@ -543,9 +627,37 @@ class Summarizer(Protocol):
 - `PassthroughSummarizer` (v0.1): Returns text unchanged
 - `CloudLLMSummarizer` (v0.2+): OpenAI, OpenRouter, Ollama
 
+### TTS Backend (Cloud + Local, v0.6+)
+
+```python
+class TTSBackend(Protocol):
+    def synthesize(self, text: str) -> bytes:
+        """Synthesize text to audio bytes (MP3 or WAV)."""
+        ...
+```
+
+**Implementations:**
+- `ElevenLabsTTS` (v0.6+): Cloud synthesis via ElevenLabs API (MP3 output)
+- `PiperLocalTTS` (v0.7+): Local ONNX inference via Piper + espeak-ng (WAV output)
+
+**Factory function:**
+```python
+def create_tts_backend(
+    api_key: str,
+    provider: str = "elevenlabs",
+    voice_id: str = "",
+    local_voice: str = "",
+) -> Optional[TTSBackend]:
+    if provider == "piper":
+        return PiperLocalTTS(voice_name=local_voice)
+    if provider == "elevenlabs":
+        return ElevenLabsTTS(api_key=api_key, voice_id=voice_id)
+    return None
+```
+
 ---
 
-## 17. Known Issues & Mitigations
+## 18. Known Issues & Mitigations
 
 | Issue | Impact | Mitigation |
 |-------|--------|-----------|
@@ -555,17 +667,28 @@ class Summarizer(Protocol):
 | Clipboard restore timing race | Paste incomplete or clipboard corrupted | Configurable delay (default 150ms); extensive QA |
 | OpenAI API rate limits | Degraded experience | Implement retry with exponential backoff (2 retries) |
 | Terminal emulators don't respond to Ctrl+V | Paste doesn't work in terminal | Document; user can manually paste or use Ctrl+Shift+V |
+| ElevenLabs API key invalid (v0.6+) | TTS fails to synthesize | Specific error message; user checks Settings > Credentials |
+| Piper ONNX model not downloaded (v0.7+) | Local TTS unavailable | Prompt user to download model via Settings > Text-to-Speech |
+| espeak-ng not installed (v0.7+) | Piper local TTS unavailable | Document installation (bundled in binary); graceful fallback |
+| Hugging Face CDN slow/unavailable (v0.7+) | Model downloads slow or fail | Direct HTTPS streaming with retry logic; document alternatives |
 
 ---
 
-## 18. Future Enhancements (v1.0 Roadmap)
+## 19. Future Enhancements (v1.0 Roadmap)
 
+### Completed in v0.7
+- ✅ Local TTS via Piper (offline, free)
+- ✅ Direct HTTPS model downloads (replaces buggy hf_hub_download)
+- ✅ Tabbed Settings dialog with dark theme
+
+### Planned for v1.0
 - Code signing to reduce antivirus false positives
-- Multi-language UI (localization)
-- Bundled language models in single-file .exe
+- Multi-language UI localization (German/English primary)
+- Bundled language models in single-file .exe (~500MB–1GB)
 - Advanced model management (delete models, clear cache)
 - Usage statistics and cost tracking
-- Dark/light theme toggle
-- Custom keybinds for all actions
+- Custom keybinds for all actions (not just recording)
 - Streaming response output (LLM answers appear in real-time)
+- Multi-turn conversation context for Voice Prompt mode (maintain conversation history)
+- Voice style/emotion control for Piper TTS
 - Context retention for Voice Prompt (multi-turn conversation)

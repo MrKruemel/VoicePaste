@@ -13,11 +13,63 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Bundled language models in single-file .exe
 - Advanced model management (delete models, clear cache)
 - Usage statistics and cost tracking
-- Dark/light theme toggle in settings
 - Custom keybinds for all actions (not just recording/prompt)
 - Streaming response output (paste as LLM answers)
+- Multi-turn conversation context for Voice Prompt mode
 
 See [BACKLOG.md](docs/BACKLOG.md) for the complete v1.0 roadmap.
+
+---
+
+## [0.7.0] - 2026-02-19
+
+### Added
+- **Local TTS via Piper ONNX (v0.7)**: Offline text-to-speech synthesis without API keys or internet. Includes espeak-ng phonemization via ctypes for natural prosody.
+- **5 German Piper Voices (v0.7)**: de_DE-thorsten-medium (recommended), de_DE-thorsten-high, de_DE-thorsten_emotional-medium. English voices also available (en_US-lessac-medium, en_US-amy-medium).
+- **Direct HTTPS Model Streaming (v0.7)**: Replaced `hf_hub_download` with direct HTTPS streaming from Hugging Face CDN. Fixes AttributeError with Xet Storage repos and stale .lock file infinite retry loops.
+- **TTS Model Manager (tts_model_manager.py, v0.7)**: Manages Piper voice model downloads and caching to `%LOCALAPPDATA%\VoicePaste\models\tts\`. Download UI in Settings dialog with progress bar.
+- **Tabbed Settings Dialog (v0.7)**: Redesigned from vertical sections to ttk.Notebook with 4 tabs: Transcription, Summarization, Text-to-Speech, General. Dark theme via sv_ttk for modern appearance.
+- **Local TTS Module (local_tts.py, v0.7)**: PiperLocalTTS class implementing ONNX inference with espeak-ng phonemization and Piper model loader.
+- **Audio Playback for WAV (audio_playback.py, v0.7)**: Extends miniaudio playback to handle WAV format (used by local Piper). Cloud ElevenLabs continues to use MP3.
+- **Tray icon state: SPEAKING (v0.7)**: New state added for TTS playback. Icon color: blue. Returns to IDLE on completion or Escape.
+
+### Changed
+- **Settings Dialog UI Overhaul**: Moved from vertical LabelFrame layout to tabbed ttk.Notebook interface. More organized, easier to navigate.
+- **TTS Tab Organization (v0.7)**: Cloud provider settings (ElevenLabs voice ID, model ID, format) in one section. Local provider settings (Piper voice selection, model download) in another.
+- **Model Caching Location (v0.7)**: Piper models cached in `%LOCALAPPDATA%\VoicePaste\models\tts\` (separate from STT models in `models\`).
+- **Config Section Naming**: [tts] section unified for both cloud and local providers (was separate in design phase).
+
+### Fixed
+- **Hugging Face Download Bug (v0.7)**: AttributeError: 'XetStorageFile' object has no attribute 'name' when downloading from Xet repos. Direct HTTPS streaming bypasses this issue entirely.
+- **Stale Lock File Retry (v0.7)**: Xet Storage repos could hang with infinite retries on stale .lock files. Direct streaming has no lock file overhead.
+- **Model Download Progress (v0.7)**: TTS model downloads now show progress bar in Settings dialog (similar to STT model downloads).
+
+---
+
+## [0.6.0] - 2026-02-18
+
+### Added
+- **ElevenLabs Cloud TTS (v0.6)**: Text-to-speech synthesis via ElevenLabs API. High-quality, human-like voices in multiple languages. Requires ElevenLabs API key.
+- **TTS Hotkeys (v0.6)**: Two new global hotkeys for TTS workflows:
+  - Ctrl+Alt+T: Read clipboard content aloud via TTS
+  - Ctrl+Alt+Y: Ask AI a question and hear the answer read aloud (record → summarize → TTS)
+- **Audio Playback (audio_playback.py, v0.6)**: Plays MP3 audio output from ElevenLabs TTS using miniaudio (C library via ctypes). Thread-safe, minimal latency.
+- **TTS Configuration in Settings (v0.6)**: New "Text-to-Speech" tab in Settings dialog. Enable/disable TTS, select voice ID, change model, manage API key.
+- **Voice Selection UI (v0.6)**: Predefined ElevenLabs voice presets in Settings dropdown (Lily, Brian, Sarah, George, Daniel). Users can also enter custom voice IDs.
+- **TTS Error Handling (v0.6)**: Specific error messages for API key validation (401), rate limits (429), quota exceeded, and network errors.
+- **ELEVENLABS_VOICE_PRESETS (constants.py, v0.6)**: Dictionary of common ElevenLabs voices with names and descriptions for easy selection.
+- **KEYRING_ELEVENLABS_KEY (constants.py, v0.6)**: ElevenLabs API key stored in Windows Credential Manager (same as OpenAI and OpenRouter).
+- **SPEAKING state (AppState enum, v0.6)**: New application state for TTS audio playback. Transitions: PROCESSING → SPEAKING → IDLE.
+
+### Changed
+- **State Machine Enhancement (v0.6)**: Added SPEAKING state for TTS workflows. Icon color changes to blue during playback.
+- **Hotkey Registration (v0.6)**: Extended to register TTS hotkeys (Ctrl+Alt+T and Ctrl+Alt+Y) in addition to recording hotkeys.
+- **Default TTS Provider**: ElevenLabs (cloud) for backward compatibility. Users opt-in to Piper (local) in Settings (v0.7+).
+- **API Key Management (v0.6)**: Added ElevenLabs API key to Credential Manager, alongside OpenAI and OpenRouter keys.
+
+### Fixed
+- **TTS Initialization**: Graceful fallback if ElevenLabs SDK not installed (optional dependency). TTS simply remains unavailable.
+- **Audio Playback Blocking**: Playback runs on separate thread to avoid blocking UI or pipeline.
 
 ---
 

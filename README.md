@@ -8,19 +8,22 @@
   A Windows desktop utility that records your speech, transcribes it with AI, optionally summarizes it, and pastes the result at your cursor—all with a hotkey. Runs entirely in the system tray.
 </p>
 
-**Current version**: 0.5.0 (Voice Prompts & UI Polish)
+**Current version**: 0.7.0 (Local TTS & Tabbed Settings)
 
 ## Features
 
 - **Transcribe with a hotkey**: Press Ctrl+Alt+R to record, press again to transcribe and paste.
 - **Ask questions with Voice Prompt**: Press Ctrl+Alt+A to record a question, get an AI answer, and paste it.
+- **Read text aloud with TTS**: Press Ctrl+Alt+T to read clipboard content via text-to-speech (v0.6+).
+- **Ask AI and hear the answer**: Press Ctrl+Alt+Y to ask a question and hear the answer read aloud (v0.6+).
 - **Choose your transcription source**: Cloud (OpenAI Whisper API) or offline (local faster-whisper with Silero VAD).
 - **Multiple summarization backends**: OpenAI, OpenRouter (Claude, Llama), or local Ollama.
-- **Settings dialog**: Configure everything via GUI (right-click tray → Settings). No config file editing needed.
+- **Multiple TTS providers**: ElevenLabs cloud (human-quality voices) or local Piper (offline, free, 5 German voices).
+- **Tabbed Settings dialog**: Organized configuration interface with Transcription, Summarization, Text-to-Speech, and General tabs (v0.7+).
 - **Secure credential storage**: API keys stored in Windows Credential Manager, never in plain text files.
 - **Silent operation**: Runs in system tray. Never steals focus.
 - **Audio feedback**: Beeps confirm recording start/stop/cancel/error. Disable in settings for silent mode.
-- **Visual feedback**: Tray icon color changes per state (grey=idle, red=recording, yellow=processing, green=pasting).
+- **Visual feedback**: Tray icon color changes per state (grey=idle, red=recording, yellow=processing, green=pasting, blue=speaking).
 - **Cancel anytime**: Press Escape during recording to discard and return to idle.
 - **Clipboard safety**: Original clipboard contents restored after pasting.
 - **Toast notifications**: Errors appear as Windows notifications, not modal dialogs.
@@ -29,11 +32,13 @@
 
 - **Windows 10 or 11**
 - **Python 3.11+** (for running from source)
-- **Microphone**: Connected and working
+- **Microphone**: Connected and working (required only for recording modes)
 - **For cloud transcription**: OpenAI API key (get one at https://platform.openai.com/api-keys)
 - **For local transcription**: Disk space for Whisper model (75MB–3GB depending on size)
+- **For ElevenLabs TTS** (v0.6+): ElevenLabs API key (get one at https://elevenlabs.io)
+- **For Piper local TTS** (v0.7+): Disk space for Piper voice models (~60–120 MB per voice). No API key needed.
 - **For local summarization**: Ollama running locally (http://localhost:11434) if using Ollama provider
-- **Internet connection**: Required only for cloud transcription and cloud summarization
+- **Internet connection**: Required only for cloud transcription, cloud summarization, and ElevenLabs TTS
 
 ## Quick Start
 
@@ -159,11 +164,22 @@ All options can be set via the **Settings dialog** (right-click tray → Setting
 | `[summarization]` `base_url` | string | (empty) | Custom API endpoint (for proxies, self-hosted, or OpenRouter). Leave empty to use provider default. |
 | `[summarization]` `custom_prompt` | string | (empty) | Custom system prompt for LLM. Leave empty to use the default cleanup prompt. |
 
+### Text-to-Speech (v0.6+)
+
+| Key | Type | Default | Description |
+|-----|------|---------|-------------|
+| `[tts]` `enabled` | boolean | `false` | Enable text-to-speech output. Disabled by default; enable in Settings or set to `true`. |
+| `[tts]` `provider` | string | `"elevenlabs"` | TTS provider: `"elevenlabs"` (cloud, high quality, requires API key) or `"piper"` (local, offline, free). |
+| `[tts]` `voice_id` | string | `"pFZP5JQG7iQjIQuC4Bku"` | ElevenLabs voice ID (Lily by default). Browse voices at https://elevenlabs.io/voice-library. Only used when `provider = "elevenlabs"`. |
+| `[tts]` `model_id` | string | `"eleven_flash_v2_5"` | ElevenLabs model ID. Default: `"eleven_flash_v2_5"` (fast, low latency). Only used when `provider = "elevenlabs"`. |
+| `[tts]` `output_format` | string | `"mp3_44100_128"` | ElevenLabs output format. Only used when `provider = "elevenlabs"`. |
+| `[tts]` `local_voice` | string | `"de_DE-thorsten-medium"` | Piper voice model name (v0.7+). Available German voices: `de_DE-thorsten-medium` (recommended), `de_DE-thorsten-high`, `de_DE-thorsten_emotional-medium`. Download models via Settings. Only used when `provider = "piper"`. |
+
 ### Feedback & Logging
 
 | Key | Type | Default | Description |
 |-----|------|---------|-------------|
-| `[feedback]` `audio_cues` | boolean | `true` | Play audio beeps on recording start/stop/cancel/error. Set `false` for silent operation. |
+| `[feedback]` `audio_cues` | boolean | `true` | Play audio beeps on recording start/stop/cancel/error and TTS completion. Set `false` for silent operation. |
 | `[logging]` `level` | string | `"INFO"` | Log level: `"DEBUG"`, `"INFO"`, `"WARNING"`, or `"ERROR"`. |
 
 ## Choosing a Transcription Backend
@@ -215,17 +231,19 @@ All options can be set via the **Settings dialog** (right-click tray → Setting
 |--------|--------|
 | **Ctrl+Alt+R** | Start/stop recording for transcription and paste. |
 | **Ctrl+Alt+A** | Start/stop recording for voice prompt (question → answer). |
-| **Escape** | Cancel active recording (discard audio, don't paste). |
+| **Ctrl+Alt+T** | Read clipboard content aloud (TTS). Requires TTS enabled in Settings. (v0.6+) |
+| **Ctrl+Alt+Y** | Ask AI a question and hear the answer (record → summarize → TTS). Requires TTS enabled. (v0.6+) |
+| **Escape** | Cancel active recording or TTS playback (discard audio, don't paste). |
 | **Right-click tray** | Show menu (Settings, Quit). |
 
 ## Settings Dialog
 
-Right-click the tray icon and select **Settings** to open the configuration dialog. Tabs:
+Right-click the tray icon and select **Settings** to open the configuration dialog (v0.7+: tabbed interface). Tabs:
 
-- **Credentials**: Manage API keys (OpenAI, OpenRouter). Keys stored in Windows Credential Manager, not config.toml.
-- **Transcription**: Choose cloud or local Whisper. Download local models, set device/compute type.
-- **Summarization**: Enable/disable cleanup. Choose provider (OpenAI, OpenRouter, Ollama). Custom prompts.
-- **Feedback**: Toggle audio cues and set log level.
+- **Transcription**: Choose cloud (OpenAI Whisper) or local (faster-whisper) backend. Download local models, set device/compute type, enable/disable VAD filter.
+- **Summarization**: Enable/disable text cleanup. Choose provider (OpenAI, OpenRouter, Ollama). Custom prompts.
+- **Text-to-Speech** (v0.6+): Enable/disable TTS. Choose provider (ElevenLabs cloud or Piper local). Download Piper voice models, select voice.
+- **General** (v0.7+): Toggle audio cues, set log level, manage API credentials (OpenAI, OpenRouter, ElevenLabs) via Windows Credential Manager.
 
 Changes save immediately. No restart needed (hot-reload).
 
@@ -487,14 +505,16 @@ For issues, questions, or feedback:
 
 See [CHANGELOG.md](CHANGELOG.md) for release notes and what changed between versions.
 
-**Current version**: 0.5.0 (Voice Prompts & UI Polish)
-- Voice Prompt mode (Ctrl+Alt+A)
-- Dynamic icon drawing
-- Settings dialog enhancements
-- Build consolidation
+**Current version**: 0.7.0 (Local TTS & Tabbed Settings)
+- Local TTS via Piper (offline, free, 5 German voices)
+- Direct HTTPS model downloads from Hugging Face (fixes Xet Storage bugs)
+- Tabbed Settings dialog (TTK with dark theme)
+- TTS Cloud/Local provider toggle
 
 **Previous versions**:
-- 0.4.0: Local STT, model manager, VAD filter
-- 0.3.0: Settings dialog, keyring, multiple providers
-- 0.2.0: Summarization, audio cues, visual feedback
-- 0.1.0: Basic transcribe and paste
+- 0.6.0: ElevenLabs cloud TTS, TTS hotkeys, audio playback
+- 0.5.0: Voice Prompt mode, dynamic icon drawing, build consolidation
+- 0.4.0: Local STT via faster-whisper, model manager, VAD filter
+- 0.3.0: Settings dialog, Windows Credential Manager, multiple providers
+- 0.2.0: GPT-4o-mini summarization, audio cues, visual feedback, clipboard safety
+- 0.1.0: Basic hotkey-driven transcription and paste
