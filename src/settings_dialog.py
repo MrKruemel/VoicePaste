@@ -148,6 +148,21 @@ def _configure_dark_style(root, ttk_module, sv_ttk_loaded):
         root.option_add("*TCombobox*Listbox.selectBackground", c["select_bg"])
         root.option_add("*TCombobox*Listbox.selectForeground", c["select_fg"])
 
+        # Notebook tab styling for sv_ttk
+        style = ttk_module.Style()
+        style.configure("TNotebook", background=c["bg"])
+        style.configure(
+            "TNotebook.Tab",
+            background=c["button_bg"],
+            foreground=c["fg"],
+            padding=[12, 4],
+        )
+        style.map(
+            "TNotebook.Tab",
+            background=[("selected", c["bg"]), ("active", c["button_active"])],
+            foreground=[("selected", c["fg"])],
+        )
+
     else:
         # No sv_ttk: full manual dark theme for all ttk widget types.
         style = ttk_module.Style()
@@ -197,6 +212,20 @@ def _configure_dark_style(root, ttk_module, sv_ttk_loaded):
                                    ("disabled", c["disabled_bg"])],
                   foreground=[("readonly", c["field_fg"]),
                               ("disabled", c["disabled_fg"])])
+
+        # Notebook tab styling for non-sv_ttk
+        style.configure("TNotebook", background=c["bg"])
+        style.configure(
+            "TNotebook.Tab",
+            background=c["button_bg"],
+            foreground=c["fg"],
+            padding=[12, 4],
+        )
+        style.map(
+            "TNotebook.Tab",
+            background=[("selected", c["bg"]), ("active", c["button_active"])],
+            foreground=[("selected", c["fg"])],
+        )
 
         # Combobox dropdown listbox
         root.option_add("*TCombobox*Listbox.background", c["field_bg"])
@@ -323,7 +352,7 @@ class SettingsDialog:
         self._dialog.title("Voice Paste - Settings")
         self._dialog.configure(bg=self._bg_color)
         self._dialog.resizable(False, False)
-        self._dialog.minsize(540, 680)
+        self._dialog.minsize(540, 580)
 
         # Track editing state for API key fields
         self._openai_key_editing = False
@@ -365,7 +394,18 @@ class SettingsDialog:
         self.protocol = self._dialog.protocol
 
     def _build_ui(self) -> None:
-        """Build all UI widgets."""
+        """Build all UI widgets using a tabbed Notebook layout.
+
+        Layout structure:
+            main_frame
+                notebook (ttk.Notebook)
+                    Tab 1: Transcription
+                    Tab 2: Summarization
+                    Tab 3: Text-to-Speech
+                    Tab 4: General
+                error_label (shown on validation failure)
+                button_frame (Save / Cancel)
+        """
         tk = self._tk
         ttk = self._ttk
         dialog = self._dialog
@@ -374,21 +414,80 @@ class SettingsDialog:
         main_frame = ttk.Frame(dialog, padding=12)
         main_frame.pack(fill=tk.BOTH, expand=True)
 
-        # Error label at top (hidden by default)
+        # === Notebook (tabbed container) ===
+        self._notebook = ttk.Notebook(main_frame)
+        self._notebook.pack(fill=tk.BOTH, expand=True)
+
+        # Create tab frames with internal padding
+        transcription_tab = ttk.Frame(self._notebook, padding=(10, 8))
+        summarization_tab = ttk.Frame(self._notebook, padding=(10, 8))
+        tts_tab = ttk.Frame(self._notebook, padding=(10, 8))
+        general_tab = ttk.Frame(self._notebook, padding=(10, 8))
+
+        self._notebook.add(transcription_tab, text="Transcription")
+        self._notebook.add(summarization_tab, text="Summarization")
+        self._notebook.add(tts_tab, text="Text-to-Speech")
+        self._notebook.add(general_tab, text="General")
+
+        # ---------------------------------------------------------------
+        # Tab 1: Transcription
+        # ---------------------------------------------------------------
+        self._build_transcription_tab(transcription_tab)
+
+        # ---------------------------------------------------------------
+        # Tab 2: Summarization
+        # ---------------------------------------------------------------
+        self._build_summarization_tab(summarization_tab)
+
+        # ---------------------------------------------------------------
+        # Tab 3: Text-to-Speech
+        # ---------------------------------------------------------------
+        self._build_tts_tab(tts_tab)
+
+        # ---------------------------------------------------------------
+        # Tab 4: General
+        # ---------------------------------------------------------------
+        self._build_general_tab(general_tab)
+
+        # === Error label (below notebook, hidden by default) ===
         self._error_label = ttk.Label(
             main_frame, text="", foreground="#FF6B6B", wraplength=480
         )
-        self._error_label.pack(fill=tk.X, pady=(0, 4))
-        self._error_label.pack_forget()  # Hidden initially
+        # Not packed initially; shown by _on_save_clicked on validation error
 
-        # === Section 1: Transcription ===
-        transcription_frame = ttk.LabelFrame(
-            main_frame, text="Transcription", padding=(10, 8)
-        )
-        transcription_frame.pack(fill=tk.X, pady=(0, 8))
+        # === Button Bar (below notebook) ===
+        self._button_frame = ttk.Frame(main_frame)
+        self._button_frame.pack(fill=tk.X, pady=(12, 0))
 
-        # v0.4: Backend selector row
-        backend_row = ttk.Frame(transcription_frame)
+        ttk.Button(
+            self._button_frame,
+            text="Save",
+            width=10,
+            command=self._on_save_clicked,
+        ).pack(side=tk.RIGHT)
+
+        ttk.Button(
+            self._button_frame,
+            text="Cancel",
+            width=10,
+            command=self._on_cancel_clicked,
+        ).pack(side=tk.RIGHT, padx=(0, 8))
+
+    # ------------------------------------------------------------------
+    # Tab builder methods
+    # ------------------------------------------------------------------
+
+    def _build_transcription_tab(self, parent: "ttk.Frame") -> None:
+        """Build widgets for the Transcription tab.
+
+        Args:
+            parent: The tab frame to populate.
+        """
+        tk = self._tk
+        ttk = self._ttk
+
+        # Backend selector row
+        backend_row = ttk.Frame(parent)
         backend_row.pack(fill=tk.X, pady=(0, 4))
 
         ttk.Label(backend_row, text="Backend:", width=10, anchor=tk.W).pack(side=tk.LEFT)
@@ -405,7 +504,7 @@ class SettingsDialog:
         self._backend_combo.bind("<<ComboboxSelected>>", self._on_backend_changed)
 
         # --- Cloud sub-frame (shown when backend = cloud) ---
-        self._cloud_frame = ttk.Frame(transcription_frame)
+        self._cloud_frame = ttk.Frame(parent)
 
         # OpenAI API Key row
         key_row = ttk.Frame(self._cloud_frame)
@@ -434,7 +533,7 @@ class SettingsDialog:
         cloud_hint.pack(fill=tk.X, padx=(0, 0), pady=(0, 4))
 
         # --- Local sub-frame (shown when backend = local) ---
-        self._local_frame = ttk.Frame(transcription_frame)
+        self._local_frame = ttk.Frame(parent)
 
         # Model size row
         model_size_row = ttk.Frame(self._local_frame)
@@ -496,13 +595,13 @@ class SettingsDialog:
             status_row, text="Download Model", width=16,
             command=self._on_download_clicked,
         )
-        # Don't pack yet — _update_model_status will show/hide it
+        # Don't pack yet -- _update_model_status will show/hide it
 
         self._delete_btn = ttk.Button(
             status_row, text="Delete", width=8,
             command=self._on_delete_clicked,
         )
-        # Don't pack yet — _update_model_status will show/hide it
+        # Don't pack yet -- _update_model_status will show/hide it
 
         # Progress bar row (hidden by default)
         self._progress_frame = ttk.Frame(self._local_frame)
@@ -531,19 +630,22 @@ class SettingsDialog:
 
         # Transcription error label
         self._transcription_error = ttk.Label(
-            transcription_frame, text="", foreground="#FF6B6B", font=("", 8)
+            parent, text="", foreground="#FF6B6B", font=("", 8)
         )
 
-        # === Section 2: Summarization ===
-        summarization_frame = ttk.LabelFrame(
-            main_frame, text="Summarization", padding=(10, 8)
-        )
-        summarization_frame.pack(fill=tk.X, pady=(0, 8))
+    def _build_summarization_tab(self, parent: "ttk.Frame") -> None:
+        """Build widgets for the Summarization tab.
+
+        Args:
+            parent: The tab frame to populate.
+        """
+        tk = self._tk
+        ttk = self._ttk
 
         # Enable checkbox
         self._summarization_enabled_var = tk.BooleanVar()
         self._summarization_checkbox = ttk.Checkbutton(
-            summarization_frame,
+            parent,
             text="Enable summarization",
             variable=self._summarization_enabled_var,
             command=self._on_summarization_toggled,
@@ -551,7 +653,7 @@ class SettingsDialog:
         self._summarization_checkbox.pack(fill=tk.X, pady=(0, 6))
 
         # Provider row
-        provider_row = ttk.Frame(summarization_frame)
+        provider_row = ttk.Frame(parent)
         provider_row.pack(fill=tk.X, pady=(0, 4))
 
         ttk.Label(provider_row, text="Provider:", width=10, anchor=tk.W).pack(side=tk.LEFT)
@@ -568,7 +670,7 @@ class SettingsDialog:
         self._provider_combo.bind("<<ComboboxSelected>>", self._on_provider_changed)
 
         # OpenRouter API Key row (hidden when provider is OpenAI)
-        self._openrouter_key_frame = ttk.Frame(summarization_frame)
+        self._openrouter_key_frame = ttk.Frame(parent)
 
         or_key_row = ttk.Frame(self._openrouter_key_frame)
         or_key_row.pack(fill=tk.X, pady=(0, 2))
@@ -600,7 +702,7 @@ class SettingsDialog:
         )
 
         # Model row
-        model_row = ttk.Frame(summarization_frame)
+        model_row = ttk.Frame(parent)
         model_row.pack(fill=tk.X, pady=(0, 4))
 
         ttk.Label(model_row, text="Model:", width=10, anchor=tk.W).pack(side=tk.LEFT)
@@ -612,7 +714,7 @@ class SettingsDialog:
         self._model_entry.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(4, 0))
 
         # Base URL row
-        url_row = ttk.Frame(summarization_frame)
+        url_row = ttk.Frame(parent)
         url_row.pack(fill=tk.X, pady=(0, 2))
 
         ttk.Label(url_row, text="Base URL:", width=10, anchor=tk.W).pack(side=tk.LEFT)
@@ -624,7 +726,7 @@ class SettingsDialog:
         self._base_url_entry.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(4, 0))
 
         url_hint = ttk.Label(
-            summarization_frame,
+            parent,
             text="Advanced. Change only if using a custom endpoint.",
             foreground="#999999",
             font=("", 8),
@@ -632,7 +734,7 @@ class SettingsDialog:
         url_hint.pack(fill=tk.X, pady=(0, 6))
 
         # Custom Prompt section
-        prompt_label_row = ttk.Frame(summarization_frame)
+        prompt_label_row = ttk.Frame(parent)
         prompt_label_row.pack(fill=tk.X, pady=(0, 2))
 
         ttk.Label(
@@ -648,7 +750,7 @@ class SettingsDialog:
         self._prompt_reset_btn.pack(side=tk.RIGHT)
 
         self._prompt_text = tk.Text(
-            summarization_frame,
+            parent,
             height=6,
             width=50,
             wrap=tk.WORD,
@@ -667,7 +769,7 @@ class SettingsDialog:
         self._prompt_text.pack(fill=tk.X, pady=(0, 2))
 
         prompt_hint = ttk.Label(
-            summarization_frame,
+            parent,
             text="Instructs the LLM how to clean up the transcription. Leave empty for default.",
             foreground="#999999",
             font=("", 8),
@@ -685,24 +787,27 @@ class SettingsDialog:
             self._openrouter_key_btn,
         ]
 
-        # === Section 3: Text-to-Speech (v0.6, v0.7 local Piper) ===
-        tts_frame = ttk.LabelFrame(
-            main_frame, text="Text-to-Speech", padding=(10, 8)
-        )
-        tts_frame.pack(fill=tk.X, pady=(0, 8))
+    def _build_tts_tab(self, parent: "ttk.Frame") -> None:
+        """Build widgets for the Text-to-Speech tab.
+
+        Args:
+            parent: The tab frame to populate.
+        """
+        tk = self._tk
+        ttk = self._ttk
 
         # Enable checkbox
         self._tts_enabled_var = tk.BooleanVar()
         self._tts_checkbox = ttk.Checkbutton(
-            tts_frame,
+            parent,
             text="Enable Text-to-Speech",
             variable=self._tts_enabled_var,
             command=self._on_tts_toggled,
         )
         self._tts_checkbox.pack(fill=tk.X, pady=(0, 6))
 
-        # v0.7: TTS Backend selector row
-        tts_backend_row = ttk.Frame(tts_frame)
+        # TTS Backend selector row
+        tts_backend_row = ttk.Frame(parent)
         tts_backend_row.pack(fill=tk.X, pady=(0, 4))
 
         ttk.Label(tts_backend_row, text="Backend:", width=10, anchor=tk.W).pack(side=tk.LEFT)
@@ -719,7 +824,7 @@ class SettingsDialog:
         self._tts_backend_combo.bind("<<ComboboxSelected>>", self._on_tts_backend_changed)
 
         # --- TTS Cloud sub-frame (ElevenLabs, shown when backend = cloud) ---
-        self._tts_cloud_frame = ttk.Frame(tts_frame)
+        self._tts_cloud_frame = ttk.Frame(parent)
 
         # ElevenLabs API Key row
         tts_key_row = ttk.Frame(self._tts_cloud_frame)
@@ -803,7 +908,7 @@ class SettingsDialog:
         self._tts_model_combo.pack(side=tk.LEFT, padx=(4, 0))
 
         # --- TTS Local sub-frame (Piper, shown when backend = local) ---
-        self._tts_local_frame = ttk.Frame(tts_frame)
+        self._tts_local_frame = ttk.Frame(parent)
 
         # Piper voice dropdown row
         tts_piper_voice_row = ttk.Frame(self._tts_local_frame)
@@ -899,36 +1004,45 @@ class SettingsDialog:
             self._tts_delete_btn,
         ]
 
-        # === Section 4: General ===
-        general_frame = ttk.LabelFrame(
-            main_frame, text="General", padding=(10, 8)
+    def _build_general_tab(self, parent: "ttk.Frame") -> None:
+        """Build widgets for the General tab.
+
+        Args:
+            parent: The tab frame to populate.
+        """
+        tk = self._tk
+        ttk = self._ttk
+
+        # --- Hotkeys section ---
+        hotkeys_label = ttk.Label(
+            parent, text="Hotkeys", font=("", 10, "bold")
         )
-        general_frame.pack(fill=tk.X, pady=(0, 8))
+        hotkeys_label.pack(fill=tk.X, pady=(0, 6))
 
         # Hotkey display (read-only)
-        hotkey_row = ttk.Frame(general_frame)
+        hotkey_row = ttk.Frame(parent)
         hotkey_row.pack(fill=tk.X, pady=(0, 2))
 
         ttk.Label(hotkey_row, text="Summarize:", width=10, anchor=tk.W).pack(side=tk.LEFT)
         self._hotkey_label = ttk.Label(hotkey_row, text="", font=("", 9, "bold"))
         self._hotkey_label.pack(side=tk.LEFT, padx=(4, 0))
 
-        prompt_hotkey_row = ttk.Frame(general_frame)
+        prompt_hotkey_row = ttk.Frame(parent)
         prompt_hotkey_row.pack(fill=tk.X, pady=(0, 2))
 
         ttk.Label(prompt_hotkey_row, text="Ask LLM:", width=10, anchor=tk.W).pack(side=tk.LEFT)
         self._prompt_hotkey_label = ttk.Label(prompt_hotkey_row, text="", font=("", 9, "bold"))
         self._prompt_hotkey_label.pack(side=tk.LEFT, padx=(4, 0))
 
-        # v0.6: TTS hotkeys display
-        tts_hotkey_row = ttk.Frame(general_frame)
+        # TTS hotkeys display
+        tts_hotkey_row = ttk.Frame(parent)
         tts_hotkey_row.pack(fill=tk.X, pady=(0, 2))
 
         ttk.Label(tts_hotkey_row, text="Read TTS:", width=10, anchor=tk.W).pack(side=tk.LEFT)
         self._tts_hotkey_label = ttk.Label(tts_hotkey_row, text="", font=("", 9, "bold"))
         self._tts_hotkey_label.pack(side=tk.LEFT, padx=(4, 0))
 
-        tts_ask_hotkey_row = ttk.Frame(general_frame)
+        tts_ask_hotkey_row = ttk.Frame(parent)
         tts_ask_hotkey_row.pack(fill=tk.X, pady=(0, 2))
 
         ttk.Label(tts_ask_hotkey_row, text="Ask+TTS:", width=10, anchor=tk.W).pack(side=tk.LEFT)
@@ -936,38 +1050,24 @@ class SettingsDialog:
         self._tts_ask_hotkey_label.pack(side=tk.LEFT, padx=(4, 0))
 
         hotkey_hint = ttk.Label(
-            general_frame,
+            parent,
             text="Change in config.toml (requires restart)",
             foreground="#999999",
             font=("", 8),
         )
-        hotkey_hint.pack(fill=tk.X, pady=(0, 4))
+        hotkey_hint.pack(fill=tk.X, pady=(0, 8))
 
+        # --- Separator ---
+        ttk.Separator(parent, orient=tk.HORIZONTAL).pack(fill=tk.X, pady=(0, 8))
+
+        # --- Audio section ---
         # Audio cues checkbox
         self._audio_cues_var = tk.BooleanVar()
         ttk.Checkbutton(
-            general_frame,
+            parent,
             text="Play audio cues",
             variable=self._audio_cues_var,
         ).pack(fill=tk.X)
-
-        # === Button Bar ===
-        button_frame = ttk.Frame(main_frame)
-        button_frame.pack(fill=tk.X, pady=(12, 0))
-
-        ttk.Button(
-            button_frame,
-            text="Save",
-            width=10,
-            command=self._on_save_clicked,
-        ).pack(side=tk.RIGHT)
-
-        ttk.Button(
-            button_frame,
-            text="Cancel",
-            width=10,
-            command=self._on_cancel_clicked,
-        ).pack(side=tk.RIGHT, padx=(0, 8))
 
     def _populate_from_config(self) -> None:
         """Fill widget values from current config and keyring."""
@@ -2010,7 +2110,9 @@ class SettingsDialog:
         error = self._validate()
         if error:
             self._error_label.config(text=error)
-            self._error_label.pack(fill=self._tk.X, pady=(0, 4), before=self._error_label.master.winfo_children()[1])
+            self._error_label.pack(
+                fill=self._tk.X, pady=(8, 0), before=self._button_frame
+            )
             return
 
         changed_fields: dict[str, Any] = {}

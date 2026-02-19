@@ -1,16 +1,22 @@
 """Piper TTS voice model download, caching, and lifecycle management.
 
-Downloads Piper voice ONNX models from Hugging Face Hub and stores them
+Downloads Piper voice ONNX models from Hugging Face and stores them
 in %LOCALAPPDATA%\\VoicePaste\\models\\tts\\.
 
 This module is independent of the local_tts inference engine and can be
 used to pre-download models before the user attempts TTS synthesis.
 
+Downloads use direct HTTPS requests to the Hugging Face CDN instead of
+the huggingface_hub SDK.  This avoids known issues with hf_hub_download:
+  - Xet Storage repos cause ``AttributeError: 'NoneType' ... 'write'``
+  - Stale .lock files left by interrupted downloads block all retries
+
 Thread safety:
     All public functions are safe to call from any thread. Downloads use
     a threading.Lock to prevent concurrent downloads.
 
-v0.7: Initial implementation.
+v0.7: Initial implementation (hf_hub_download).
+v0.7.1: Replaced hf_hub_download with direct HTTP streaming.
 """
 
 import logging
@@ -140,10 +146,10 @@ def download_tts_model(
     on_progress: Optional[ProgressCallback] = None,
     cancel_event: Optional[threading.Event] = None,
 ) -> bool:
-    """Download a Piper TTS voice model from Hugging Face Hub.
+    """Download a Piper TTS voice model from Hugging Face.
 
     Downloads the .onnx and .onnx.json files for the specified voice
-    to the local cache directory.
+    directly via HTTPS streaming (no hf_hub SDK needed).
 
     Args:
         voice_name: Voice name (e.g., "de_DE-thorsten-medium").
@@ -181,6 +187,8 @@ def download_tts_model(
         return False
 
     try:
+        import requests
+
         logger.info(
             "Downloading Piper voice '%s' from '%s' to '%s'...",
             voice_name,
@@ -193,21 +201,10 @@ def download_tts_model(
             logger.info("TTS model download cancelled before starting.")
             return False
 
-        try:
-            from huggingface_hub import hf_hub_download
-        except ImportError:
-            logger.error(
-                "huggingface_hub is not installed. Cannot download models. "
-                "Install with: pip install huggingface_hub"
-            )
-            return False
-
         # Pre-flight connectivity check
         logger.info("Testing connectivity to Hugging Face...")
         try:
-            import requests as _req
-
-            resp = _req.head("https://huggingface.co", timeout=10)
+            resp = requests.head("https://huggingface.co", timeout=10)
             logger.info("Hugging Face reachable (HTTP %d).", resp.status_code)
         except Exception as conn_err:
             logger.error(
@@ -217,10 +214,19 @@ def download_tts_model(
             )
             return False
 
+        # Clean up any partial/stale download from a previous attempt
+        if target_dir.exists() and not is_tts_model_valid(target_dir):
+            logger.info("Cleaning up stale partial download at '%s'.", target_dir)
+            _cleanup_partial_download(target_dir)
+
         # Ensure target directory exists
         target_dir.mkdir(parents=True, exist_ok=True)
 
-        # Download each file
+        # Calculate total download size for progress reporting
+        total_bytes_all = 0
+        bytes_downloaded_all = 0
+
+        # Download each file via direct HTTPS streaming
         total_files = len(file_paths)
         for i, file_path in enumerate(file_paths):
             if cancel_event and cancel_event.is_set():
@@ -229,43 +235,69 @@ def download_tts_model(
                 return False
 
             file_name = file_path.split("/")[-1]
+            dest_path = target_dir / file_name
+
+            # Construct direct download URL
+            url = (
+                f"https://huggingface.co/{repo_id}"
+                f"/resolve/main/{file_path}"
+            )
             logger.info(
-                "Downloading file %d/%d: %s",
-                i + 1,
-                total_files,
-                file_name,
+                "Downloading file %d/%d: %s", i + 1, total_files, file_name
             )
 
-            # Report approximate progress based on file index
-            if on_progress and total_files > 0:
-                on_progress(i, total_files)
-
             try:
-                downloaded_path = hf_hub_download(
-                    repo_id=repo_id,
-                    filename=file_path,
-                    local_dir=str(target_dir),
-                    etag_timeout=10,
+                resp = requests.get(
+                    url,
+                    stream=True,
+                    timeout=(10, 30),
+                    allow_redirects=True,
+                    headers={"User-Agent": "VoicePaste/0.7"},
                 )
-                logger.info("Downloaded: %s", downloaded_path)
+                resp.raise_for_status()
+
+                file_total = int(resp.headers.get("content-length", 0))
+                total_bytes_all += file_total
+                file_downloaded = 0
+
+                with open(dest_path, "wb") as f:
+                    for chunk in resp.iter_content(chunk_size=64 * 1024):
+                        if cancel_event and cancel_event.is_set():
+                            logger.info("TTS model download cancelled.")
+                            f.close()
+                            _cleanup_partial_download(target_dir)
+                            return False
+
+                        f.write(chunk)
+                        file_downloaded += len(chunk)
+                        bytes_downloaded_all += len(chunk)
+
+                        if on_progress and total_bytes_all > 0:
+                            on_progress(bytes_downloaded_all, total_bytes_all)
+
+                logger.info(
+                    "Downloaded: %s (%d bytes)", dest_path, file_downloaded
+                )
 
             except Exception as e:
                 logger.error(
                     "Failed to download '%s': %s: %s",
-                    file_path,
+                    file_name,
                     type(e).__name__,
                     e,
                 )
                 _cleanup_partial_download(target_dir)
                 return False
 
-        # huggingface_hub downloads to subdirectories matching the repo path.
-        # We need to move the files to the root of target_dir.
-        _flatten_downloaded_files(target_dir, voice_name)
-
         # Report completion
-        if on_progress and total_files > 0:
-            on_progress(total_files, total_files)
+        if on_progress and total_bytes_all > 0:
+            on_progress(total_bytes_all, total_bytes_all)
+
+        # Post-download cancel check (consistent with model_manager.py)
+        if cancel_event and cancel_event.is_set():
+            logger.info("TTS model download cancelled after download.")
+            _cleanup_partial_download(target_dir)
+            return False
 
         # Verify the download
         if not is_tts_model_valid(target_dir):
@@ -286,54 +318,6 @@ def download_tts_model(
 
     finally:
         _download_lock.release()
-
-
-def _flatten_downloaded_files(target_dir: Path, voice_name: str) -> None:
-    """Move downloaded files from HF subdirectory structure to model root.
-
-    huggingface_hub's hf_hub_download with local_dir creates the full
-    repo path structure (e.g., de/de_DE/thorsten/medium/model.onnx).
-    We need the .onnx and .onnx.json files at the root of the voice
-    directory for the inference engine to find them.
-
-    Args:
-        target_dir: The model target directory.
-        voice_name: The voice name (used to find expected filenames).
-    """
-    # Find all .onnx and .onnx.json files recursively
-    onnx_files = list(target_dir.rglob("*.onnx"))
-    json_files = list(target_dir.rglob("*.onnx.json"))
-
-    moved = 0
-    for f in onnx_files + json_files:
-        if f.parent != target_dir:
-            dest = target_dir / f.name
-            if not dest.exists():
-                shutil.move(str(f), str(dest))
-                moved += 1
-                logger.debug("Moved %s -> %s", f, dest)
-
-    if moved > 0:
-        logger.info(
-            "Flattened %d files to model root: %s", moved, target_dir
-        )
-
-        # Clean up empty subdirectories
-        for dirpath in sorted(target_dir.rglob("*"), reverse=True):
-            if dirpath.is_dir() and dirpath != target_dir:
-                try:
-                    dirpath.rmdir()  # Only removes if empty
-                except OSError:
-                    pass
-
-    # Also clean up the .cache directory left by hf_hub_download
-    hf_cache = target_dir / ".cache"
-    if hf_cache.exists():
-        try:
-            shutil.rmtree(hf_cache)
-            logger.debug("Cleaned up HF cache directory: %s", hf_cache)
-        except OSError as e:
-            logger.debug("Could not remove HF cache: %s", e)
 
 
 def _cleanup_partial_download(target_dir: Path) -> None:
