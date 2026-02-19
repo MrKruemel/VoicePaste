@@ -11,7 +11,9 @@ class AppState(enum.Enum):
         RECORDING -> PROCESSING  (on hotkey press)
         RECORDING -> IDLE  (on Escape cancel, v0.2+)
         PROCESSING -> PASTING  (on STT/summarization complete)
+        PROCESSING -> SPEAKING  (on Ask AI + TTS pipeline, v0.6)
         PASTING -> IDLE  (on paste complete)
+        SPEAKING -> IDLE  (on TTS playback complete or Escape, v0.6)
         Any error state -> IDLE  (on error)
     """
 
@@ -19,11 +21,12 @@ class AppState(enum.Enum):
     RECORDING = "recording"
     PROCESSING = "processing"
     PASTING = "pasting"
+    SPEAKING = "speaking"
 
 
 # Application metadata
 APP_NAME = "Voice Paste"
-APP_VERSION = "0.5.0"
+APP_VERSION = "0.6.0"
 
 # Hotkey configuration
 # Hotkey history:
@@ -33,6 +36,10 @@ APP_VERSION = "0.5.0"
 DEFAULT_HOTKEY = "ctrl+alt+r"
 DEFAULT_PROMPT_HOTKEY = "ctrl+alt+a"
 CANCEL_HOTKEY = "escape"
+
+# v0.6: TTS hotkeys
+DEFAULT_TTS_HOTKEY = "ctrl+alt+t"          # T = Talk/TTS — read clipboard aloud
+DEFAULT_TTS_ASK_HOTKEY = "ctrl+alt+y"      # Y = adjacent to T — Ask AI + TTS
 
 # Audio configuration
 DEFAULT_SAMPLE_RATE = 16000
@@ -101,6 +108,7 @@ AUDIO_CUE_CANCEL_GAP_MS = 50        # Gap between cancel beeps
 KEYRING_SERVICE_NAME = "VoicePaste"
 KEYRING_OPENAI_KEY = "openai_api_key"
 KEYRING_OPENROUTER_KEY = "openrouter_api_key"
+KEYRING_ELEVENLABS_KEY = "elevenlabs_api_key"
 
 # --- v0.3: Provider configuration ---
 OPENROUTER_DEFAULT_BASE_URL = "https://openrouter.ai/api/v1"
@@ -171,3 +179,26 @@ LOCAL_MODEL_DISPLAY: dict[str, dict[str, str]] = {
         "ram_mb": "~1200",
     },
 }
+
+# --- v0.6: TTS (Text-to-Speech) configuration ---
+TTS_PROVIDERS = ("elevenlabs",)
+DEFAULT_TTS_PROVIDER = "elevenlabs"
+DEFAULT_TTS_VOICE_ID = "pFZP5JQG7iQjIQuC4Bku"  # Lily — ElevenLabs default
+DEFAULT_TTS_MODEL_ID = "eleven_flash_v2_5"        # Low-latency flash model
+DEFAULT_TTS_OUTPUT_FORMAT = "mp3_44100_128"
+
+# Predefined ElevenLabs voices for the Settings dropdown
+ELEVENLABS_VOICE_PRESETS: dict[str, dict[str, str]] = {
+    "pFZP5JQG7iQjIQuC4Bku": {"name": "Lily", "description": "Female, warm, DE/EN"},
+    "nPczCjzI2devNBz1zQrb": {"name": "Brian", "description": "Male, narrative, EN"},
+    "EXAVITQu4vr4xnSDxMaL": {"name": "Sarah", "description": "Female, soft, EN"},
+    "JBFqnCBsd6RMkjVDRZzb": {"name": "George", "description": "Male, warm, EN"},
+    "onwK4e9ZLuTAKqWW03F9": {"name": "Daniel", "description": "Male, authoritative, EN/DE"},
+}
+
+# TTS audio cue: confirmation tone when TTS stops (660 Hz -> 440 Hz, 75ms each)
+AUDIO_CUE_TTS_STOP_FREQS = (660, 440)
+AUDIO_CUE_TTS_STOP_DURATION_MS = 75
+
+# Max text length for TTS (prevent accidentally reading huge clipboard content)
+TTS_MAX_TEXT_LENGTH = 10000

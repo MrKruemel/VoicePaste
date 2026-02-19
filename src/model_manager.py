@@ -208,11 +208,14 @@ def _make_progress_tqdm_class(
         cause AttributeError crashes during model downloads.
         """
 
-        def __init__(self, *args: object, **kwargs: object) -> None:
+        _lock = _class_lock  # Required by tqdm.contrib.concurrent.ensure_lock
+
+        def __init__(self, iterable=None, *args: object, **kwargs: object) -> None:
             # Check cancellation when each new tqdm instance is created
             # (HF Hub creates one per file download)
             if cancel_event and cancel_event.is_set():
                 raise _CancelledError("Download cancelled by user.")
+            self.iterable = iterable
             self.total: int = int(kwargs.get("total", 0) or 0)
             self.n: int = int(kwargs.get("initial", 0) or 0)
             self.desc: str = str(kwargs.get("desc", "") or "")
@@ -279,6 +282,27 @@ def _make_progress_tqdm_class(
 
         def __exit__(self, *args: object) -> None:
             self.close()
+
+        def __iter__(self):
+            """Iterate over the wrapped iterable, updating progress.
+
+            Required by tqdm.contrib.concurrent.thread_map which calls
+            ``list(tqdm_class(executor.map(...), ...))`` and needs the
+            tqdm instance to be iterable.
+            """
+            if self.iterable is None:
+                return
+            for obj in self.iterable:
+                self._check_cancel()
+                self.n += 1
+                yield obj
+
+        def __len__(self) -> int:
+            if self.total:
+                return self.total
+            if self.iterable is not None and hasattr(self.iterable, "__len__"):
+                return len(self.iterable)
+            return 0
 
         def refresh(self, nolock: bool = False, lock_args: object = None) -> None:
             self._check_cancel()
@@ -383,12 +407,51 @@ def download_model(
         # Use huggingface_hub for the actual download
         try:
             from huggingface_hub import snapshot_download
+            import huggingface_hub as _hf_hub
+            logger.debug(
+                "huggingface_hub version: %s",
+                getattr(_hf_hub, "__version__", "unknown"),
+            )
         except ImportError:
             logger.error(
                 "huggingface_hub is not installed. Cannot download models. "
                 "Install with: pip install huggingface_hub"
             )
             return False
+
+        # Log environment info useful for debugging downloads
+        logger.debug(
+            "Download environment: "
+            "HF_HUB_DOWNLOAD_TIMEOUT=%s, "
+            "HF_HUB_CACHE=%s, "
+            "REQUESTS_CA_BUNDLE=%s, "
+            "SSL_CERT_FILE=%s, "
+            "HTTP_PROXY=%s, "
+            "HTTPS_PROXY=%s",
+            os.environ.get("HF_HUB_DOWNLOAD_TIMEOUT", "<not set>"),
+            os.environ.get("HF_HUB_CACHE", "<not set>"),
+            os.environ.get("REQUESTS_CA_BUNDLE", "<not set>"),
+            os.environ.get("SSL_CERT_FILE", "<not set>"),
+            os.environ.get("HTTP_PROXY", "<not set>"),
+            os.environ.get("HTTPS_PROXY", "<not set>"),
+        )
+
+        # Log SSL/certifi info for debugging certificate issues
+        try:
+            import ssl
+            logger.debug(
+                "SSL: version=%s, default_verify_paths=%s",
+                ssl.OPENSSL_VERSION,
+                ssl.get_default_verify_paths(),
+            )
+        except Exception as ssl_err:
+            logger.debug("Could not read SSL info: %s", ssl_err)
+
+        try:
+            import certifi
+            logger.debug("certifi: ca_bundle=%s", certifi.where())
+        except ImportError:
+            logger.debug("certifi not installed (using system CA bundle).")
 
         # Set HTTP timeout for actual file downloads (not just metadata).
         # Without this, GET requests use no timeout and can hang forever.
@@ -407,10 +470,20 @@ def download_model(
         logger.info("Testing connectivity to Hugging Face...")
         try:
             import requests as _req
-            _req.head("https://huggingface.co", timeout=10)
-            logger.info("Hugging Face reachable.")
+            logger.debug("requests version: %s", _req.__version__)
+            resp = _req.head("https://huggingface.co", timeout=10)
+            logger.debug(
+                "Hugging Face HEAD response: status=%d, headers=%s",
+                resp.status_code,
+                dict(resp.headers),
+            )
+            logger.info("Hugging Face reachable (HTTP %d).", resp.status_code)
         except Exception as conn_err:
-            logger.error("Cannot reach huggingface.co: %s", conn_err)
+            logger.error(
+                "Cannot reach huggingface.co: %s: %s",
+                type(conn_err).__name__,
+                conn_err,
+            )
             return False
 
         # Build a custom tqdm class that routes progress to our callback
@@ -418,7 +491,13 @@ def download_model(
         progress_cls = _make_progress_tqdm_class(on_progress, cancel_event)
 
         # Download only model-essential files (skip README, .gitattributes)
-        logger.info("Starting download (allow_patterns=%s)...", _MODEL_ALLOW_PATTERNS)
+        logger.info(
+            "Starting snapshot_download: repo_id=%s, local_dir=%s, "
+            "allow_patterns=%s, etag_timeout=10",
+            repo_id,
+            target_dir,
+            _MODEL_ALLOW_PATTERNS,
+        )
         try:
             downloaded_path = snapshot_download(
                 repo_id=repo_id,
@@ -455,6 +534,10 @@ def download_model(
                 type(e).__name__,
                 e,
             )
+            # Log full traceback at DEBUG level for --verbose diagnosis
+            logger.debug(
+                "Full traceback for download failure:", exc_info=True
+            )
             # Clean up partial download
             if target_dir.exists():
                 try:
@@ -483,10 +566,28 @@ def download_model(
             return False
 
         # Verify the download
+        logger.debug(
+            "Verifying downloaded model at '%s'...", target_dir
+        )
+        if target_dir.exists():
+            try:
+                files = list(target_dir.rglob("*"))
+                for f in files:
+                    if f.is_file():
+                        logger.debug(
+                            "  %s (%d bytes)",
+                            f.relative_to(target_dir),
+                            f.stat().st_size,
+                        )
+            except Exception as list_err:
+                logger.debug("Could not list model files: %s", list_err)
+
         if not _is_model_valid(target_dir):
             logger.error(
-                "Downloaded model '%s' is incomplete or corrupted.",
+                "Downloaded model '%s' is incomplete or corrupted. "
+                "Required files: %s",
                 model_size,
+                ["model.bin", "config.json"],
             )
             return False
 

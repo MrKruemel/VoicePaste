@@ -4,9 +4,9 @@
 # =============================================================================
 #
 # Produces a single portable .exe (--onefile) with all dependencies bundled,
-# including faster-whisper and CTranslate2 for offline speech-to-text.
-# Transcription works offline; summarization still requires an internet
-# connection (OpenAI API).
+# including faster-whisper and CTranslate2 for offline speech-to-text,
+# and ElevenLabs TTS with miniaudio for audio playback (v0.6).
+# Transcription works offline; summarization and TTS require internet.
 #
 # Entry point:  src/main.py
 # App name:     VoicePaste
@@ -17,15 +17,15 @@
 #   Debug:    pyinstaller voice_paste.spec -- --debug
 #   (or use build.bat for convenience)
 #
-# Expected output:  dist/VoicePaste.exe  (~100-150 MB)
+# Expected output:  dist/VoicePaste.exe  (~115-165 MB, +~15 MB from TTS deps)
 #
 # Prerequisites:
 #   pip install -r requirements.txt
 #
 # =============================================================================
-# NATIVE LIBRARY BUNDLING NOTES (2026-02-13)
+# NATIVE LIBRARY BUNDLING NOTES (updated 2026-02-18)
 # =============================================================================
-# This build bundles several packages with native C++/Rust DLLs that
+# This build bundles several packages with native C++/Rust/C DLLs that
 # PyInstaller's static import analysis CANNOT detect.  These must be
 # collected explicitly with collect_dynamic_libs() and added to `binaries`.
 #
@@ -37,6 +37,9 @@
 #                  onnxruntime_providers_shared.dll,
 #                  onnxruntime_pybind11_state.pyd
 # tokenizers       tokenizers.pyd                            ~6.5 MB
+# _miniaudio       _miniaudio.pyd (CFFI, contains miniaudio  ~0.6 MB  (v0.6)
+#                  C library statically linked)
+# websockets       speedups.cp3xx-win_amd64.pyd              ~12 KB   (v0.6)
 #
 # ctranslate2.__init__.py (lines 3-18) uses pkg_resources to find its
 # package directory, then calls os.add_dll_directory() and explicitly
@@ -44,7 +47,13 @@
 #   1. The DLLs MUST land in a `ctranslate2/` subdirectory.
 #   2. pkg_resources (setuptools) must be a hidden import.
 #
-# All native DLLs are excluded from UPX to prevent corruption.
+# _miniaudio.pyd is a CFFI compiled extension.  It is imported by
+# miniaudio.py via `from _miniaudio import ffi, lib`.  CFFI modules
+# require the cffi and _cffi_backend hidden imports to load correctly
+# in frozen mode.
+#
+# All native DLLs and .pyd extensions are excluded from UPX to prevent
+# corruption.
 #
 # =============================================================================
 # ONNXRUNTIME SEGFAULT FIX (2026-02-13)
@@ -318,15 +327,59 @@ _hidden_imports = [
 
     # --- sv_ttk (Sun Valley theme for modern tkinter UI) ---
     'sv_ttk',
+
+    # --- TTS: ElevenLabs SDK + miniaudio + websockets (v0.6) ---
+    # elevenlabs: Uses __getattr__ lazy imports with importlib.import_module.
+    # PyInstaller's static analysis CANNOT resolve these.
+    # We only need the text_to_speech and core subpackages (used by tts.py).
+    'elevenlabs',
+    'elevenlabs.client',
+    'elevenlabs.base_client',
+    'elevenlabs.environment',
+    'elevenlabs.realtime_tts',       # imports websockets.sync.client at module level
+    'elevenlabs.music_custom',
+    'elevenlabs.speech_to_text_custom',
+    'elevenlabs.webhooks_custom',
+    'elevenlabs.core',
+    'elevenlabs.core.api_error',
+    'elevenlabs.core.client_wrapper',
+    'elevenlabs.core.jsonable_encoder',
+    'elevenlabs.core.remove_none_from_dict',
+    'elevenlabs.core.request_options',
+    'elevenlabs.text_to_speech',
+    'elevenlabs.text_to_speech.client',
+    'elevenlabs.types',
+    'elevenlabs.types.voice_settings',
+    'elevenlabs.models',
+
+    # miniaudio: CFFI-based audio decoder.
+    # `from _miniaudio import ffi, lib` requires the CFFI runtime.
+    'miniaudio',
+    '_miniaudio',                    # CFFI compiled extension (.pyd)
+    'cffi',                          # CFFI runtime (required by _miniaudio)
+    '_cffi_backend',                 # CFFI C backend (.pyd)
+
+    # websockets: used by elevenlabs SDK for streaming support.
+    # Has a small C speedups extension (.pyd).
+    'websockets',
+    'websockets.asyncio',
+    'websockets.sync',
+    'websockets.sync.client',
+    'websockets.sync.connection',
+    'websockets.extensions',
+    'websockets.legacy',
 ]
 
 # ---------------------------------------------------------------------------
-# Collect all ctranslate2, faster_whisper, and onnxruntime submodules
+# Collect submodules for packages with lazy/dynamic imports
 # ---------------------------------------------------------------------------
 # These ensure that lazily-imported submodules are included in the bundle.
 # For onnxruntime, we filter out the heavy subpackages (quantization,
 # transformers, tools, backend) since we only need the capi/ inference core.
-for _pkg in ('ctranslate2', 'faster_whisper', 'onnxruntime'):
+# For elevenlabs, we filter out subpackages not used by our TTS integration
+# to avoid pulling in the entire SDK (~5000 types in __init__.py).
+for _pkg in ('ctranslate2', 'faster_whisper', 'onnxruntime', 'elevenlabs',
+             'websockets'):
     try:
         _subs = collect_submodules(_pkg)
         if _pkg == 'onnxruntime':
@@ -344,6 +397,13 @@ for _pkg in ('ctranslate2', 'faster_whisper', 'onnxruntime'):
             print(f'[voice_paste.spec] Collected {len(_subs)} onnxruntime '
                   f'submodules (excluded {_subs_before - len(_subs)} from '
                   f'quantization/transformers/tools/backend).')
+        elif _pkg == 'elevenlabs':
+            # The elevenlabs SDK is huge. We include all submodules because
+            # the __getattr__ lazy-import mechanism makes it impossible to
+            # predict which types get imported at runtime (e.g. via pydantic
+            # model validation). The size impact is pure Python (~11 MB source)
+            # which compresses well in the onefile archive.
+            print(f'[voice_paste.spec] Collected {len(_subs)} submodules for {_pkg}.')
         else:
             print(f'[voice_paste.spec] Collected {len(_subs)} submodules for {_pkg}.')
         _hidden_imports += _subs
@@ -461,9 +521,15 @@ _upx_exclude = [
     'onnxruntime_providers_shared.dll',
 
     # --- Python extension modules (.pyd) that wrap native code ---
-    # These are compiled C++/Rust extensions.  UPX may corrupt them.
+    # These are compiled C++/Rust/C extensions.  UPX may corrupt them.
     'onnxruntime_pybind11_state.pyd',
     'tokenizers.pyd',
+
+    # --- miniaudio CFFI extension (v0.6: TTS audio decoding) ---
+    # _miniaudio.pyd is a CFFI-compiled C extension (~587 KB) containing
+    # the entire miniaudio.h library statically linked.  UPX compression
+    # can corrupt CFFI modules due to their embedded function pointer tables.
+    '_miniaudio.pyd',
 ]
 
 # ---------------------------------------------------------------------------

@@ -19,6 +19,13 @@ from constants import (
     DEFAULT_PROMPT_HOTKEY,
     DEFAULT_STT_BACKEND,
     DEFAULT_SUMMARIZATION_PROVIDER,
+    DEFAULT_TTS_ASK_HOTKEY,
+    DEFAULT_TTS_HOTKEY,
+    DEFAULT_TTS_MODEL_ID,
+    DEFAULT_TTS_OUTPUT_FORMAT,
+    DEFAULT_TTS_PROVIDER,
+    DEFAULT_TTS_VOICE_ID,
+    KEYRING_ELEVENLABS_KEY,
     KEYRING_OPENAI_KEY,
     KEYRING_OPENROUTER_KEY,
     LOCAL_MODEL_SIZES,
@@ -38,6 +45,7 @@ from constants import (
     STT_BACKENDS,
     SUMMARIZE_MODEL,
     SUMMARIZE_SYSTEM_PROMPT,
+    TTS_PROVIDERS,
 )
 
 logger = logging.getLogger(__name__)
@@ -163,6 +171,16 @@ class AppConfig:
     local_compute_type: str = LOCAL_STT_DEFAULT_COMPUTE_TYPE
     vad_filter: bool = LOCAL_STT_DEFAULT_VAD_FILTER
 
+    # --- v0.6: TTS (Text-to-Speech) fields ---
+    tts_enabled: bool = False
+    tts_provider: str = DEFAULT_TTS_PROVIDER
+    elevenlabs_api_key: str = ""
+    tts_voice_id: str = DEFAULT_TTS_VOICE_ID
+    tts_model_id: str = DEFAULT_TTS_MODEL_ID
+    tts_output_format: str = DEFAULT_TTS_OUTPUT_FORMAT
+    tts_hotkey: str = DEFAULT_TTS_HOTKEY
+    tts_ask_hotkey: str = DEFAULT_TTS_ASK_HOTKEY
+
     @property
     def config_path(self) -> Path:
         """Path to the config.toml file."""
@@ -256,6 +274,9 @@ class AppConfig:
 combination = "{esc(self.hotkey)}"
 # Voice Prompt hotkey: record speech, send as prompt to LLM, paste answer
 prompt_combination = "{esc(self.prompt_hotkey)}"
+# TTS hotkeys (v0.6): read clipboard aloud / ask AI + TTS
+tts_combination = "{esc(self.tts_hotkey)}"
+tts_ask_combination = "{esc(self.tts_ask_hotkey)}"
 
 [transcription]
 # Backend: "cloud" (OpenAI Whisper API) or "local" (faster-whisper, offline)
@@ -275,6 +296,14 @@ provider = "{esc(self.summarization_provider)}"
 model = "{esc(self.summarization_model)}"
 base_url = "{esc(self.summarization_base_url)}"
 custom_prompt = "{esc(self.summarization_custom_prompt)}"
+
+[tts]
+# Text-to-Speech (v0.6): read text aloud via ElevenLabs
+enabled = {str(self.tts_enabled).lower()}
+provider = "{esc(self.tts_provider)}"
+voice_id = "{esc(self.tts_voice_id)}"
+model_id = "{esc(self.tts_model_id)}"
+output_format = "{esc(self.tts_output_format)}"
 
 [feedback]
 audio_cues = {str(self.audio_cues_enabled).lower()}
@@ -379,6 +408,7 @@ def load_config() -> Optional[AppConfig]:
     summarization_section = data.get("summarization", {})
     feedback_section = data.get("feedback", {})
     transcription_section = data.get("transcription", {})
+    tts_section = data.get("tts", {})
 
     toml_api_key = api_section.get("openai_api_key", "").strip()
     hotkey = hotkey_section.get("combination", DEFAULT_HOTKEY)
@@ -500,9 +530,56 @@ def load_config() -> Optional[AppConfig]:
     else:
         prompt_hotkey = DEFAULT_PROMPT_HOTKEY
 
+    # --- v0.6: TTS hotkeys ---
+    tts_hotkey = hotkey_section.get("tts_combination", DEFAULT_TTS_HOTKEY)
+    if tts_hotkey and tts_hotkey.strip():
+        tts_hotkey = tts_hotkey.strip()
+        try:
+            import keyboard as _kb
+            _kb.parse_hotkey(tts_hotkey)
+            logger.info("TTS hotkey configured: '%s'", tts_hotkey)
+        except Exception as e:
+            logger.warning(
+                "Invalid TTS hotkey '%s': %s. Falling back to '%s'.",
+                tts_hotkey, e, DEFAULT_TTS_HOTKEY,
+            )
+            tts_hotkey = DEFAULT_TTS_HOTKEY
+    else:
+        tts_hotkey = DEFAULT_TTS_HOTKEY
+
+    tts_ask_hotkey = hotkey_section.get("tts_ask_combination", DEFAULT_TTS_ASK_HOTKEY)
+    if tts_ask_hotkey and tts_ask_hotkey.strip():
+        tts_ask_hotkey = tts_ask_hotkey.strip()
+        try:
+            import keyboard as _kb
+            _kb.parse_hotkey(tts_ask_hotkey)
+            logger.info("TTS Ask hotkey configured: '%s'", tts_ask_hotkey)
+        except Exception as e:
+            logger.warning(
+                "Invalid TTS Ask hotkey '%s': %s. Falling back to '%s'.",
+                tts_ask_hotkey, e, DEFAULT_TTS_ASK_HOTKEY,
+            )
+            tts_ask_hotkey = DEFAULT_TTS_ASK_HOTKEY
+    else:
+        tts_ask_hotkey = DEFAULT_TTS_ASK_HOTKEY
+
+    # --- v0.6: TTS configuration ---
+    tts_enabled = tts_section.get("enabled", False)
+    tts_provider = tts_section.get("provider", DEFAULT_TTS_PROVIDER)
+    if tts_provider not in TTS_PROVIDERS:
+        logger.warning(
+            "Invalid TTS provider '%s'. Falling back to '%s'.",
+            tts_provider, DEFAULT_TTS_PROVIDER,
+        )
+        tts_provider = DEFAULT_TTS_PROVIDER
+    tts_voice_id = tts_section.get("voice_id", DEFAULT_TTS_VOICE_ID)
+    tts_model_id = tts_section.get("model_id", DEFAULT_TTS_MODEL_ID)
+    tts_output_format = tts_section.get("output_format", DEFAULT_TTS_OUTPUT_FORMAT)
+
     # --- v0.3: Keyring integration for API keys ---
     openai_api_key = ""
     openrouter_api_key = ""
+    elevenlabs_api_key = ""
 
     try:
         import keyring_store
@@ -523,6 +600,12 @@ def load_config() -> Optional[AppConfig]:
             if kr_openrouter_key:
                 openrouter_api_key = kr_openrouter_key
                 logger.info("OpenRouter API key loaded from Credential Manager.")
+
+            # v0.6: ElevenLabs API key
+            kr_elevenlabs_key = keyring_store.get_credential(KEYRING_ELEVENLABS_KEY)
+            if kr_elevenlabs_key:
+                elevenlabs_api_key = kr_elevenlabs_key
+                logger.info("ElevenLabs API key loaded from Credential Manager.")
         else:
             # Keyring not available -- fall back to config.toml
             if toml_api_key:
@@ -552,6 +635,15 @@ def load_config() -> Optional[AppConfig]:
         local_device=local_device,
         local_compute_type=local_compute_type,
         vad_filter=vad_filter,
+        # v0.6: TTS fields
+        tts_enabled=bool(tts_enabled),
+        tts_provider=tts_provider,
+        elevenlabs_api_key=elevenlabs_api_key,
+        tts_voice_id=tts_voice_id,
+        tts_model_id=tts_model_id,
+        tts_output_format=tts_output_format,
+        tts_hotkey=tts_hotkey,
+        tts_ask_hotkey=tts_ask_hotkey,
     )
 
     # REQ-S01: Only log the masked key
@@ -573,5 +665,12 @@ def load_config() -> Optional[AppConfig]:
         "on" if config.vad_filter else "off",
     )
     logger.debug("App directory: %s", config.app_directory)
+    logger.debug(
+        "TTS: %s (provider=%s, voice=%s, model=%s)",
+        "enabled" if config.tts_enabled else "disabled",
+        config.tts_provider,
+        config.tts_voice_id,
+        config.tts_model_id,
+    )
 
     return config

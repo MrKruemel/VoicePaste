@@ -50,6 +50,7 @@ from constants import (
     LOG_DATE_FORMAT,
     LOG_FORMAT,
     PROMPT_SYSTEM_PROMPT,
+    TTS_MAX_TEXT_LENGTH,
 )
 from config import AppConfig, load_config
 from audio import AudioRecorder
@@ -58,6 +59,8 @@ from summarizer import CloudLLMSummarizer, PassthroughSummarizer, SummarizerErro
 from paste import clipboard_backup, clipboard_restore, paste_text
 from hotkey import HotkeyManager
 from tray import TrayManager
+from tts import TTSError, create_tts_backend
+from audio_playback import AudioPlayer
 from notifications import (
     play_cancel_cue,
     play_error_cue,
@@ -182,7 +185,7 @@ def _release_single_instance_mutex(handle: ctypes.wintypes.HANDLE) -> None:
         logger.exception("Error releasing single-instance mutex.")
 
 
-def setup_logging(config: AppConfig) -> None:
+def setup_logging(config: AppConfig, force_debug: bool = False) -> None:
     """Configure logging to file and console.
 
     REQ-S01: API key is never logged (handled by config.masked_api_key).
@@ -191,8 +194,10 @@ def setup_logging(config: AppConfig) -> None:
 
     Args:
         config: Application configuration with log level and paths.
+        force_debug: If True, override config log level with DEBUG
+            (used by --verbose CLI flag).
     """
-    log_level = getattr(logging, config.log_level, logging.INFO)
+    log_level = logging.DEBUG if force_debug else getattr(logging, config.log_level, logging.INFO)
 
     # Root logger configuration
     root_logger = logging.getLogger()
@@ -251,7 +256,7 @@ class VoicePasteApp:
         self.config = config
         self._state = AppState.IDLE
         self._state_lock = threading.Lock()
-        self._active_mode: str = "summary"  # "summary" or "prompt"
+        self._active_mode: str = "summary"  # "summary", "prompt", "tts", "tts_ask"
 
         # Initialize components
         self._recorder = AudioRecorder(on_auto_stop=self._on_auto_stop)
@@ -268,9 +273,16 @@ class VoicePasteApp:
         # v0.3: Build summarizer from config (provider, model, base_url, prompt)
         self._rebuild_summarizer()
 
+        # v0.6: TTS backend and audio player
+        self._tts = None
+        self._audio_player = AudioPlayer()
+        self._rebuild_tts()
+
         self._hotkey_manager = HotkeyManager(
             hotkey=config.hotkey,
             prompt_hotkey=config.prompt_hotkey,
+            tts_hotkey=config.tts_hotkey,
+            tts_ask_hotkey=config.tts_ask_hotkey,
         )
 
         # v0.3: TrayManager gets settings callback and state accessor
@@ -342,6 +354,142 @@ class VoicePasteApp:
             config.active_summarization_base_url or "(default)",
         )
 
+    def _rebuild_tts(self) -> None:
+        """(Re)create the TTS backend based on current config.
+
+        Called on init and after settings changes (hot-reload).
+        """
+        config = self.config
+        if not config.tts_enabled:
+            self._tts = None
+            logger.info("TTS disabled.")
+            return
+
+        self._tts = create_tts_backend(
+            api_key=config.elevenlabs_api_key,
+            provider=config.tts_provider,
+            voice_id=config.tts_voice_id,
+            model_id=config.tts_model_id,
+            output_format=config.tts_output_format,
+        )
+        if self._tts is not None:
+            logger.info("TTS backend ready: %s", config.tts_provider)
+        else:
+            logger.warning("TTS backend unavailable (no API key?).")
+
+    def _on_tts_hotkey(self) -> None:
+        """Handle the TTS clipboard readout hotkey (Ctrl+Alt+T).
+
+        Reads the current clipboard text and speaks it aloud via TTS.
+        If already SPEAKING, stops the current playback.
+        """
+        current = self.state
+        logger.info("TTS hotkey invoked. State: %s", current.value)
+
+        if current == AppState.SPEAKING:
+            logger.info("Stopping TTS playback.")
+            self._audio_player.stop()
+            return
+
+        if current != AppState.IDLE:
+            logger.info("TTS hotkey ignored (state=%s).", current.value)
+            return
+
+        if not self._tts:
+            self._show_error(
+                "TTS is not configured.\n"
+                "Right-click tray > Settings > Text-to-Speech."
+            )
+            return
+
+        # Read clipboard content using ctypes-based clipboard API (paste.py)
+        text = clipboard_backup()
+        if text is None:
+            text = ""
+
+        text = text.strip() if text else ""
+        if not text:
+            self._tray_manager.notify(APP_NAME, "Clipboard is empty.")
+            return
+
+        if len(text) > TTS_MAX_TEXT_LENGTH:
+            self._tray_manager.notify(
+                APP_NAME,
+                f"Text too long for TTS ({len(text)} chars, max {TTS_MAX_TEXT_LENGTH}).",
+            )
+            return
+
+        # Start TTS pipeline in worker thread
+        self._set_state(AppState.PROCESSING)
+        thread = threading.Thread(
+            target=self._run_tts_pipeline,
+            args=(text,),
+            daemon=True,
+            name="tts-worker",
+        )
+        thread.start()
+
+    def _on_tts_ask_hotkey(self) -> None:
+        """Handle the TTS Ask AI + readout hotkey (Ctrl+Alt+Y).
+
+        Records speech, transcribes, sends to LLM, then reads the
+        LLM answer aloud via TTS. The answer is also placed on the
+        clipboard (but NOT auto-pasted).
+        """
+        current = self.state
+        logger.info("TTS Ask hotkey invoked. State: %s", current.value)
+
+        if current == AppState.SPEAKING:
+            logger.info("Stopping TTS playback.")
+            self._audio_player.stop()
+            return
+
+        if current == AppState.IDLE:
+            if not self._tts:
+                self._show_error(
+                    "TTS is not configured.\n"
+                    "Right-click tray > Settings > Text-to-Speech."
+                )
+                return
+            logger.info("Transition: IDLE -> RECORDING (tts_ask mode)")
+            self._active_mode = "tts_ask"
+            self._start_recording()
+        elif current == AppState.RECORDING:
+            logger.info("Transition: RECORDING -> PROCESSING")
+            self._stop_recording_and_process()
+        else:
+            logger.info("TTS Ask hotkey ignored (state=%s).", current.value)
+
+    def _run_tts_pipeline(self, text: str) -> None:
+        """Synthesize text and play audio. Runs in a worker thread.
+
+        Args:
+            text: Text to synthesize and play.
+        """
+        try:
+            # Synthesize
+            audio_data = self._tts.synthesize(text)
+
+            # Play
+            self._set_state(AppState.SPEAKING)
+
+            # Register Escape to stop TTS
+            self._hotkey_manager.register_cancel(self._on_cancel)
+
+            self._audio_player.play(audio_data)
+
+        except TTSError as e:
+            logger.error("TTS error: %s", e)
+            self._show_error(f"TTS error:\n{e}")
+
+        except Exception:
+            logger.exception("Unexpected error in TTS pipeline.")
+            self._show_error("TTS playback failed.\nCheck the log file.")
+
+        finally:
+            self._hotkey_manager.unregister_cancel()
+            self._set_state(AppState.IDLE)
+
     def _open_settings(self) -> None:
         """Open the settings dialog. Called from tray menu (pystray thread)."""
         from settings_dialog import open_settings_dialog
@@ -394,6 +542,19 @@ class VoicePasteApp:
                 )
             else:
                 logger.warning("STT backend unavailable after settings change.")
+
+        # v0.6: Determine if TTS backend needs rebuild
+        tts_keys = {
+            "tts_enabled",
+            "elevenlabs_api_key",
+            "tts_provider",
+            "tts_voice_id",
+            "tts_model_id",
+            "tts_output_format",
+        }
+        if changed_fields.keys() & tts_keys:
+            self._rebuild_tts()
+            logger.info("TTS backend rebuilt with updated settings.")
 
         # Determine if summarizer needs rebuild
         summarizer_keys = {
@@ -491,12 +652,19 @@ class VoicePasteApp:
     def _on_cancel(self) -> None:
         """Handle the Escape cancel hotkey.
 
-        Only active during RECORDING state. Discards audio, returns to IDLE.
+        Active during RECORDING state (discards audio) and SPEAKING state
+        (stops TTS playback). Returns to IDLE.
         """
         current = self.state
 
+        if current == AppState.SPEAKING:
+            logger.info("TTS playback cancelled by user.")
+            self._audio_player.stop()
+            # State transition happens in _run_tts_pipeline finally block
+            return
+
         if current != AppState.RECORDING:
-            logger.debug("Cancel pressed outside RECORDING state, ignored.")
+            logger.debug("Cancel pressed outside RECORDING/SPEAKING state, ignored.")
             return
 
         logger.info("Recording cancelled by user.")
@@ -648,7 +816,7 @@ class VoicePasteApp:
                 return
 
             # Step 2: Summarize or Prompt (v0.5: voice prompt mode)
-            if self._active_mode == "prompt":
+            if self._active_mode in ("prompt", "tts_ask"):
                 logger.info("Prompt mode: sending transcript as prompt to LLM.")
                 summary = self._summarizer.summarize(
                     transcript, system_prompt=PROMPT_SYSTEM_PROMPT
@@ -663,7 +831,33 @@ class VoicePasteApp:
                 self._set_state(AppState.IDLE)
                 return
 
-            # Step 3: Paste
+            # v0.6: TTS Ask mode — speak the answer instead of pasting
+            if self._active_mode == "tts_ask" and self._tts:
+                # Put answer on clipboard (silently, no paste) using ctypes API
+                clipboard_restore(summary)
+                logger.info("AI answer placed on clipboard.")
+
+                # Prevent the finally block from overwriting the AI answer
+                clip_backup = None
+
+                # Synthesize and speak
+                try:
+                    tts_audio = self._tts.synthesize(summary)
+                    self._set_state(AppState.SPEAKING)
+                    self._hotkey_manager.register_cancel(self._on_cancel)
+                    self._audio_player.play(tts_audio)
+                except TTSError as e:
+                    logger.error("TTS error in Ask+TTS pipeline: %s", e)
+                    self._tray_manager.notify(
+                        APP_NAME,
+                        f"Could not read answer aloud.\n"
+                        f"Answer copied to clipboard.\n{e}",
+                    )
+                finally:
+                    self._hotkey_manager.unregister_cancel()
+                return
+
+            # Step 3: Paste (normal flow)
             self._set_state(AppState.PASTING)
             success = paste_text(summary)
 
@@ -754,6 +948,10 @@ class VoicePasteApp:
         logger.info("Shutting down %s...", APP_NAME)
         self._shutdown_event.set()
 
+        # Stop TTS playback if active (v0.6)
+        if self._audio_player.is_playing:
+            self._audio_player.stop()
+
         # Stop recording if active
         if self._recorder.is_recording:
             self._recorder.stop()
@@ -786,12 +984,13 @@ class VoicePasteApp:
                 a user-visible error message.
         """
         logger.info(
-            "Starting %s v%s (hotkey=%s, stt=%s, summarization=%s, audio_cues=%s)",
+            "Starting %s v%s (hotkey=%s, stt=%s, summarization=%s, tts=%s, audio_cues=%s)",
             APP_NAME,
             APP_VERSION,
             self.config.hotkey,
             self.config.stt_backend,
             "on" if self.config.summarization_enabled else "off",
+            "on" if self.config.tts_enabled else "off",
             "on" if self.config.audio_cues_enabled else "off",
         )
 
@@ -823,11 +1022,30 @@ class VoicePasteApp:
                 exc,
             )
 
+        # v0.6: Register TTS hotkeys (non-fatal if registration fails)
+        if self.config.tts_enabled:
+            try:
+                self._hotkey_manager.register_tts(self._on_tts_hotkey)
+            except Exception as exc:
+                logger.warning(
+                    "Failed to register TTS hotkey '%s': %s",
+                    self.config.tts_hotkey, exc,
+                )
+            try:
+                self._hotkey_manager.register_tts_ask(self._on_tts_ask_hotkey)
+            except Exception as exc:
+                logger.warning(
+                    "Failed to register TTS Ask hotkey '%s': %s",
+                    self.config.tts_ask_hotkey, exc,
+                )
+
         logger.info(
-            "Hotkeys registered: summary='%s', prompt='%s'. "
+            "Hotkeys registered: summary='%s', prompt='%s', tts='%s', tts_ask='%s'. "
             "Waiting for user input.",
             self.config.hotkey,
             self.config.prompt_hotkey,
+            self.config.tts_hotkey if self.config.tts_enabled else "(disabled)",
+            self.config.tts_ask_hotkey if self.config.tts_enabled else "(disabled)",
         )
 
         # Run tray on main thread (blocks until stop)
@@ -849,7 +1067,7 @@ def main() -> None:
     Windows message box so the user is never left with a silent exit.
 
     Startup sequence:
-        1. Parse --debug flag and allocate console if requested.
+        1. Parse --debug/--verbose flags and allocate console if requested.
         2. Set up bootstrap logging.
         3. Acquire single-instance mutex (REQ-S27).
         4. Load and validate configuration.
@@ -857,21 +1075,41 @@ def main() -> None:
         6. Create and run the application (tray + hotkey).
 
     Each step that can fail shows a MessageBox before exiting.
+
+    CLI flags:
+        --debug: Allocate a console window (for --noconsole builds).
+        --verbose: Force log level to DEBUG and enable verbose logging
+            for third-party libraries (huggingface_hub, urllib3, requests).
+            Useful for diagnosing model download issues.
     """
     # ----------------------------------------------------------------
-    # Step 0: --debug flag -- allocate a console for the release build
+    # Step 0: --debug/--verbose flags
     # ----------------------------------------------------------------
-    if "--debug" in sys.argv:
+    verbose_mode = "--verbose" in sys.argv
+
+    if "--debug" in sys.argv or verbose_mode:
         _enable_debug_console()
 
     # ----------------------------------------------------------------
     # Step 1: Bootstrap logging (console + minimal format)
     # ----------------------------------------------------------------
+    bootstrap_level = logging.DEBUG if verbose_mode else logging.INFO
     logging.basicConfig(
-        level=logging.INFO,
+        level=bootstrap_level,
         format=LOG_FORMAT,
         datefmt=LOG_DATE_FORMAT,
     )
+
+    # --verbose: enable DEBUG logging for model download libraries
+    if verbose_mode:
+        for lib_logger_name in (
+            "huggingface_hub",
+            "urllib3",
+            "requests",
+            "filelock",
+        ):
+            logging.getLogger(lib_logger_name).setLevel(logging.DEBUG)
+        logger.info("Verbose mode enabled (--verbose). All loggers set to DEBUG.")
 
     logger.info("=" * 60)
     logger.info("%s v%s starting up...", APP_NAME, APP_VERSION)
@@ -942,8 +1180,9 @@ def main() -> None:
 
         # ------------------------------------------------------------
         # Step 4: Reconfigure logging with config settings
+        # --verbose overrides the config.toml log level to DEBUG
         # ------------------------------------------------------------
-        setup_logging(config)
+        setup_logging(config, force_debug=verbose_mode)
 
         # ------------------------------------------------------------
         # Step 5: Create and run the application

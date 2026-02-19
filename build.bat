@@ -15,7 +15,7 @@ REM   - PyInstaller installed:  pip install pyinstaller
 REM   - pip install -r requirements.txt
 REM
 REM Output:
-REM   dist\VoicePaste.exe         (~100-150 MB)
+REM   dist\VoicePaste.exe         (~115-165 MB, includes TTS deps since v0.6)
 REM   dist\config.example.toml    (copied alongside the .exe)
 REM ==========================================================================
 

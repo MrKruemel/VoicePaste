@@ -6,7 +6,7 @@
 # PyInstaller bundling. Do NOT loosen to >= without updating the .spec file
 # and re-testing the built .exe.
 # Last pinned: 2026-02-13 from environment via `pip freeze`
-# Updated: 2026-02-13 for v0.3 (keyring support) + v0.4 (local STT)
+# Updated: 2026-02-18 for v0.6 (TTS: elevenlabs, miniaudio, websockets, cffi)
 
 # ---------------------------------------------------------------------------
 # Audio capture
@@ -66,6 +66,14 @@ ctranslate2==4.6.1          # Inference engine (C++ with Python bindings)
 huggingface-hub==0.29.3     # Model download from Hugging Face Hub
 tokenizers==0.21.1          # Fast tokenizers (ctranslate2/faster-whisper dep)
 onnxruntime==1.24.1         # ONNX runtime (Silero VAD in faster-whisper)
+
+# ---------------------------------------------------------------------------
+# Text-to-Speech: ElevenLabs + audio decoding (v0.6)
+# ---------------------------------------------------------------------------
+elevenlabs==2.36.0          # ElevenLabs TTS API client
+miniaudio==1.61             # MP3 decoding (single C extension, no ffmpeg needed)
+websockets==16.0            # ElevenLabs SDK dependency (streaming support)
+cffi==2.0.0                 # CFFI runtime -- required by miniaudio's _miniaudio.pyd
 
 # ---------------------------------------------------------------------------
 # Transitive dependencies for local STT (pinned for PyInstaller)

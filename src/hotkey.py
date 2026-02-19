@@ -14,7 +14,14 @@ from typing import Callable, Optional
 
 import keyboard as kb
 
-from constants import CANCEL_HOTKEY, DEFAULT_HOTKEY, DEFAULT_PROMPT_HOTKEY, HOTKEY_DEBOUNCE_MS
+from constants import (
+    CANCEL_HOTKEY,
+    DEFAULT_HOTKEY,
+    DEFAULT_PROMPT_HOTKEY,
+    DEFAULT_TTS_ASK_HOTKEY,
+    DEFAULT_TTS_HOTKEY,
+    HOTKEY_DEBOUNCE_MS,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -34,6 +41,8 @@ class HotkeyManager:
         self,
         hotkey: str = DEFAULT_HOTKEY,
         prompt_hotkey: str = DEFAULT_PROMPT_HOTKEY,
+        tts_hotkey: str = DEFAULT_TTS_HOTKEY,
+        tts_ask_hotkey: str = DEFAULT_TTS_ASK_HOTKEY,
         debounce_ms: int = HOTKEY_DEBOUNCE_MS,
     ) -> None:
         """Initialize the hotkey manager.
@@ -41,22 +50,34 @@ class HotkeyManager:
         Args:
             hotkey: Hotkey combination string (default from constants.DEFAULT_HOTKEY).
             prompt_hotkey: Voice Prompt hotkey combination string.
+            tts_hotkey: TTS clipboard readout hotkey (v0.6).
+            tts_ask_hotkey: TTS Ask AI + readout hotkey (v0.6).
             debounce_ms: Debounce window in milliseconds.
         """
         self.hotkey = hotkey
         self.prompt_hotkey = prompt_hotkey
+        self.tts_hotkey = tts_hotkey
+        self.tts_ask_hotkey = tts_ask_hotkey
         self.debounce_ms = debounce_ms
         self._callback: Optional[Callable[[], None]] = None
         self._cancel_callback: Optional[Callable[[], None]] = None
         self._prompt_callback: Optional[Callable[[], None]] = None
+        self._tts_callback: Optional[Callable[[], None]] = None
+        self._tts_ask_callback: Optional[Callable[[], None]] = None
         self._last_trigger_time: float = 0.0
         self._last_prompt_trigger_time: float = 0.0
+        self._last_tts_trigger_time: float = 0.0
+        self._last_tts_ask_trigger_time: float = 0.0
         self._registered = False
         self._cancel_registered = False
         self._prompt_registered = False
+        self._tts_registered = False
+        self._tts_ask_registered = False
         self._hotkey_handle: Optional[object] = None
         self._cancel_handle: Optional[object] = None
         self._prompt_handle: Optional[object] = None
+        self._tts_handle: Optional[object] = None
+        self._tts_ask_handle: Optional[object] = None
         self._lock = threading.Lock()
 
     def register(self, callback: Callable[[], None]) -> None:
@@ -210,6 +231,78 @@ class HotkeyManager:
         else:
             logger.warning("Prompt hotkey fired but no callback registered.")
 
+    def register_tts(self, callback: Callable[[], None]) -> None:
+        """Register the TTS clipboard readout hotkey (v0.6).
+
+        Args:
+            callback: Function to call when the TTS hotkey is pressed.
+        """
+        self._tts_callback = callback
+
+        logger.info("Attempting to register TTS hotkey: '%s'", self.tts_hotkey)
+
+        try:
+            self._tts_handle = kb.add_hotkey(
+                self.tts_hotkey, self._on_tts_hotkey, suppress=False
+            )
+            self._tts_registered = True
+            logger.info("TTS hotkey registered: '%s'", self.tts_hotkey)
+        except Exception as e:
+            logger.warning(
+                "Failed to register TTS hotkey '%s': %s", self.tts_hotkey, e
+            )
+
+    def _on_tts_hotkey(self) -> None:
+        """Internal TTS hotkey handler with debounce."""
+        with self._lock:
+            now = time.monotonic()
+            elapsed_ms = (now - self._last_tts_trigger_time) * 1000
+            if elapsed_ms < self.debounce_ms:
+                return
+            self._last_tts_trigger_time = now
+
+        if self._tts_callback:
+            try:
+                self._tts_callback()
+            except Exception:
+                logger.exception("Error in TTS hotkey callback.")
+
+    def register_tts_ask(self, callback: Callable[[], None]) -> None:
+        """Register the TTS Ask AI + readout hotkey (v0.6).
+
+        Args:
+            callback: Function to call when the TTS Ask hotkey is pressed.
+        """
+        self._tts_ask_callback = callback
+
+        logger.info("Attempting to register TTS Ask hotkey: '%s'", self.tts_ask_hotkey)
+
+        try:
+            self._tts_ask_handle = kb.add_hotkey(
+                self.tts_ask_hotkey, self._on_tts_ask_hotkey, suppress=False
+            )
+            self._tts_ask_registered = True
+            logger.info("TTS Ask hotkey registered: '%s'", self.tts_ask_hotkey)
+        except Exception as e:
+            logger.warning(
+                "Failed to register TTS Ask hotkey '%s': %s", self.tts_ask_hotkey, e
+            )
+
+    def _on_tts_ask_hotkey(self) -> None:
+        """Internal TTS Ask hotkey handler with debounce."""
+        with self._lock:
+            now = time.monotonic()
+            elapsed_ms = (now - self._last_tts_ask_trigger_time) * 1000
+            if elapsed_ms < self.debounce_ms:
+                return
+            self._last_tts_ask_trigger_time = now
+
+        if self._tts_ask_callback:
+            try:
+                self._tts_ask_callback()
+            except Exception:
+                logger.exception("Error in TTS Ask hotkey callback.")
+
     def register_cancel(self, callback: Callable[[], None]) -> None:
         """Register the Escape key as a cancel hotkey.
 
@@ -262,9 +355,25 @@ class HotkeyManager:
                 self._cancel_handle = None
 
     def unregister(self) -> None:
-        """Unregister all hotkeys (main + prompt + cancel)."""
+        """Unregister all hotkeys (main + prompt + cancel + TTS)."""
         # Unregister cancel first
         self.unregister_cancel()
+
+        # Unregister TTS hotkeys (v0.6)
+        for attr_reg, attr_handle, label in [
+            ("_tts_registered", "_tts_handle", "TTS"),
+            ("_tts_ask_registered", "_tts_ask_handle", "TTS Ask"),
+        ]:
+            if getattr(self, attr_reg) and getattr(self, attr_handle) is not None:
+                try:
+                    kb.remove_hotkey(getattr(self, attr_handle))
+                    setattr(self, attr_reg, False)
+                    setattr(self, attr_handle, None)
+                    logger.info("%s hotkey unregistered.", label)
+                except Exception as e:
+                    logger.warning("Failed to unregister %s hotkey: %s", label, e)
+                    setattr(self, attr_reg, False)
+                    setattr(self, attr_handle, None)
 
         # Unregister prompt hotkey
         if self._prompt_registered and self._prompt_handle is not None:

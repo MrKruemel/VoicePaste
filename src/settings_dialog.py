@@ -498,6 +498,12 @@ class SettingsDialog:
         )
         # Don't pack yet — _update_model_status will show/hide it
 
+        self._delete_btn = ttk.Button(
+            status_row, text="Delete", width=8,
+            command=self._on_delete_clicked,
+        )
+        # Don't pack yet — _update_model_status will show/hide it
+
         # Progress bar row (hidden by default)
         self._progress_frame = ttk.Frame(self._local_frame)
 
@@ -679,7 +685,113 @@ class SettingsDialog:
             self._openrouter_key_btn,
         ]
 
-        # === Section 3: General ===
+        # === Section 3: Text-to-Speech (v0.6) ===
+        tts_frame = ttk.LabelFrame(
+            main_frame, text="Text-to-Speech", padding=(10, 8)
+        )
+        tts_frame.pack(fill=tk.X, pady=(0, 8))
+
+        # Enable checkbox
+        self._tts_enabled_var = tk.BooleanVar()
+        self._tts_checkbox = ttk.Checkbutton(
+            tts_frame,
+            text="Enable Text-to-Speech",
+            variable=self._tts_enabled_var,
+            command=self._on_tts_toggled,
+        )
+        self._tts_checkbox.pack(fill=tk.X, pady=(0, 6))
+
+        # ElevenLabs API Key row
+        tts_key_row = ttk.Frame(tts_frame)
+        tts_key_row.pack(fill=tk.X, pady=(0, 2))
+
+        ttk.Label(tts_key_row, text="API Key:", width=10, anchor=tk.W).pack(side=tk.LEFT)
+
+        self._elevenlabs_key_var = tk.StringVar()
+        self._elevenlabs_key_entry = ttk.Entry(
+            tts_key_row, textvariable=self._elevenlabs_key_var, show="*", width=40
+        )
+        self._elevenlabs_key_entry.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(4, 4))
+
+        self._elevenlabs_key_btn = ttk.Button(
+            tts_key_row, text="Edit", width=6, command=self._toggle_elevenlabs_key_edit
+        )
+        self._elevenlabs_key_btn.pack(side=tk.LEFT)
+
+        # Track editing state for ElevenLabs key
+        self._elevenlabs_key_editing = False
+        self._elevenlabs_key_actual = config.elevenlabs_api_key
+
+        tts_key_hint = ttk.Label(
+            tts_frame,
+            text="Get a key at elevenlabs.io. Stored in Windows Credential Manager.",
+            foreground="#999999",
+            font=("", 8),
+        )
+        tts_key_hint.pack(fill=tk.X, pady=(0, 4))
+
+        # Voice row
+        tts_voice_row = ttk.Frame(tts_frame)
+        tts_voice_row.pack(fill=tk.X, pady=(0, 4))
+
+        ttk.Label(tts_voice_row, text="Voice:", width=10, anchor=tk.W).pack(side=tk.LEFT)
+
+        from constants import ELEVENLABS_VOICE_PRESETS
+        voice_display_values = [
+            f"{info['name']} ({info['description']})"
+            for info in ELEVENLABS_VOICE_PRESETS.values()
+        ]
+        voice_display_values.append("Custom (enter Voice ID below)")
+
+        self._tts_voice_var = tk.StringVar()
+        self._tts_voice_combo = ttk.Combobox(
+            tts_voice_row,
+            textvariable=self._tts_voice_var,
+            values=voice_display_values,
+            state="readonly",
+            width=35,
+        )
+        self._tts_voice_combo.pack(side=tk.LEFT, padx=(4, 0))
+        self._tts_voice_combo.bind("<<ComboboxSelected>>", self._on_tts_voice_changed)
+
+        # Custom Voice ID row
+        tts_custom_voice_row = ttk.Frame(tts_frame)
+        tts_custom_voice_row.pack(fill=tk.X, pady=(0, 4))
+
+        ttk.Label(tts_custom_voice_row, text="Voice ID:", width=10, anchor=tk.W).pack(side=tk.LEFT)
+
+        self._tts_voice_id_var = tk.StringVar()
+        self._tts_voice_id_entry = ttk.Entry(
+            tts_custom_voice_row, textvariable=self._tts_voice_id_var, width=30
+        )
+        self._tts_voice_id_entry.pack(side=tk.LEFT, padx=(4, 0))
+
+        # Model row
+        tts_model_row = ttk.Frame(tts_frame)
+        tts_model_row.pack(fill=tk.X, pady=(0, 4))
+
+        ttk.Label(tts_model_row, text="Model:", width=10, anchor=tk.W).pack(side=tk.LEFT)
+
+        self._tts_model_var = tk.StringVar()
+        self._tts_model_combo = ttk.Combobox(
+            tts_model_row,
+            textvariable=self._tts_model_var,
+            values=["eleven_flash_v2_5 (fast, low latency)", "eleven_multilingual_v2 (higher quality)"],
+            state="readonly",
+            width=35,
+        )
+        self._tts_model_combo.pack(side=tk.LEFT, padx=(4, 0))
+
+        # Store references for enable/disable
+        self._tts_widgets = [
+            self._elevenlabs_key_entry,
+            self._elevenlabs_key_btn,
+            self._tts_voice_combo,
+            self._tts_voice_id_entry,
+            self._tts_model_combo,
+        ]
+
+        # === Section 4: General ===
         general_frame = ttk.LabelFrame(
             main_frame, text="General", padding=(10, 8)
         )
@@ -699,6 +811,21 @@ class SettingsDialog:
         ttk.Label(prompt_hotkey_row, text="Ask LLM:", width=10, anchor=tk.W).pack(side=tk.LEFT)
         self._prompt_hotkey_label = ttk.Label(prompt_hotkey_row, text="", font=("", 9, "bold"))
         self._prompt_hotkey_label.pack(side=tk.LEFT, padx=(4, 0))
+
+        # v0.6: TTS hotkeys display
+        tts_hotkey_row = ttk.Frame(general_frame)
+        tts_hotkey_row.pack(fill=tk.X, pady=(0, 2))
+
+        ttk.Label(tts_hotkey_row, text="Read TTS:", width=10, anchor=tk.W).pack(side=tk.LEFT)
+        self._tts_hotkey_label = ttk.Label(tts_hotkey_row, text="", font=("", 9, "bold"))
+        self._tts_hotkey_label.pack(side=tk.LEFT, padx=(4, 0))
+
+        tts_ask_hotkey_row = ttk.Frame(general_frame)
+        tts_ask_hotkey_row.pack(fill=tk.X, pady=(0, 2))
+
+        ttk.Label(tts_ask_hotkey_row, text="Ask+TTS:", width=10, anchor=tk.W).pack(side=tk.LEFT)
+        self._tts_ask_hotkey_label = ttk.Label(tts_ask_hotkey_row, text="", font=("", 9, "bold"))
+        self._tts_ask_hotkey_label.pack(side=tk.LEFT, padx=(4, 0))
 
         hotkey_hint = ttk.Label(
             general_frame,
@@ -811,9 +938,47 @@ class SettingsDialog:
             from constants import SUMMARIZE_SYSTEM_PROMPT
             self._prompt_text.insert("1.0", SUMMARIZE_SYSTEM_PROMPT)
 
+        # v0.6: TTS fields
+        self._tts_enabled_var.set(config.tts_enabled)
+
+        # ElevenLabs API key
+        if config.elevenlabs_api_key:
+            self._elevenlabs_key_var.set(config.masked_api_key(config.elevenlabs_api_key))
+            self._elevenlabs_key_entry.config(show="", state="readonly")
+            self._elevenlabs_key_btn.config(text="Edit")
+            self._elevenlabs_key_editing = False
+        else:
+            self._elevenlabs_key_var.set("")
+            self._elevenlabs_key_entry.config(show="*", state="normal")
+            self._elevenlabs_key_btn.pack_forget()
+            self._elevenlabs_key_editing = True
+
+        # Voice selection
+        from constants import ELEVENLABS_VOICE_PRESETS
+        voice_found = False
+        for vid, info in ELEVENLABS_VOICE_PRESETS.items():
+            if vid == config.tts_voice_id:
+                self._tts_voice_var.set(f"{info['name']} ({info['description']})")
+                voice_found = True
+                break
+        if not voice_found:
+            self._tts_voice_var.set("Custom (enter Voice ID below)")
+        self._tts_voice_id_var.set(config.tts_voice_id)
+
+        # Model selection
+        if "multilingual" in config.tts_model_id:
+            self._tts_model_var.set("eleven_multilingual_v2 (higher quality)")
+        else:
+            self._tts_model_var.set("eleven_flash_v2_5 (fast, low latency)")
+
+        # Enable/disable TTS widgets
+        self._on_tts_toggled()
+
         # Hotkeys
         self._hotkey_label.config(text=config.hotkey)
         self._prompt_hotkey_label.config(text=config.prompt_hotkey)
+        self._tts_hotkey_label.config(text=config.tts_hotkey)
+        self._tts_ask_hotkey_label.config(text=config.tts_ask_hotkey)
 
         # Audio cues
         self._audio_cues_var.set(config.audio_cues_enabled)
@@ -863,6 +1028,8 @@ class SettingsDialog:
                 )
                 self._download_btn.pack_forget()
                 self._progress_frame.pack_forget()
+                self._delete_btn.config(state="normal")
+                self._delete_btn.pack(side=self._tk.LEFT, padx=(8, 0))
             else:
                 info = model_manager.get_model_info(model_key)
                 size_mb = info.get("download_mb", "?")
@@ -872,6 +1039,7 @@ class SettingsDialog:
                 )
                 self._download_btn.config(text="Download Model", state="normal")
                 self._download_btn.pack(side=self._tk.LEFT, padx=(8, 0))
+                self._delete_btn.pack_forget()
                 self._progress_frame.pack_forget()
         except Exception as e:
             logger.debug("Could not check model status: %s", e)
@@ -880,9 +1048,39 @@ class SettingsDialog:
                 foreground="#FF6B6B",
             )
             self._download_btn.pack_forget()
+            self._delete_btn.pack_forget()
 
     def _on_model_size_changed(self, event=None) -> None:
         """Handle model size dropdown change. Refresh download status."""
+        self._update_model_status()
+
+    def _on_delete_clicked(self) -> None:
+        """Handle Delete button click. Remove the downloaded model."""
+        model_key = self._get_selected_model_key()
+
+        # Confirm deletion
+        from tkinter import messagebox
+        confirmed = messagebox.askyesno(
+            "Delete Model",
+            f"Delete the '{model_key}' model?\n\n"
+            f"You will need to download it again to use local transcription.",
+            parent=self._dialog,
+        )
+        if not confirmed:
+            return
+
+        self._delete_btn.config(state="disabled")
+
+        try:
+            import model_manager
+            success = model_manager.delete_model(model_key)
+            if success:
+                logger.info("Model '%s' deleted via Settings dialog.", model_key)
+            else:
+                logger.error("Failed to delete model '%s'.", model_key)
+        except Exception as e:
+            logger.error("Error deleting model '%s': %s", model_key, e)
+
         self._update_model_status()
 
     def _on_download_clicked(self) -> None:
@@ -916,10 +1114,11 @@ class SettingsDialog:
         self._progress_bar.config(value=0)
         self._progress_label.config(text=f"Connecting to Hugging Face...")
 
-        # Disable model/device combos during download
+        # Disable model/device combos and hide delete button during download
         self._local_model_combo.config(state="disabled")
         self._local_device_combo.config(state="disabled")
         self._backend_combo.config(state="disabled")
+        self._delete_btn.pack_forget()
 
         # Launch download in background thread
         self._download_thread = threading.Thread(
@@ -961,6 +1160,11 @@ class SettingsDialog:
         """
         try:
             import model_manager
+            logger.info(
+                "Starting model download: model=%s, cache_dir=%s",
+                model_key,
+                model_manager.get_cache_dir(),
+            )
             self._download_success = model_manager.download_model(
                 model_key,
                 on_progress=self._on_download_progress,
@@ -969,12 +1173,15 @@ class SettingsDialog:
             if not self._download_success and not self._download_cancel.is_set():
                 self._download_error_msg = (
                     "Download failed. Check your internet connection "
-                    "and try again."
+                    "and try again. Run with --verbose for details."
                 )
         except Exception as e:
-            logger.error("Model download failed: %s", e)
+            logger.error(
+                "Model download failed: %s: %s", type(e).__name__, e,
+                exc_info=True,
+            )
             self._download_success = False
-            self._download_error_msg = str(e)
+            self._download_error_msg = f"{type(e).__name__}: {e}"
         finally:
             self._download_done.set()
 
@@ -1051,10 +1258,12 @@ class SettingsDialog:
             self._download_btn.pack_forget()
         else:
             # Show error detail if available
-            error_hint = self._download_error_msg or "Check logs or try again."
+            error_hint = self._download_error_msg or (
+                "Check logs or run with --verbose and try again."
+            )
             # Truncate for the label
-            if len(error_hint) > 80:
-                error_hint = error_hint[:77] + "..."
+            if len(error_hint) > 100:
+                error_hint = error_hint[:97] + "..."
             self._model_status_label.config(
                 text=f"Download failed. {error_hint}",
                 foreground="#FF6B6B",
@@ -1162,6 +1371,60 @@ class SettingsDialog:
             self._openrouter_key_btn.config(text="Cancel")
             self._openrouter_key_editing = True
 
+    def _on_tts_toggled(self) -> None:
+        """Enable/disable TTS widgets based on checkbox."""
+        enabled = self._tts_enabled_var.get()
+        for widget in self._tts_widgets:
+            try:
+                if enabled:
+                    if widget == self._tts_voice_combo or widget == self._tts_model_combo:
+                        widget.config(state="readonly")
+                    elif widget == self._elevenlabs_key_entry:
+                        if self._elevenlabs_key_editing:
+                            widget.config(state="normal")
+                        else:
+                            widget.config(state="readonly")
+                    else:
+                        widget.config(state="normal")
+                else:
+                    widget.config(state="disabled")
+            except Exception:
+                pass
+
+    def _on_tts_voice_changed(self, event=None) -> None:
+        """Handle TTS voice dropdown change. Update voice ID field."""
+        selected = self._tts_voice_var.get()
+        if "Custom" in selected:
+            # Let user type their own voice ID
+            self._tts_voice_id_entry.config(state="normal")
+            return
+
+        from constants import ELEVENLABS_VOICE_PRESETS
+        for vid, info in ELEVENLABS_VOICE_PRESETS.items():
+            display = f"{info['name']} ({info['description']})"
+            if display == selected:
+                self._tts_voice_id_var.set(vid)
+                # Make voice ID readonly when a preset is selected
+                self._tts_voice_id_entry.config(state="readonly")
+                return
+
+    def _toggle_elevenlabs_key_edit(self) -> None:
+        """Toggle between showing masked ElevenLabs key and editing."""
+        if self._elevenlabs_key_editing:
+            if self._elevenlabs_key_actual:
+                self._elevenlabs_key_var.set(
+                    self._config.masked_api_key(self._config.elevenlabs_api_key)
+                )
+                self._elevenlabs_key_entry.config(show="", state="readonly")
+                self._elevenlabs_key_btn.config(text="Edit")
+                self._elevenlabs_key_editing = False
+        else:
+            self._elevenlabs_key_var.set("")
+            self._elevenlabs_key_entry.config(show="*", state="normal")
+            self._elevenlabs_key_entry.focus_set()
+            self._elevenlabs_key_btn.config(text="Cancel")
+            self._elevenlabs_key_editing = True
+
     def _reset_prompt(self) -> None:
         """Reset the custom prompt to the default."""
         from constants import SUMMARIZE_SYSTEM_PROMPT
@@ -1219,6 +1482,21 @@ class SettingsDialog:
             if not base_url.startswith("https://") and not is_local:
                 self._base_url_entry.focus_set()
                 return "Base URL must start with https:// for security (except localhost)."
+
+        # TTS validation (v0.6)
+        if self._tts_enabled_var.get():
+            if self._elevenlabs_key_editing:
+                el_key = self._elevenlabs_key_var.get().strip()
+                if not el_key:
+                    self._elevenlabs_key_entry.focus_set()
+                    return "ElevenLabs API key is required when TTS is enabled."
+            elif not self._elevenlabs_key_actual:
+                return "ElevenLabs API key is required for TTS. Click Edit to enter one."
+
+            voice_id = self._tts_voice_id_var.get().strip()
+            if not voice_id:
+                self._tts_voice_id_entry.focus_set()
+                return "Voice ID is required when TTS is enabled."
 
         return None
 
@@ -1328,6 +1606,41 @@ class SettingsDialog:
         if new_prompt != config.summarization_custom_prompt:
             changed_fields["summarization_custom_prompt"] = new_prompt
             config.summarization_custom_prompt = new_prompt
+
+        # v0.6: TTS fields
+        new_tts_enabled = self._tts_enabled_var.get()
+        if new_tts_enabled != config.tts_enabled:
+            changed_fields["tts_enabled"] = new_tts_enabled
+            config.tts_enabled = new_tts_enabled
+
+        # ElevenLabs API key
+        if self._elevenlabs_key_editing:
+            new_el_key = self._elevenlabs_key_var.get().strip()
+            if new_el_key != config.elevenlabs_api_key:
+                changed_fields["elevenlabs_api_key"] = new_el_key
+                config.elevenlabs_api_key = new_el_key
+                try:
+                    import keyring_store
+                    from constants import KEYRING_ELEVENLABS_KEY
+                    keyring_store.set_credential(KEYRING_ELEVENLABS_KEY, new_el_key)
+                except Exception as e:
+                    logger.warning("Failed to store ElevenLabs key in keyring: %s", e)
+
+        # Voice ID
+        new_voice_id = self._tts_voice_id_var.get().strip()
+        if new_voice_id and new_voice_id != config.tts_voice_id:
+            changed_fields["tts_voice_id"] = new_voice_id
+            config.tts_voice_id = new_voice_id
+
+        # Model ID
+        new_model_display = self._tts_model_var.get()
+        if "multilingual" in new_model_display:
+            new_model_id = "eleven_multilingual_v2"
+        else:
+            new_model_id = "eleven_flash_v2_5"
+        if new_model_id != config.tts_model_id:
+            changed_fields["tts_model_id"] = new_model_id
+            config.tts_model_id = new_model_id
 
         # Audio cues
         new_audio_cues = self._audio_cues_var.get()

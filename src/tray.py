@@ -35,6 +35,7 @@ _STATE_COLORS: dict[AppState, tuple[int, int, int]] = {
     AppState.RECORDING: (230, 50, 50),    # Bright red
     AppState.PROCESSING: (240, 200, 40),  # Bright yellow/amber
     AppState.PASTING: (50, 200, 80),      # Bright green
+    AppState.SPEAKING: (70, 130, 230),    # Blue — audio OUTPUT (v0.6)
 }
 
 # State-to-tooltip template mapping per UX-SPEC.md section 2.1
@@ -45,6 +46,7 @@ _STATE_TOOLTIP_TEMPLATES: dict[AppState, str] = {
     AppState.RECORDING: f"{APP_NAME} - Recording...",
     AppState.PROCESSING: f"{APP_NAME} - Processing...",
     AppState.PASTING: f"{APP_NAME} - Pasting...",
+    AppState.SPEAKING: f"{APP_NAME} - Speaking... (Escape to stop)",
 }
 
 # State-to-status label for menu display
@@ -53,6 +55,7 @@ _STATE_LABELS: dict[AppState, str] = {
     AppState.RECORDING: "Status: Recording",
     AppState.PROCESSING: "Status: Processing",
     AppState.PASTING: "Status: Pasting",
+    AppState.SPEAKING: "Status: Speaking",
 }
 
 
@@ -139,7 +142,7 @@ class TrayManager:
         if self._get_state is None:
             return True
         state = self._get_state()
-        return state in (AppState.IDLE, AppState.PASTING)
+        return state in (AppState.IDLE, AppState.PASTING, AppState.SPEAKING)
 
     def _handle_settings(
         self, icon: pystray.Icon, item: pystray.MenuItem

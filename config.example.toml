@@ -19,6 +19,12 @@ combination = "ctrl+alt+r"
 # Same format as above. Set to empty string to disable Voice Prompt mode.
 prompt_combination = "ctrl+alt+a"
 
+# TTS hotkeys (v0.6): only active when TTS is enabled in Settings
+# Read clipboard aloud via Text-to-Speech (default: "ctrl+alt+t")
+tts_combination = "ctrl+alt+t"
+# Ask AI a question and hear the answer via TTS (default: "ctrl+alt+y")
+tts_ask_combination = "ctrl+alt+y"
+
 [api]
 # Legacy API key location (migrated to Credential Manager automatically in v0.3+)
 # Leave this commented out — keys are now managed in Settings dialog > Credentials.
@@ -85,6 +91,29 @@ base_url = ""
 # Example for professional tone:
 #   "Rewrite this transcription as a professional, formal paragraph suitable for business email."
 custom_prompt = ""
+
+[tts]
+# Text-to-Speech via ElevenLabs (v0.6)
+# Reads text aloud using natural AI voices. Requires an ElevenLabs API key.
+# Enable in Settings dialog or set enabled = true here.
+enabled = false
+
+# TTS provider (currently only "elevenlabs" supported)
+provider = "elevenlabs"
+
+# ElevenLabs Voice ID (default: "pFZP5JQG7iQjIQuC4Bku" = Lily)
+# Browse voices at: https://elevenlabs.io/voice-library
+# You can use any voice ID from your ElevenLabs account.
+voice_id = "pFZP5JQG7iQjIQuC4Bku"
+
+# ElevenLabs model (default: "eleven_flash_v2_5" = fast, low latency)
+# Options:
+# - "eleven_flash_v2_5": Fast synthesis, low latency, good quality
+# - "eleven_multilingual_v2": Higher quality, supports more languages, slower
+model_id = "eleven_flash_v2_5"
+
+# Audio output format
+output_format = "mp3_44100_128"
 
 [feedback]
 # Play audio cues on recording start/stop (default: true)

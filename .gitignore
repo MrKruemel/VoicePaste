@@ -30,6 +30,9 @@ env/
 *.exe
 *.dll
 
+# Input/reference files (may contain API keys)
+input/
+
 # OS
 Thumbs.db
 desktop.ini
