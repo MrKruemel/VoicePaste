@@ -556,6 +556,21 @@ class VoicePasteApp:
             self._rebuild_tts()
             logger.info("TTS backend rebuilt with updated settings.")
 
+            # Register/unregister TTS hotkeys based on new enabled state
+            if self.config.tts_enabled:
+                if not self._hotkey_manager._tts_registered:
+                    try:
+                        self._hotkey_manager.register_tts(self._on_tts_hotkey)
+                    except Exception as exc:
+                        logger.warning("Failed to register TTS hotkey: %s", exc)
+                if not self._hotkey_manager._tts_ask_registered:
+                    try:
+                        self._hotkey_manager.register_tts_ask(self._on_tts_ask_hotkey)
+                    except Exception as exc:
+                        logger.warning("Failed to register TTS Ask hotkey: %s", exc)
+            else:
+                self._hotkey_manager.unregister_tts()
+
         # Determine if summarizer needs rebuild
         summarizer_keys = {
             "openai_api_key",

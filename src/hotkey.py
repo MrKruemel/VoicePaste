@@ -303,6 +303,22 @@ class HotkeyManager:
             except Exception:
                 logger.exception("Error in TTS Ask hotkey callback.")
 
+    def unregister_tts(self) -> None:
+        """Unregister TTS hotkeys. Safe to call even if not registered."""
+        for attr_reg, attr_handle, label in [
+            ("_tts_registered", "_tts_handle", "TTS"),
+            ("_tts_ask_registered", "_tts_ask_handle", "TTS Ask"),
+        ]:
+            if getattr(self, attr_reg) and getattr(self, attr_handle) is not None:
+                try:
+                    kb.remove_hotkey(getattr(self, attr_handle))
+                    logger.info("%s hotkey unregistered.", label)
+                except Exception as e:
+                    logger.warning("Failed to unregister %s hotkey: %s", label, e)
+                finally:
+                    setattr(self, attr_reg, False)
+                    setattr(self, attr_handle, None)
+
     def register_cancel(self, callback: Callable[[], None]) -> None:
         """Register the Escape key as a cancel hotkey.
 
@@ -360,20 +376,7 @@ class HotkeyManager:
         self.unregister_cancel()
 
         # Unregister TTS hotkeys (v0.6)
-        for attr_reg, attr_handle, label in [
-            ("_tts_registered", "_tts_handle", "TTS"),
-            ("_tts_ask_registered", "_tts_ask_handle", "TTS Ask"),
-        ]:
-            if getattr(self, attr_reg) and getattr(self, attr_handle) is not None:
-                try:
-                    kb.remove_hotkey(getattr(self, attr_handle))
-                    setattr(self, attr_reg, False)
-                    setattr(self, attr_handle, None)
-                    logger.info("%s hotkey unregistered.", label)
-                except Exception as e:
-                    logger.warning("Failed to unregister %s hotkey: %s", label, e)
-                    setattr(self, attr_reg, False)
-                    setattr(self, attr_handle, None)
+        self.unregister_tts()
 
         # Unregister prompt hotkey
         if self._prompt_registered and self._prompt_handle is not None:
