@@ -360,6 +360,46 @@ _MODEL_ALLOW_PATTERNS: list[str] = [
 ]
 
 
+def _verify_stt_integrity(model_size: str, target_dir: Path) -> bool:
+    """Verify SHA256 integrity of downloaded STT model files.
+
+    Checks critical files (model.bin, config.json) against the expected
+    hashes in ``STT_MODEL_SHA256`` from constants.  If no hashes are
+    configured for this model size, logs a warning and returns True
+    (graceful degradation until hashes are populated).
+
+    Args:
+        model_size: Model size identifier (e.g., "base").
+        target_dir: Directory containing the downloaded model files.
+
+    Returns:
+        True if all files with expected hashes match (or if no hashes
+        are configured).  False if any file fails verification.
+    """
+    try:
+        from integrity import verify_directory_files
+    except ImportError:
+        logger.warning(
+            "integrity module not available; skipping SHA256 "
+            "verification for STT model '%s'.",
+            model_size,
+        )
+        return True
+
+    try:
+        from constants import STT_MODEL_SHA256
+    except ImportError:
+        logger.warning(
+            "STT_MODEL_SHA256 not found in constants; skipping "
+            "SHA256 verification for STT model '%s'.",
+            model_size,
+        )
+        return True
+
+    expected_hashes: dict[str, str] = STT_MODEL_SHA256.get(model_size, {})
+    return verify_directory_files(target_dir, expected_hashes)
+
+
 def download_model(
     model_size: str,
     on_progress: Optional[ProgressCallback] = None,
@@ -589,6 +629,24 @@ def download_model(
                 model_size,
                 ["model.bin", "config.json"],
             )
+            return False
+
+        # SHA256 integrity verification (SEC-027)
+        if not _verify_stt_integrity(model_size, target_dir):
+            logger.error(
+                "SHA256 verification failed for model '%s'. "
+                "Deleting corrupted download.",
+                model_size,
+            )
+            if target_dir.exists():
+                try:
+                    shutil.rmtree(target_dir)
+                except OSError as cleanup_err:
+                    logger.warning(
+                        "Failed to clean up after SHA256 failure at '%s': %s",
+                        target_dir,
+                        cleanup_err,
+                    )
             return False
 
         logger.info("Model '%s' verified and ready to use.", model_size)

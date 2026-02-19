@@ -1069,6 +1069,14 @@ class SettingsDialog:
             variable=self._audio_cues_var,
         ).pack(fill=tk.X)
 
+        # v0.8: Overlay checkbox
+        self._show_overlay_var = tk.BooleanVar()
+        ttk.Checkbutton(
+            parent,
+            text="Show floating overlay (Recording/Processing/Speaking indicator)",
+            variable=self._show_overlay_var,
+        ).pack(fill=tk.X, pady=(4, 0))
+
     def _populate_from_config(self) -> None:
         """Fill widget values from current config and keyring."""
         config = self._config
@@ -1216,6 +1224,9 @@ class SettingsDialog:
 
         # Audio cues
         self._audio_cues_var.set(config.audio_cues_enabled)
+
+        # v0.8: Overlay
+        self._show_overlay_var.set(config.show_overlay)
 
         # Show/hide backend sub-frames
         self._update_backend_ui()
@@ -2264,6 +2275,12 @@ class SettingsDialog:
         if new_audio_cues != config.audio_cues_enabled:
             changed_fields["audio_cues_enabled"] = new_audio_cues
             config.audio_cues_enabled = new_audio_cues
+
+        # v0.8: Overlay
+        new_show_overlay = self._show_overlay_var.get()
+        if new_show_overlay != config.show_overlay:
+            changed_fields["show_overlay"] = new_show_overlay
+            config.show_overlay = new_show_overlay
 
         # Save non-secret fields to config.toml
         config.save_to_toml()

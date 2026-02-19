@@ -1,6 +1,7 @@
 """Shared constants and enums for the Voice-to-Summary Paste Tool."""
 
 import enum
+from typing import Any
 
 
 class AppState(enum.Enum):
@@ -26,7 +27,7 @@ class AppState(enum.Enum):
 
 # Application metadata
 APP_NAME = "Voice Paste"
-APP_VERSION = "0.7.0"
+APP_VERSION = "0.8.0"
 
 # Hotkey configuration
 # Hotkey history:
@@ -210,7 +211,13 @@ DEFAULT_PIPER_VOICE = "de_DE-thorsten-medium"
 # Piper voice model registry.
 # Each entry maps a voice name to its Hugging Face repo path and metadata.
 # Models are downloaded on demand by the user via Settings > TTS > Download.
-PIPER_VOICE_MODELS: dict[str, dict[str, str]] = {
+#
+# The "sha256" field maps each downloaded filename to its expected SHA256
+# hex digest.  An empty dict means "hashes not yet computed -- skip
+# verification but log a warning".  Populate hashes after downloading
+# each model once and copying the computed values from the log output.
+# (Security finding SEC-040)
+PIPER_VOICE_MODELS: dict[str, dict[str, Any]] = {
     "de_DE-thorsten-medium": {
         "label": "Thorsten (DE, medium quality, recommended)",
         "repo": "rhasspy/piper-voices",
@@ -218,6 +225,7 @@ PIPER_VOICE_MODELS: dict[str, dict[str, str]] = {
                  "de/de_DE/thorsten/medium/de_DE-thorsten-medium.onnx.json",
         "download_mb": "63",
         "sample_rate": "22050",
+        "sha256": {},  # Populate after first download from log output
     },
     "de_DE-thorsten-high": {
         "label": "Thorsten (DE, high quality, larger)",
@@ -226,6 +234,7 @@ PIPER_VOICE_MODELS: dict[str, dict[str, str]] = {
                  "de/de_DE/thorsten/high/de_DE-thorsten-high.onnx.json",
         "download_mb": "114",
         "sample_rate": "22050",
+        "sha256": {},
     },
     "de_DE-thorsten_emotional-medium": {
         "label": "Thorsten Emotional (DE, medium, multi-emotion)",
@@ -234,22 +243,108 @@ PIPER_VOICE_MODELS: dict[str, dict[str, str]] = {
                  "de/de_DE/thorsten_emotional/medium/de_DE-thorsten_emotional-medium.onnx.json",
         "download_mb": "77",
         "sample_rate": "22050",
+        "sha256": {},
+    },
+    "de_DE-mls-medium": {
+        "label": "MLS (DE, medium quality)",
+        "repo": "rhasspy/piper-voices",
+        "files": "de/de_DE/mls/medium/de_DE-mls-medium.onnx,"
+                 "de/de_DE/mls/medium/de_DE-mls-medium.onnx.json",
+        "download_mb": "95",
+        "sample_rate": "22050",
+        "sha256": {},
+    },
+    # --- English (US) voices ---
+    "en_US-ryan-high": {
+        "label": "Ryan (EN-US, high quality, male)",
+        "repo": "rhasspy/piper-voices",
+        "files": "en/en_US/ryan/high/en_US-ryan-high.onnx,"
+                 "en/en_US/ryan/high/en_US-ryan-high.onnx.json",
+        "download_mb": "114",
+        "sample_rate": "22050",
+        "sha256": {},
+    },
+    "en_US-ryan-medium": {
+        "label": "Ryan (EN-US, medium quality, male)",
+        "repo": "rhasspy/piper-voices",
+        "files": "en/en_US/ryan/medium/en_US-ryan-medium.onnx,"
+                 "en/en_US/ryan/medium/en_US-ryan-medium.onnx.json",
+        "download_mb": "64",
+        "sample_rate": "22050",
+        "sha256": {},
+    },
+    "en_US-lessac-high": {
+        "label": "Lessac (EN-US, high quality, male)",
+        "repo": "rhasspy/piper-voices",
+        "files": "en/en_US/lessac/high/en_US-lessac-high.onnx,"
+                 "en/en_US/lessac/high/en_US-lessac-high.onnx.json",
+        "download_mb": "114",
+        "sample_rate": "22050",
+        "sha256": {},
     },
     "en_US-lessac-medium": {
-        "label": "Lessac (EN, medium quality, male)",
+        "label": "Lessac (EN-US, medium quality, male)",
         "repo": "rhasspy/piper-voices",
         "files": "en/en_US/lessac/medium/en_US-lessac-medium.onnx,"
                  "en/en_US/lessac/medium/en_US-lessac-medium.onnx.json",
         "download_mb": "64",
         "sample_rate": "22050",
+        "sha256": {},
     },
     "en_US-amy-medium": {
-        "label": "Amy (EN, medium quality, female)",
+        "label": "Amy (EN-US, medium quality, female)",
         "repo": "rhasspy/piper-voices",
         "files": "en/en_US/amy/medium/en_US-amy-medium.onnx,"
                  "en/en_US/amy/medium/en_US-amy-medium.onnx.json",
         "download_mb": "64",
         "sample_rate": "22050",
+        "sha256": {},
+    },
+    # --- English (GB) voices ---
+    "en_GB-cori-high": {
+        "label": "Cori (EN-GB, high quality, female)",
+        "repo": "rhasspy/piper-voices",
+        "files": "en/en_GB/cori/high/en_GB-cori-high.onnx,"
+                 "en/en_GB/cori/high/en_GB-cori-high.onnx.json",
+        "download_mb": "114",
+        "sample_rate": "22050",
+        "sha256": {},
+    },
+    "en_GB-cori-medium": {
+        "label": "Cori (EN-GB, medium quality, female)",
+        "repo": "rhasspy/piper-voices",
+        "files": "en/en_GB/cori/medium/en_GB-cori-medium.onnx,"
+                 "en/en_GB/cori/medium/en_GB-cori-medium.onnx.json",
+        "download_mb": "64",
+        "sample_rate": "22050",
+        "sha256": {},
+    },
+    "en_GB-alba-medium": {
+        "label": "Alba (EN-GB, medium quality, female)",
+        "repo": "rhasspy/piper-voices",
+        "files": "en/en_GB/alba/medium/en_GB-alba-medium.onnx,"
+                 "en/en_GB/alba/medium/en_GB-alba-medium.onnx.json",
+        "download_mb": "64",
+        "sample_rate": "22050",
+        "sha256": {},
+    },
+    "en_GB-jenny_dioco-medium": {
+        "label": "Jenny (EN-GB, medium quality, female)",
+        "repo": "rhasspy/piper-voices",
+        "files": "en/en_GB/jenny_dioco/medium/en_GB-jenny_dioco-medium.onnx,"
+                 "en/en_GB/jenny_dioco/medium/en_GB-jenny_dioco-medium.onnx.json",
+        "download_mb": "64",
+        "sample_rate": "22050",
+        "sha256": {},
+    },
+    "en_GB-alan-medium": {
+        "label": "Alan (EN-GB, medium quality, male)",
+        "repo": "rhasspy/piper-voices",
+        "files": "en/en_GB/alan/medium/en_GB-alan-medium.onnx,"
+                 "en/en_GB/alan/medium/en_GB-alan-medium.onnx.json",
+        "download_mb": "64",
+        "sample_rate": "22050",
+        "sha256": {},
     },
 }
 
@@ -260,3 +355,17 @@ for _voice_name, _voice_info in PIPER_VOICE_MODELS.items():
     _files_str = _voice_info.get("files", "")
     if isinstance(_files_str, str):
         _voice_info["files"] = [f.strip() for f in _files_str.split(",") if f.strip()]
+
+# --- SHA256 integrity hashes for STT (Whisper) models (SEC-027) ---
+# Maps model size -> {filename: expected_sha256_hex_digest}.
+# Only critical files (model.bin, config.json) are verified.
+# An empty inner dict means "hashes not yet computed -- skip verification
+# but log a warning".  Populate after first download from log output.
+STT_MODEL_SHA256: dict[str, dict[str, str]] = {
+    "tiny": {},
+    "base": {},
+    "small": {},
+    "medium": {},
+    "large-v2": {},
+    "large-v3": {},
+}

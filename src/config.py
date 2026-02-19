@@ -108,6 +108,8 @@ custom_prompt = ""
 [feedback]
 # Play audio cues on recording start/stop (default: true)
 audio_cues = true
+# Show floating overlay window with state feedback (default: true)
+show_overlay = true
 
 [logging]
 # Log level: DEBUG, INFO, WARNING, ERROR
@@ -185,6 +187,9 @@ class AppConfig:
 
     # --- v0.7: Local TTS (Piper) fields ---
     tts_local_voice: str = DEFAULT_PIPER_VOICE
+
+    # --- v0.8: Overlay ---
+    show_overlay: bool = True
 
     @property
     def config_path(self) -> Path:
@@ -317,6 +322,7 @@ local_voice = "{esc(self.tts_local_voice)}"
 
 [feedback]
 audio_cues = {str(self.audio_cues_enabled).lower()}
+show_overlay = {str(self.show_overlay).lower()}
 
 [logging]
 level = "{esc(self.log_level)}"
@@ -430,6 +436,7 @@ def load_config() -> Optional[AppConfig]:
     summarization_base_url = summarization_section.get("base_url", "")
     summarization_custom_prompt = summarization_section.get("custom_prompt", "")
     audio_cues_enabled = feedback_section.get("audio_cues", True)
+    show_overlay = feedback_section.get("show_overlay", True)
 
     # Validate provider
     if summarization_provider not in ("openai", "openrouter", "ollama"):
@@ -666,6 +673,8 @@ def load_config() -> Optional[AppConfig]:
         tts_ask_hotkey=tts_ask_hotkey,
         # v0.7: Local TTS (Piper)
         tts_local_voice=tts_local_voice,
+        # v0.8: Overlay
+        show_overlay=bool(show_overlay),
     )
 
     # REQ-S01: Only log the masked key

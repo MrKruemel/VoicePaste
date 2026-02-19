@@ -86,6 +86,9 @@ class TrayManager:
         hotkey_label: str = "Ctrl+Alt+R",
         prompt_hotkey_label: str = "Ctrl+Alt+A",
         get_state: Optional[Callable[[], AppState]] = None,
+        tts_enabled: bool = False,
+        tts_hotkey_label: str = "Ctrl+Alt+T",
+        tts_ask_hotkey_label: str = "Ctrl+Alt+Y",
     ) -> None:
         """Initialize the tray manager.
 
@@ -96,12 +99,19 @@ class TrayManager:
             prompt_hotkey_label: Human-readable hotkey string for prompt mode.
             get_state: Callable returning current AppState for dynamic
                 menu enablement (v0.3).
+            tts_enabled: Whether TTS is enabled in the config. When True,
+                TTS hotkeys are included in the startup notification.
+            tts_hotkey_label: Human-readable hotkey string for TTS clipboard mode.
+            tts_ask_hotkey_label: Human-readable hotkey string for TTS ask mode.
         """
         self._on_quit = on_quit
         self._on_settings = on_settings
         self._get_state = get_state
         self._hotkey_label = hotkey_label
         self._prompt_hotkey_label = prompt_hotkey_label
+        self._tts_enabled = tts_enabled
+        self._tts_hotkey_label = tts_hotkey_label
+        self._tts_ask_hotkey_label = tts_ask_hotkey_label
         self._icon: Optional[pystray.Icon] = None
         self._running = False
         self._current_state = AppState.IDLE
@@ -363,13 +373,23 @@ class TrayManager:
 
         # --- Show startup balloon notification ---
         try:
+            notification_lines = [
+                f"{self._hotkey_label}: Record + Summarize",
+                f"{self._prompt_hotkey_label}: Record + Ask LLM",
+            ]
+            if self._tts_enabled:
+                notification_lines.append(
+                    f"{self._tts_hotkey_label}: Read Clipboard aloud"
+                )
+                notification_lines.append(
+                    f"{self._tts_ask_hotkey_label}: Ask AI + TTS"
+                )
+            notification_lines.append("Right-click for options.")
             icon.notify(
-                f"{self._hotkey_label}: Record + Summarize\n"
-                f"{self._prompt_hotkey_label}: Record + Ask LLM\n"
-                f"Right-click for options.",
+                "\n".join(notification_lines),
                 f"{APP_NAME} v{APP_VERSION} is running",
             )
-            logger.info("Startup notification shown.")
+            logger.info("Startup notification shown (tts_enabled=%s).", self._tts_enabled)
         except Exception:
             logger.debug("Failed to show startup notification.")
 

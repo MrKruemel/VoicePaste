@@ -78,7 +78,7 @@ cffi==2.0.0                 # CFFI runtime -- required by miniaudio's _miniaudio
 # ---------------------------------------------------------------------------
 # Local TTS: Piper via direct ONNX inference (v0.7)
 # ---------------------------------------------------------------------------
-espeakng-loader>=0.2.4          # Bundles espeak-ng DLL + data for phonemization (MIT)
+espeakng-loader==0.2.4          # Bundles espeak-ng DLL + data for phonemization (MIT)
 # onnxruntime and numpy are already listed above (shared with local STT)
 
 # ---------------------------------------------------------------------------

@@ -67,6 +67,7 @@ from notifications import (
     play_recording_start_cue,
     play_recording_stop_cue,
 )
+from overlay import OverlayWindow
 
 logger = logging.getLogger(APP_NAME)
 
@@ -286,13 +287,22 @@ class VoicePasteApp:
         )
 
         # v0.3: TrayManager gets settings callback and state accessor
+        # v0.8.7: Pass TTS config so startup notification shows TTS hotkeys
         self._tray_manager = TrayManager(
             on_quit=self._shutdown,
             on_settings=self._open_settings,
             hotkey_label=config.hotkey,
             prompt_hotkey_label=config.prompt_hotkey,
             get_state=lambda: self.state,
+            tts_enabled=config.tts_enabled,
+            tts_hotkey_label=config.tts_hotkey,
+            tts_ask_hotkey_label=config.tts_ask_hotkey,
         )
+
+        # v0.8: Floating overlay window (dedicated T4 thread)
+        self._overlay: Optional[OverlayWindow] = None
+        if config.show_overlay:
+            self._overlay = OverlayWindow()
 
         self._shutdown_event = threading.Event()
         self._pipeline_thread: threading.Thread | None = None
@@ -319,6 +329,10 @@ class VoicePasteApp:
 
         # Update tray icon to match state
         self._tray_manager.update_state(new_state)
+
+        # v0.8: Update overlay (thread-safe, no-op if overlay is None or not running)
+        if self._overlay is not None:
+            self._overlay.update_state(new_state)
 
     def _rebuild_summarizer(self) -> None:
         """(Re)create the summarizer based on current config.
@@ -595,6 +609,20 @@ class VoicePasteApp:
         if changed_fields.keys() & summarizer_keys:
             self._rebuild_summarizer()
             logger.info("Summarizer rebuilt with updated settings.")
+
+        # v0.8: Hot-reload overlay visibility
+        if "show_overlay" in changed_fields:
+            if self.config.show_overlay:
+                if self._overlay is None:
+                    self._overlay = OverlayWindow()
+                if not self._overlay.is_running:
+                    self._overlay.start()
+                logger.info("Overlay enabled via settings.")
+            else:
+                if self._overlay is not None:
+                    self._overlay.stop()
+                    self._overlay = None
+                logger.info("Overlay disabled via settings.")
 
         # Notify user via toast
         self._tray_manager.notify(
@@ -998,6 +1026,10 @@ class VoicePasteApp:
             except Exception as e:
                 logger.warning("Error unloading local TTS model: %s", e)
 
+        # v0.8: Stop overlay before unregistering hotkeys
+        if self._overlay is not None:
+            self._overlay.stop()
+
         # Unregister hotkeys
         self._hotkey_manager.unregister()
 
@@ -1081,6 +1113,11 @@ class VoicePasteApp:
             self.config.tts_hotkey if self.config.tts_enabled else "(disabled)",
             self.config.tts_ask_hotkey if self.config.tts_enabled else "(disabled)",
         )
+
+        # v0.8: Start overlay window (T4 thread)
+        if self._overlay is not None:
+            self._overlay.start()
+            logger.info("Overlay window started.")
 
         # Run tray on main thread (blocks until stop)
         try:

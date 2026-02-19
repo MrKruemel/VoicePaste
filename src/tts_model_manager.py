@@ -24,7 +24,7 @@ import os
 import shutil
 import threading
 from pathlib import Path
-from typing import Callable, Optional
+from typing import Any, Callable, Optional
 
 logger = logging.getLogger(__name__)
 
@@ -299,12 +299,17 @@ def download_tts_model(
             _cleanup_partial_download(target_dir)
             return False
 
-        # Verify the download
+        # Verify the download (file existence check)
         if not is_tts_model_valid(target_dir):
             logger.error(
                 "Downloaded TTS model '%s' is incomplete or corrupted.",
                 voice_name,
             )
+            _cleanup_partial_download(target_dir)
+            return False
+
+        # SHA256 integrity verification (SEC-040)
+        if not _verify_tts_integrity(voice_name, voice_info, target_dir):
             _cleanup_partial_download(target_dir)
             return False
 
@@ -318,6 +323,41 @@ def download_tts_model(
 
     finally:
         _download_lock.release()
+
+
+def _verify_tts_integrity(
+    voice_name: str,
+    voice_info: dict[str, Any],
+    target_dir: Path,
+) -> bool:
+    """Verify SHA256 integrity of downloaded TTS model files.
+
+    Checks each downloaded file against the expected hashes in the
+    voice_info "sha256" dict.  If the dict is empty or absent, logs
+    a warning and returns True (graceful degradation until hashes are
+    populated).
+
+    Args:
+        voice_name: Voice name identifier for logging.
+        voice_info: Voice metadata dict from PIPER_VOICE_MODELS.
+        target_dir: Directory containing the downloaded files.
+
+    Returns:
+        True if all files pass verification (or if no hashes are
+        configured).  False if any file fails verification.
+    """
+    try:
+        from integrity import verify_directory_files
+    except ImportError:
+        logger.warning(
+            "integrity module not available; skipping SHA256 "
+            "verification for TTS voice '%s'.",
+            voice_name,
+        )
+        return True
+
+    expected_hashes: dict[str, str] = voice_info.get("sha256", {})
+    return verify_directory_files(target_dir, expected_hashes)
 
 
 def _cleanup_partial_download(target_dir: Path) -> None:
