@@ -128,14 +128,25 @@ output_format = "mp3_44100_128"
 # Models are cached in %LOCALAPPDATA%\VoicePaste\models\tts\.
 # Only used when provider = "piper".
 #
-# Available German voices (recommended):
-# - "de_DE-thorsten-medium" (DE, ~63 MB, recommended, neutral)
-# - "de_DE-thorsten-high" (DE, ~114 MB, higher quality, neutral)
-# - "de_DE-thorsten_emotional-medium" (DE, ~77 MB, multi-emotion support)
+# German voices (v0.8):
+# - "de_DE-thorsten-medium" (~63 MB, recommended, neutral)
+# - "de_DE-thorsten-high" (~114 MB, higher quality)
+# - "de_DE-thorsten_emotional-medium" (~77 MB, multi-emotion)
+# - "de_DE-mls-medium" (~95 MB, alternative voice)
 #
-# Available English voices:
-# - "en_US-lessac-medium" (EN, ~64 MB, male voice)
-# - "en_US-amy-medium" (EN, ~64 MB, female voice)
+# English (US) voices (v0.8):
+# - "en_US-ryan-high" (~114 MB, male, high quality)
+# - "en_US-ryan-medium" (~64 MB, male, medium quality)
+# - "en_US-lessac-high" (~114 MB, male, high quality)
+# - "en_US-lessac-medium" (~64 MB, male, medium quality)
+# - "en_US-amy-medium" (~64 MB, female)
+#
+# English (GB) voices (v0.8):
+# - "en_GB-cori-high" (~114 MB, female, high quality)
+# - "en_GB-cori-medium" (~64 MB, female, medium quality)
+# - "en_GB-alba-medium" (~64 MB, female)
+# - "en_GB-jenny_dioco-medium" (~64 MB, female)
+# - "en_GB-alan-medium" (~64 MB, male)
 #
 # Full list: See PIPER_VOICE_MODELS in src/constants.py.
 local_voice = "de_DE-thorsten-medium"
@@ -149,6 +160,15 @@ local_voice = "de_DE-thorsten-medium"
 # - Error: single low buzz
 # Set to false for silent operation.
 audio_cues = true
+
+# Show floating overlay UI (default: true, v0.8+)
+# Displays non-intrusive status in bottom-right corner:
+# - Red dot + timer during recording
+# - Amber dot + dots during processing
+# - Blue pulsing dot during TTS playback
+# - Green dot + "Pasted" confirmation when pasting
+# Set to false to disable overlay and use only tray icon for feedback.
+show_overlay = true
 
 [logging]
 # Log level: "DEBUG", "INFO", "WARNING", or "ERROR" (default: "INFO")

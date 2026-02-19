@@ -21,6 +21,34 @@ See [BACKLOG.md](docs/BACKLOG.md) for the complete v1.0 roadmap.
 
 ---
 
+## [0.8.0] - 2026-02-19
+
+### Added
+- **Floating Overlay UI (v0.8)**: Non-intrusive status display in bottom-right corner of screen. Shows state-specific visual feedback: RECORDING with live timer (MM:SS), PROCESSING with animated dots, SPEAKING with pulsing blue dot, PASTING with confirmation message. Overlay never steals focus (WS_EX_NOACTIVATE, WS_EX_TRANSPARENT, WS_EX_TOOLWINDOW). 200x56px, dark background (#1c1c1c), 86% opacity, 20px from edges.
+- **OverlayWindow Module (overlay.py, v0.8)**: Dedicated T4 thread for overlay management. Runs daemon thread from startup to shutdown. Hot-reload support: can toggle overlay on/off in Settings without restart.
+- **Overlay Configuration (v0.8)**: New config field `[feedback] show_overlay = true` (default: enabled). Checkbox in Settings > General tab.
+- **Expanded Piper Voice List (v0.8)**: From 5 German voices to 14 voices across 3 language variants:
+  - German (4): Thorsten medium (recommended), Thorsten high, Thorsten Emotional medium, MLS medium
+  - English US (5): Ryan high (NEW), Ryan medium (NEW), Lessac high (NEW), Lessac medium, Amy medium
+  - English GB (5): Cori high (NEW, female), Cori medium (NEW), Alba medium (NEW, female), Jenny medium (NEW, female), Alan medium (NEW, male)
+- **SHA256 Integrity Verification (v0.8)**: New module `src/integrity.py` with `compute_file_sha256()`, `verify_file_sha256()`, `verify_directory_files()` functions. Integrated into TTS model downloads (tts_model_manager.py) and STT model downloads (model_manager.py). Addresses security findings SEC-040 (TTS) and SEC-027 (STT).
+- **Hash Dictionary Stubs (constants.py, v0.8)**: `PIPER_VOICE_MODELS` and `STT_MODEL_SHA256` include empty `sha256` dicts for graceful degradation. Logs computed hashes for collection.
+- **Startup Notification Enhancement (v0.8)**: When TTS is enabled, balloon notification includes Ctrl+Alt+T and Ctrl+Alt+Y hotkey hints.
+- **Security Fix SEC-039 (v0.8)**: espeakng-loader pinned to ==0.2.4 (from >=0.2.4).
+- **Comprehensive Tests (v0.8)**: 132 new tests: 108 tests for overlay functionality (test_overlay.py), 24 tests for integrity verification (test_integrity.py). Total test count: 580 tests, all passing.
+- **ADR Documentation (docs/ADR-v08-floating-overlay.md, v0.8)**: Comprehensive design document for floating overlay feature, threading model, and state management.
+
+### Changed
+- **APP_VERSION**: Bumped to 0.8.0
+- **Binary Size**: ~280 MB (includes overlay and expanded voice models in frozen .exe)
+- **Threading Model (v0.8)**: T4 thread (daemon) added for overlay window management. Lifecycle: startup → overlay loop → shutdown.
+- **Startup Notification Logic (v0.8)**: Conditional TTS hotkey display based on `[tts] enabled` setting.
+
+### Fixed
+- **Overlay Thread Safety (v0.8)**: State transitions synchronized via thread-safe queue communication. No race conditions between main state machine (T1) and overlay UI thread (T4).
+
+---
+
 ## [0.7.0] - 2026-02-19
 
 ### Added

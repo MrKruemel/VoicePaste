@@ -13,6 +13,7 @@ Thread safety:
 """
 
 import hashlib
+import hmac
 import logging
 from pathlib import Path
 
@@ -82,7 +83,7 @@ def verify_file_sha256(file_path: Path, expected_hash: str) -> bool:
         computed,
     )
 
-    if computed.lower() != expected_hash.lower():
+    if not hmac.compare_digest(computed.lower(), expected_hash.lower()):
         logger.error(
             "SHA256 MISMATCH for '%s': expected=%s, computed=%s. "
             "The file may be corrupted or tampered with.",

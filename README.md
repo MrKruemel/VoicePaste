@@ -8,7 +8,7 @@
   A Windows desktop utility that records your speech, transcribes it with AI, optionally summarizes it, and pastes the result at your cursor—all with a hotkey. Runs entirely in the system tray.
 </p>
 
-**Current version**: 0.7.0 (Local TTS & Tabbed Settings)
+**Current version**: 0.8.0 (Floating Overlay & Expanded Voice List)
 
 ## Features
 
@@ -16,9 +16,10 @@
 - **Ask questions with Voice Prompt**: Press Ctrl+Alt+A to record a question, get an AI answer, and paste it.
 - **Read text aloud with TTS**: Press Ctrl+Alt+T to read clipboard content via text-to-speech (v0.6+).
 - **Ask AI and hear the answer**: Press Ctrl+Alt+Y to ask a question and hear the answer read aloud (v0.6+).
+- **Floating overlay UI** (v0.8+): Non-intrusive status display in bottom-right corner. Shows recording timer, processing animation, speaking feedback, and paste confirmation. Disable in Settings.
 - **Choose your transcription source**: Cloud (OpenAI Whisper API) or offline (local faster-whisper with Silero VAD).
 - **Multiple summarization backends**: OpenAI, OpenRouter (Claude, Llama), or local Ollama.
-- **Multiple TTS providers**: ElevenLabs cloud (human-quality voices) or local Piper (offline, free, 5 German voices).
+- **Multiple TTS providers**: ElevenLabs cloud (human-quality voices) or local Piper (offline, free, 14 languages & voices including German, English US, English GB).
 - **Tabbed Settings dialog**: Organized configuration interface with Transcription, Summarization, Text-to-Speech, and General tabs (v0.7+).
 - **Secure credential storage**: API keys stored in Windows Credential Manager, never in plain text files.
 - **Silent operation**: Runs in system tray. Never steals focus.
@@ -173,13 +174,14 @@ All options can be set via the **Settings dialog** (right-click tray → Setting
 | `[tts]` `voice_id` | string | `"pFZP5JQG7iQjIQuC4Bku"` | ElevenLabs voice ID (Lily by default). Browse voices at https://elevenlabs.io/voice-library. Only used when `provider = "elevenlabs"`. |
 | `[tts]` `model_id` | string | `"eleven_flash_v2_5"` | ElevenLabs model ID. Default: `"eleven_flash_v2_5"` (fast, low latency). Only used when `provider = "elevenlabs"`. |
 | `[tts]` `output_format` | string | `"mp3_44100_128"` | ElevenLabs output format. Only used when `provider = "elevenlabs"`. |
-| `[tts]` `local_voice` | string | `"de_DE-thorsten-medium"` | Piper voice model name (v0.7+). Available German voices: `de_DE-thorsten-medium` (recommended), `de_DE-thorsten-high`, `de_DE-thorsten_emotional-medium`. Download models via Settings. Only used when `provider = "piper"`. |
+| `[tts]` `local_voice` | string | `"de_DE-thorsten-medium"` | Piper voice model name (v0.7+). See below for available voices. Download models via Settings. Only used when `provider = "piper"`. |
 
 ### Feedback & Logging
 
 | Key | Type | Default | Description |
 |-----|------|---------|-------------|
 | `[feedback]` `audio_cues` | boolean | `true` | Play audio beeps on recording start/stop/cancel/error and TTS completion. Set `false` for silent operation. |
+| `[feedback]` `show_overlay` | boolean | `true` | Show floating overlay UI in bottom-right corner with state feedback (v0.8+). Set `false` to disable overlay. |
 | `[logging]` `level` | string | `"INFO"` | Log level: `"DEBUG"`, `"INFO"`, `"WARNING"`, or `"ERROR"`. |
 
 ## Choosing a Transcription Backend
@@ -225,6 +227,32 @@ All options can be set via the **Settings dialog** (right-click tray → Setting
 5. Click **Download Model** (one-time, ~2–5 minutes)
 6. Click **Save**
 
+## Available Piper TTS Voices (v0.7+)
+
+When using local Piper TTS, the following voices are available. Each voice is approximately 60–120 MB and is downloaded on demand.
+
+### German Voices
+- `de_DE-thorsten-medium` (recommended, ~63 MB) — Neutral male voice, good balance of quality and size.
+- `de_DE-thorsten-high` (~114 MB) — Higher quality version of Thorsten.
+- `de_DE-thorsten_emotional-medium` (~77 MB) — Multi-emotion support, expressive.
+- `de_DE-mls-medium` (~95 MB) — Alternative male voice.
+
+### English (US) Voices
+- `en_US-ryan-high` (~114 MB) — Male voice, high quality.
+- `en_US-ryan-medium` (~64 MB) — Male voice, medium quality.
+- `en_US-lessac-high` (~114 MB) — Male voice, high quality.
+- `en_US-lessac-medium` (~64 MB) — Male voice, medium quality.
+- `en_US-amy-medium` (~64 MB) — Female voice, medium quality.
+
+### English (GB) Voices
+- `en_GB-cori-high` (~114 MB) — Female voice, high quality.
+- `en_GB-cori-medium` (~64 MB) — Female voice, medium quality.
+- `en_GB-alba-medium` (~64 MB) — Female voice, medium quality.
+- `en_GB-jenny_dioco-medium` (~64 MB) — Female voice, medium quality.
+- `en_GB-alan-medium` (~64 MB) — Male voice, medium quality.
+
+Voice models are cached in `%LOCALAPPDATA%\VoicePaste\models\tts\` and auto-downloaded on demand in Settings > Text-to-Speech > Download Model.
+
 ## Keyboard Shortcuts
 
 | Hotkey | Action |
@@ -243,9 +271,21 @@ Right-click the tray icon and select **Settings** to open the configuration dial
 - **Transcription**: Choose cloud (OpenAI Whisper) or local (faster-whisper) backend. Download local models, set device/compute type, enable/disable VAD filter.
 - **Summarization**: Enable/disable text cleanup. Choose provider (OpenAI, OpenRouter, Ollama). Custom prompts.
 - **Text-to-Speech** (v0.6+): Enable/disable TTS. Choose provider (ElevenLabs cloud or Piper local). Download Piper voice models, select voice.
-- **General** (v0.7+): Toggle audio cues, set log level, manage API credentials (OpenAI, OpenRouter, ElevenLabs) via Windows Credential Manager.
+- **General** (v0.7+): Toggle audio cues, set log level, manage API credentials (OpenAI, OpenRouter, ElevenLabs) via Windows Credential Manager. Toggle floating overlay display (v0.8+).
 
 Changes save immediately. No restart needed (hot-reload).
+
+### Floating Overlay Display (v0.8+)
+
+The floating overlay is a non-intrusive status display in the bottom-right corner of your screen. It shows:
+
+- **Recording**: Red dot + live timer (MM:SS format).
+- **Processing**: Amber dot + animated dots (Processing. / Processing.. / Processing...).
+- **Speaking** (TTS): Blue pulsing dot + "Speaking...".
+- **Pasting**: Green dot + "Pasted" (auto-hides after 800ms).
+- **Idle**: Overlay is hidden.
+
+The overlay never steals focus (click-through, non-activatable). You can toggle it on/off in Settings > General > "Show floating overlay" without restarting the app.
 
 ## Troubleshooting
 
@@ -505,13 +545,14 @@ For issues, questions, or feedback:
 
 See [CHANGELOG.md](CHANGELOG.md) for release notes and what changed between versions.
 
-**Current version**: 0.7.0 (Local TTS & Tabbed Settings)
-- Local TTS via Piper (offline, free, 5 German voices)
-- Direct HTTPS model downloads from Hugging Face (fixes Xet Storage bugs)
-- Tabbed Settings dialog (TTK with dark theme)
-- TTS Cloud/Local provider toggle
+**Current version**: 0.8.0 (Floating Overlay & Expanded Voice List)
+- Floating overlay UI with state feedback (recording timer, processing animation, paste confirmation)
+- Expanded Piper voice list: 14 voices across German, English US, English GB (from 5 German voices)
+- SHA256 integrity verification for model downloads (security hardening)
+- Startup notification shows TTS hotkeys when enabled
 
 **Previous versions**:
+- 0.7.0: Local TTS via Piper (offline, free), direct HTTPS model downloads, tabbed Settings dialog
 - 0.6.0: ElevenLabs cloud TTS, TTS hotkeys, audio playback
 - 0.5.0: Voice Prompt mode, dynamic icon drawing, build consolidation
 - 0.4.0: Local STT via faster-whisper, model manager, VAD filter
