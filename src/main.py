@@ -371,6 +371,7 @@ class VoicePasteApp:
             voice_id=config.tts_voice_id,
             model_id=config.tts_model_id,
             output_format=config.tts_output_format,
+            local_voice=config.tts_local_voice,
         )
         if self._tts is not None:
             logger.info("TTS backend ready: %s", config.tts_provider)
@@ -543,7 +544,7 @@ class VoicePasteApp:
             else:
                 logger.warning("STT backend unavailable after settings change.")
 
-        # v0.6: Determine if TTS backend needs rebuild
+        # v0.6+v0.7: Determine if TTS backend needs rebuild
         tts_keys = {
             "tts_enabled",
             "elevenlabs_api_key",
@@ -551,8 +552,18 @@ class VoicePasteApp:
             "tts_voice_id",
             "tts_model_id",
             "tts_output_format",
+            "tts_local_voice",
         }
         if changed_fields.keys() & tts_keys:
+            # Unload previous local TTS model if switching away
+            old_tts = self._tts
+            if old_tts is not None and hasattr(old_tts, "unload_model"):
+                logger.info("Unloading previous local TTS model...")
+                try:
+                    old_tts.unload_model()
+                except Exception as e:
+                    logger.warning("Error unloading local TTS model: %s", e)
+
             self._rebuild_tts()
             logger.info("TTS backend rebuilt with updated settings.")
 
@@ -978,6 +989,14 @@ class VoicePasteApp:
                 logger.info("Local STT model unloaded.")
             except Exception as e:
                 logger.warning("Error unloading local STT model: %s", e)
+
+        # v0.7: Unload local TTS model to free memory
+        if self._tts is not None and hasattr(self._tts, "unload_model"):
+            try:
+                self._tts.unload_model()
+                logger.info("Local TTS model unloaded.")
+            except Exception as e:
+                logger.warning("Error unloading local TTS model: %s", e)
 
         # Unregister hotkeys
         self._hotkey_manager.unregister()

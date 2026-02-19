@@ -16,6 +16,7 @@ from typing import Optional
 
 from constants import (
     DEFAULT_HOTKEY,
+    DEFAULT_PIPER_VOICE,
     DEFAULT_PROMPT_HOTKEY,
     DEFAULT_STT_BACKEND,
     DEFAULT_SUMMARIZATION_PROVIDER,
@@ -42,6 +43,7 @@ from constants import (
     OPENAI_DEFAULT_BASE_URL,
     OPENROUTER_DEFAULT_BASE_URL,
     OPENROUTER_DEFAULT_MODEL,
+    PIPER_VOICE_MODELS,
     STT_BACKENDS,
     SUMMARIZE_MODEL,
     SUMMARIZE_SYSTEM_PROMPT,
@@ -181,6 +183,9 @@ class AppConfig:
     tts_hotkey: str = DEFAULT_TTS_HOTKEY
     tts_ask_hotkey: str = DEFAULT_TTS_ASK_HOTKEY
 
+    # --- v0.7: Local TTS (Piper) fields ---
+    tts_local_voice: str = DEFAULT_PIPER_VOICE
+
     @property
     def config_path(self) -> Path:
         """Path to the config.toml file."""
@@ -298,12 +303,17 @@ base_url = "{esc(self.summarization_base_url)}"
 custom_prompt = "{esc(self.summarization_custom_prompt)}"
 
 [tts]
-# Text-to-Speech (v0.6): read text aloud via ElevenLabs
+# Text-to-Speech: "elevenlabs" (cloud) or "piper" (local, offline)
 enabled = {str(self.tts_enabled).lower()}
 provider = "{esc(self.tts_provider)}"
+# --- Cloud (ElevenLabs) fields ---
 voice_id = "{esc(self.tts_voice_id)}"
 model_id = "{esc(self.tts_model_id)}"
 output_format = "{esc(self.tts_output_format)}"
+# --- Local (Piper) fields (v0.7) ---
+# Voice model name. Available: de_DE-thorsten-medium, de_DE-thorsten-high,
+# en_US-lessac-medium, en_US-amy-medium. Download via Settings dialog.
+local_voice = "{esc(self.tts_local_voice)}"
 
 [feedback]
 audio_cues = {str(self.audio_cues_enabled).lower()}
@@ -576,6 +586,16 @@ def load_config() -> Optional[AppConfig]:
     tts_model_id = tts_section.get("model_id", DEFAULT_TTS_MODEL_ID)
     tts_output_format = tts_section.get("output_format", DEFAULT_TTS_OUTPUT_FORMAT)
 
+    # v0.7: Local TTS (Piper) voice name
+    tts_local_voice = tts_section.get("local_voice", DEFAULT_PIPER_VOICE)
+    if tts_local_voice not in PIPER_VOICE_MODELS:
+        logger.warning(
+            "Unknown Piper voice '%s'. Falling back to '%s'.",
+            tts_local_voice,
+            DEFAULT_PIPER_VOICE,
+        )
+        tts_local_voice = DEFAULT_PIPER_VOICE
+
     # --- v0.3: Keyring integration for API keys ---
     openai_api_key = ""
     openrouter_api_key = ""
@@ -644,6 +664,8 @@ def load_config() -> Optional[AppConfig]:
         tts_output_format=tts_output_format,
         tts_hotkey=tts_hotkey,
         tts_ask_hotkey=tts_ask_hotkey,
+        # v0.7: Local TTS (Piper)
+        tts_local_voice=tts_local_voice,
     )
 
     # REQ-S01: Only log the masked key

@@ -1,9 +1,10 @@
 """Audio playback module for TTS output.
 
-Decodes MP3 audio bytes via miniaudio and plays through sounddevice.
+Decodes MP3 or WAV audio bytes via miniaudio and plays through sounddevice.
 Supports cancel/stop mid-playback. Runs blocking on a worker thread.
 
-v0.6: Initial implementation for TTS playback.
+v0.6: Initial implementation for TTS playback (MP3 from ElevenLabs).
+v0.7: WAV support for local Piper TTS (miniaudio handles both formats).
 """
 
 import logging
@@ -38,12 +39,13 @@ class AudioPlayer:
         return self._playing
 
     def play(self, audio_data: bytes, sample_rate: int = 44100) -> bool:
-        """Play audio data (MP3 bytes) through the default output device.
+        """Play audio data (MP3 or WAV bytes) through the default output device.
 
-        Blocks until playback completes or stop() is called.
+        Blocks until playback completes or stop() is called. miniaudio
+        auto-detects the format from the audio data header.
 
         Args:
-            audio_data: MP3-encoded audio bytes.
+            audio_data: Audio bytes (MP3 from ElevenLabs, WAV from Piper).
             sample_rate: Expected sample rate (default 44100 for ElevenLabs MP3).
 
         Returns:

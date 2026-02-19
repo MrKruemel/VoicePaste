@@ -1,9 +1,10 @@
 """Text-to-Speech backend for Voice Paste.
 
-Protocol-based TTS abstraction with ElevenLabs implementation.
+Protocol-based TTS abstraction with ElevenLabs and Piper implementations.
 Follows the same pattern as stt.py and summarizer.py.
 
-v0.6: Initial implementation.
+v0.6: Initial implementation (ElevenLabs cloud TTS).
+v0.7: Added Piper local TTS via direct ONNX inference.
 """
 
 import logging
@@ -20,13 +21,14 @@ class TTSBackend(Protocol):
     """Protocol for TTS backends."""
 
     def synthesize(self, text: str) -> bytes:
-        """Synthesize text to audio bytes (MP3).
+        """Synthesize text to audio bytes (MP3 or WAV).
 
         Args:
             text: Text to synthesize.
 
         Returns:
-            MP3-encoded audio bytes.
+            Audio bytes (MP3 for cloud backends, WAV for local backends).
+            The AudioPlayer handles both formats transparently.
 
         Raises:
             TTSError: If synthesis fails.
@@ -136,19 +138,48 @@ def create_tts_backend(
     voice_id: str = "",
     model_id: str = "",
     output_format: str = "",
+    local_voice: str = "",
 ) -> Optional[TTSBackend]:
     """Factory: create a TTS backend from configuration.
 
     Args:
-        api_key: API key for the TTS provider.
-        provider: TTS provider name (currently only "elevenlabs").
-        voice_id: Voice ID override.
-        model_id: Model ID override.
-        output_format: Output format override.
+        api_key: API key for the TTS provider (required for cloud providers).
+        provider: TTS provider name ("elevenlabs" or "piper").
+        voice_id: Voice ID override (ElevenLabs).
+        model_id: Model ID override (ElevenLabs).
+        output_format: Output format override (ElevenLabs).
+        local_voice: Piper voice name (e.g., "de_DE-thorsten-medium").
 
     Returns:
         TTSBackend instance, or None if configuration is incomplete.
     """
+    if provider == "piper":
+        # v0.7: Local TTS via Piper ONNX -- no API key needed
+        try:
+            from local_tts import PiperLocalTTS, is_espeakng_available
+
+            if not is_espeakng_available():
+                logger.warning(
+                    "espeakng-loader is not available. "
+                    "Local TTS (Piper) cannot be used."
+                )
+                return None
+
+            from constants import DEFAULT_PIPER_VOICE
+
+            voice = local_voice or DEFAULT_PIPER_VOICE
+            return PiperLocalTTS(voice_name=voice)
+
+        except ImportError as e:
+            logger.warning(
+                "Piper local TTS not available (missing dependencies): %s", e
+            )
+            return None
+        except Exception as e:
+            logger.error("Failed to create Piper TTS backend: %s", e)
+            return None
+
+    # Cloud providers require an API key
     if not api_key:
         logger.warning("No TTS API key configured. TTS will not be available.")
         return None

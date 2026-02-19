@@ -76,6 +76,12 @@ websockets==16.0            # ElevenLabs SDK dependency (streaming support)
 cffi==2.0.0                 # CFFI runtime -- required by miniaudio's _miniaudio.pyd
 
 # ---------------------------------------------------------------------------
+# Local TTS: Piper via direct ONNX inference (v0.7)
+# ---------------------------------------------------------------------------
+espeakng-loader>=0.2.4          # Bundles espeak-ng DLL + data for phonemization (MIT)
+# onnxruntime and numpy are already listed above (shared with local STT)
+
+# ---------------------------------------------------------------------------
 # Transitive dependencies for local STT (pinned for PyInstaller)
 # ---------------------------------------------------------------------------
 pyyaml==6.0.2               # YAML parsing (huggingface-hub dep)

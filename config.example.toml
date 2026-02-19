@@ -93,14 +93,18 @@ base_url = ""
 custom_prompt = ""
 
 [tts]
-# Text-to-Speech via ElevenLabs (v0.6)
-# Reads text aloud using natural AI voices. Requires an ElevenLabs API key.
+# Text-to-Speech (v0.6 cloud, v0.7 local Piper)
+# Reads text aloud using natural AI voices.
 # Enable in Settings dialog or set enabled = true here.
 enabled = false
 
-# TTS provider (currently only "elevenlabs" supported)
+# TTS provider: "elevenlabs" (cloud, requires API key) or "piper" (local, offline)
+# - "elevenlabs": High-quality cloud voices via ElevenLabs API. Requires internet + API key.
+# - "piper": Local offline synthesis via Piper ONNX models. No API key needed.
+#   Download voice models via Settings dialog > Text-to-Speech > Download Model.
 provider = "elevenlabs"
 
+# --- Cloud (ElevenLabs) settings ---
 # ElevenLabs Voice ID (default: "pFZP5JQG7iQjIQuC4Bku" = Lily)
 # Browse voices at: https://elevenlabs.io/voice-library
 # You can use any voice ID from your ElevenLabs account.
@@ -114,6 +118,16 @@ model_id = "eleven_flash_v2_5"
 
 # Audio output format
 output_format = "mp3_44100_128"
+
+# --- Local (Piper) settings (v0.7) ---
+# Piper voice model name. Download models via Settings dialog before first use.
+# Available voices:
+# - "de_DE-thorsten-medium" (DE, ~63 MB, recommended)
+# - "de_DE-thorsten-high" (DE, ~114 MB, higher quality)
+# - "de_DE-thorsten_emotional-medium" (DE, ~77 MB, multi-emotion)
+# - "en_US-lessac-medium" (EN, ~64 MB, male)
+# - "en_US-amy-medium" (EN, ~64 MB, female)
+local_voice = "de_DE-thorsten-medium"
 
 [feedback]
 # Play audio cues on recording start/stop (default: true)

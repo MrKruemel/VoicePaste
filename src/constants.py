@@ -26,7 +26,7 @@ class AppState(enum.Enum):
 
 # Application metadata
 APP_NAME = "Voice Paste"
-APP_VERSION = "0.6.0"
+APP_VERSION = "0.7.0"
 
 # Hotkey configuration
 # Hotkey history:
@@ -181,7 +181,8 @@ LOCAL_MODEL_DISPLAY: dict[str, dict[str, str]] = {
 }
 
 # --- v0.6: TTS (Text-to-Speech) configuration ---
-TTS_PROVIDERS = ("elevenlabs",)
+# v0.7: Added "piper" for local offline TTS
+TTS_PROVIDERS = ("elevenlabs", "piper")
 DEFAULT_TTS_PROVIDER = "elevenlabs"
 DEFAULT_TTS_VOICE_ID = "pFZP5JQG7iQjIQuC4Bku"  # Lily — ElevenLabs default
 DEFAULT_TTS_MODEL_ID = "eleven_flash_v2_5"        # Low-latency flash model
@@ -202,3 +203,60 @@ AUDIO_CUE_TTS_STOP_DURATION_MS = 75
 
 # Max text length for TTS (prevent accidentally reading huge clipboard content)
 TTS_MAX_TEXT_LENGTH = 10000
+
+# --- v0.7: Piper local TTS configuration ---
+DEFAULT_PIPER_VOICE = "de_DE-thorsten-medium"
+
+# Piper voice model registry.
+# Each entry maps a voice name to its Hugging Face repo path and metadata.
+# Models are downloaded on demand by the user via Settings > TTS > Download.
+PIPER_VOICE_MODELS: dict[str, dict[str, str]] = {
+    "de_DE-thorsten-medium": {
+        "label": "Thorsten (DE, medium quality, recommended)",
+        "repo": "rhasspy/piper-voices",
+        "files": "de/de_DE/thorsten/medium/de_DE-thorsten-medium.onnx,"
+                 "de/de_DE/thorsten/medium/de_DE-thorsten-medium.onnx.json",
+        "download_mb": "63",
+        "sample_rate": "22050",
+    },
+    "de_DE-thorsten-high": {
+        "label": "Thorsten (DE, high quality, larger)",
+        "repo": "rhasspy/piper-voices",
+        "files": "de/de_DE/thorsten/high/de_DE-thorsten-high.onnx,"
+                 "de/de_DE/thorsten/high/de_DE-thorsten-high.onnx.json",
+        "download_mb": "114",
+        "sample_rate": "22050",
+    },
+    "de_DE-thorsten_emotional-medium": {
+        "label": "Thorsten Emotional (DE, medium, multi-emotion)",
+        "repo": "rhasspy/piper-voices",
+        "files": "de/de_DE/thorsten_emotional/medium/de_DE-thorsten_emotional-medium.onnx,"
+                 "de/de_DE/thorsten_emotional/medium/de_DE-thorsten_emotional-medium.onnx.json",
+        "download_mb": "77",
+        "sample_rate": "22050",
+    },
+    "en_US-lessac-medium": {
+        "label": "Lessac (EN, medium quality, male)",
+        "repo": "rhasspy/piper-voices",
+        "files": "en/en_US/lessac/medium/en_US-lessac-medium.onnx,"
+                 "en/en_US/lessac/medium/en_US-lessac-medium.onnx.json",
+        "download_mb": "64",
+        "sample_rate": "22050",
+    },
+    "en_US-amy-medium": {
+        "label": "Amy (EN, medium quality, female)",
+        "repo": "rhasspy/piper-voices",
+        "files": "en/en_US/amy/medium/en_US-amy-medium.onnx,"
+                 "en/en_US/amy/medium/en_US-amy-medium.onnx.json",
+        "download_mb": "64",
+        "sample_rate": "22050",
+    },
+}
+
+# Parse the comma-separated file paths into lists for runtime use.
+# This is done here rather than using list literals in the dict above
+# because TOML-style constants should use simple string values.
+for _voice_name, _voice_info in PIPER_VOICE_MODELS.items():
+    _files_str = _voice_info.get("files", "")
+    if isinstance(_files_str, str):
+        _voice_info["files"] = [f.strip() for f in _files_str.split(",") if f.strip()]

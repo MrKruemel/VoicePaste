@@ -173,6 +173,27 @@ try:
 except Exception as e:
     print(f'[voice_paste.spec] Note: sv_ttk data files not found: {e}')
 
+# --- espeakng-loader: espeak-ng DLL + language data (v0.7: local TTS) ---
+# The espeakng-loader package bundles espeak-ng.dll (~0.4 MB) and the
+# espeak-ng-data/ directory (~17.5 MB) containing language data files.
+# Both are required for Piper local TTS phonemization.
+try:
+    _espeakng_data = collect_data_files('espeakng_loader')
+    _datas += _espeakng_data
+    print(f'[voice_paste.spec] Collected {len(_espeakng_data)} espeakng-loader data files.')
+except Exception as e:
+    print(f'[voice_paste.spec] Note: espeakng-loader data not found: {e}')
+
+try:
+    _espeakng_bins = collect_dynamic_libs('espeakng_loader')
+    if _espeakng_bins:
+        _binaries += _espeakng_bins
+        print(f'[voice_paste.spec] Collected {len(_espeakng_bins)} espeakng-loader binaries.')
+    else:
+        print(f'[voice_paste.spec] espeakng-loader: no dynamic libs found (DLL may be in data files).')
+except Exception as e:
+    print(f'[voice_paste.spec] Note: espeakng-loader binaries not found: {e}')
+
 print(f'[voice_paste.spec] Collected {len(_datas)} total data files.')
 
 # ---------------------------------------------------------------------------
@@ -327,6 +348,9 @@ _hidden_imports = [
 
     # --- sv_ttk (Sun Valley theme for modern tkinter UI) ---
     'sv_ttk',
+
+    # --- espeakng-loader (v0.7: local TTS phonemization) ---
+    'espeakng_loader',
 
     # --- TTS: ElevenLabs SDK + miniaudio + websockets (v0.6) ---
     # elevenlabs: Uses __getattr__ lazy imports with importlib.import_module.
@@ -530,6 +554,10 @@ _upx_exclude = [
     # the entire miniaudio.h library statically linked.  UPX compression
     # can corrupt CFFI modules due to their embedded function pointer tables.
     '_miniaudio.pyd',
+
+    # --- espeak-ng (v0.7: local TTS phonemization) ---
+    # espeak-ng.dll is a C library that must not be UPX-compressed.
+    'espeak-ng.dll',
 ]
 
 # ---------------------------------------------------------------------------

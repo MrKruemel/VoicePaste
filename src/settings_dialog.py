@@ -685,7 +685,7 @@ class SettingsDialog:
             self._openrouter_key_btn,
         ]
 
-        # === Section 3: Text-to-Speech (v0.6) ===
+        # === Section 3: Text-to-Speech (v0.6, v0.7 local Piper) ===
         tts_frame = ttk.LabelFrame(
             main_frame, text="Text-to-Speech", padding=(10, 8)
         )
@@ -701,8 +701,28 @@ class SettingsDialog:
         )
         self._tts_checkbox.pack(fill=tk.X, pady=(0, 6))
 
+        # v0.7: TTS Backend selector row
+        tts_backend_row = ttk.Frame(tts_frame)
+        tts_backend_row.pack(fill=tk.X, pady=(0, 4))
+
+        ttk.Label(tts_backend_row, text="Backend:", width=10, anchor=tk.W).pack(side=tk.LEFT)
+
+        self._tts_backend_var = tk.StringVar()
+        self._tts_backend_combo = ttk.Combobox(
+            tts_backend_row,
+            textvariable=self._tts_backend_var,
+            values=["Cloud (ElevenLabs API)", "Local (Piper, offline)"],
+            state="readonly",
+            width=35,
+        )
+        self._tts_backend_combo.pack(side=tk.LEFT, padx=(4, 0))
+        self._tts_backend_combo.bind("<<ComboboxSelected>>", self._on_tts_backend_changed)
+
+        # --- TTS Cloud sub-frame (ElevenLabs, shown when backend = cloud) ---
+        self._tts_cloud_frame = ttk.Frame(tts_frame)
+
         # ElevenLabs API Key row
-        tts_key_row = ttk.Frame(tts_frame)
+        tts_key_row = ttk.Frame(self._tts_cloud_frame)
         tts_key_row.pack(fill=tk.X, pady=(0, 2))
 
         ttk.Label(tts_key_row, text="API Key:", width=10, anchor=tk.W).pack(side=tk.LEFT)
@@ -723,7 +743,7 @@ class SettingsDialog:
         self._elevenlabs_key_actual = self._config.elevenlabs_api_key
 
         tts_key_hint = ttk.Label(
-            tts_frame,
+            self._tts_cloud_frame,
             text="Get a key at elevenlabs.io. Stored in Windows Credential Manager.",
             foreground="#999999",
             font=("", 8),
@@ -731,7 +751,7 @@ class SettingsDialog:
         tts_key_hint.pack(fill=tk.X, pady=(0, 4))
 
         # Voice row
-        tts_voice_row = ttk.Frame(tts_frame)
+        tts_voice_row = ttk.Frame(self._tts_cloud_frame)
         tts_voice_row.pack(fill=tk.X, pady=(0, 4))
 
         ttk.Label(tts_voice_row, text="Voice:", width=10, anchor=tk.W).pack(side=tk.LEFT)
@@ -755,7 +775,7 @@ class SettingsDialog:
         self._tts_voice_combo.bind("<<ComboboxSelected>>", self._on_tts_voice_changed)
 
         # Custom Voice ID row
-        tts_custom_voice_row = ttk.Frame(tts_frame)
+        tts_custom_voice_row = ttk.Frame(self._tts_cloud_frame)
         tts_custom_voice_row.pack(fill=tk.X, pady=(0, 4))
 
         ttk.Label(tts_custom_voice_row, text="Voice ID:", width=10, anchor=tk.W).pack(side=tk.LEFT)
@@ -767,7 +787,7 @@ class SettingsDialog:
         self._tts_voice_id_entry.pack(side=tk.LEFT, padx=(4, 0))
 
         # Model row
-        tts_model_row = ttk.Frame(tts_frame)
+        tts_model_row = ttk.Frame(self._tts_cloud_frame)
         tts_model_row.pack(fill=tk.X, pady=(0, 4))
 
         ttk.Label(tts_model_row, text="Model:", width=10, anchor=tk.W).pack(side=tk.LEFT)
@@ -782,13 +802,101 @@ class SettingsDialog:
         )
         self._tts_model_combo.pack(side=tk.LEFT, padx=(4, 0))
 
+        # --- TTS Local sub-frame (Piper, shown when backend = local) ---
+        self._tts_local_frame = ttk.Frame(tts_frame)
+
+        # Piper voice dropdown row
+        tts_piper_voice_row = ttk.Frame(self._tts_local_frame)
+        tts_piper_voice_row.pack(fill=tk.X, pady=(0, 4))
+
+        ttk.Label(tts_piper_voice_row, text="Voice:", width=10, anchor=tk.W).pack(side=tk.LEFT)
+
+        from constants import PIPER_VOICE_MODELS
+        self._tts_piper_voice_var = tk.StringVar()
+        piper_display_values = [
+            info["label"] for info in PIPER_VOICE_MODELS.values()
+        ]
+        self._tts_piper_voice_combo = ttk.Combobox(
+            tts_piper_voice_row,
+            textvariable=self._tts_piper_voice_var,
+            values=piper_display_values,
+            state="readonly",
+            width=45,
+        )
+        self._tts_piper_voice_combo.pack(side=tk.LEFT, padx=(4, 0))
+        self._tts_piper_voice_combo.bind(
+            "<<ComboboxSelected>>", self._on_tts_piper_voice_changed
+        )
+
+        # Piper model status row
+        tts_piper_status_row = ttk.Frame(self._tts_local_frame)
+        tts_piper_status_row.pack(fill=tk.X, pady=(0, 4))
+
+        ttk.Label(tts_piper_status_row, text="Status:", width=10, anchor=tk.W).pack(side=tk.LEFT)
+
+        self._tts_model_status_label = ttk.Label(
+            tts_piper_status_row, text="Checking...", foreground="#999999"
+        )
+        self._tts_model_status_label.pack(side=tk.LEFT, padx=(4, 0))
+
+        self._tts_download_btn = ttk.Button(
+            tts_piper_status_row, text="Download Model", width=16,
+            command=self._on_tts_download_clicked,
+        )
+        # Don't pack yet -- _update_tts_model_status will show/hide it
+
+        self._tts_delete_btn = ttk.Button(
+            tts_piper_status_row, text="Delete", width=8,
+            command=self._on_tts_delete_clicked,
+        )
+        # Don't pack yet -- _update_tts_model_status will show/hide it
+
+        # Piper progress bar row (hidden by default)
+        self._tts_progress_frame = ttk.Frame(self._tts_local_frame)
+
+        ttk.Label(self._tts_progress_frame, text="", width=10).pack(side=tk.LEFT)
+        self._tts_progress_bar = ttk.Progressbar(
+            self._tts_progress_frame, mode="determinate", length=300,
+            maximum=100,
+        )
+        self._tts_progress_bar.pack(side=tk.LEFT, padx=(4, 8))
+
+        self._tts_progress_label = ttk.Label(
+            self._tts_progress_frame, text="Downloading...", foreground="#999999",
+            font=("", 8),
+        )
+        self._tts_progress_label.pack(side=tk.LEFT)
+
+        # Piper privacy hint
+        tts_local_hint = ttk.Label(
+            self._tts_local_frame,
+            text="Local mode: audio is synthesized on your device. No internet needed.",
+            foreground="#66CC66",
+            font=("", 8),
+        )
+        tts_local_hint.pack(fill=tk.X, pady=(2, 4))
+
+        # TTS model download state (Piper)
+        self._tts_download_thread: threading.Thread | None = None
+        self._tts_download_cancel = threading.Event()
+        self._tts_download_done = threading.Event()
+        self._tts_download_success = False
+        self._tts_download_error_msg: str = ""
+        self._tts_download_bytes: int = 0
+        self._tts_download_total: int = 0
+        self._tts_download_poll_count: int = 0
+
         # Store references for enable/disable
         self._tts_widgets = [
+            self._tts_backend_combo,
             self._elevenlabs_key_entry,
             self._elevenlabs_key_btn,
             self._tts_voice_combo,
             self._tts_voice_id_entry,
             self._tts_model_combo,
+            self._tts_piper_voice_combo,
+            self._tts_download_btn,
+            self._tts_delete_btn,
         ]
 
         # === Section 4: General ===
@@ -938,8 +1046,14 @@ class SettingsDialog:
             from constants import SUMMARIZE_SYSTEM_PROMPT
             self._prompt_text.insert("1.0", SUMMARIZE_SYSTEM_PROMPT)
 
-        # v0.6: TTS fields
+        # v0.6/v0.7: TTS fields
         self._tts_enabled_var.set(config.tts_enabled)
+
+        # v0.7: TTS backend selector
+        if config.tts_provider == "piper":
+            self._tts_backend_var.set("Local (Piper, offline)")
+        else:
+            self._tts_backend_var.set("Cloud (ElevenLabs API)")
 
         # ElevenLabs API key
         if config.elevenlabs_api_key:
@@ -970,6 +1084,26 @@ class SettingsDialog:
             self._tts_model_var.set("eleven_multilingual_v2 (higher quality)")
         else:
             self._tts_model_var.set("eleven_flash_v2_5 (fast, low latency)")
+
+        # v0.7: Piper voice selection
+        from constants import PIPER_VOICE_MODELS
+        piper_voice_key = config.tts_local_voice
+        if piper_voice_key in PIPER_VOICE_MODELS:
+            self._tts_piper_voice_var.set(
+                PIPER_VOICE_MODELS[piper_voice_key]["label"]
+            )
+        else:
+            # Fall back to first voice
+            first_key = next(iter(PIPER_VOICE_MODELS))
+            self._tts_piper_voice_var.set(
+                PIPER_VOICE_MODELS[first_key]["label"]
+            )
+
+        # Update Piper model download status
+        self._update_tts_model_status()
+
+        # Show/hide TTS cloud vs local sub-frames
+        self._update_tts_backend_ui()
 
         # Enable/disable TTS widgets
         self._on_tts_toggled()
@@ -1372,24 +1506,48 @@ class SettingsDialog:
             self._openrouter_key_editing = True
 
     def _on_tts_toggled(self) -> None:
-        """Enable/disable TTS widgets based on checkbox."""
+        """Enable/disable TTS widgets based on checkbox.
+
+        When TTS is disabled, the backend dropdown and all sub-frame widgets
+        are disabled. When enabled, the backend dropdown is set to readonly
+        and the visible sub-frame widgets are enabled according to their type.
+        """
         enabled = self._tts_enabled_var.get()
+        is_local = "Local" in self._tts_backend_var.get()
+
         for widget in self._tts_widgets:
             try:
                 if enabled:
-                    if widget == self._tts_voice_combo or widget == self._tts_model_combo:
+                    # Comboboxes -> readonly
+                    if widget in (
+                        self._tts_backend_combo,
+                        self._tts_voice_combo,
+                        self._tts_model_combo,
+                        self._tts_piper_voice_combo,
+                    ):
                         widget.config(state="readonly")
                     elif widget == self._elevenlabs_key_entry:
                         if self._elevenlabs_key_editing:
                             widget.config(state="normal")
                         else:
                             widget.config(state="readonly")
+                    elif widget in (self._tts_download_btn, self._tts_delete_btn):
+                        # Only enable download/delete if local backend is active
+                        # and model status warrants it (handled by _update_tts_model_status)
+                        if is_local:
+                            widget.config(state="normal")
+                        else:
+                            widget.config(state="disabled")
                     else:
                         widget.config(state="normal")
                 else:
                     widget.config(state="disabled")
             except Exception:
                 pass
+
+        # Refresh model status buttons when re-enabling with local backend
+        if enabled and is_local:
+            self._update_tts_model_status()
 
     def _on_tts_voice_changed(self, event=None) -> None:
         """Handle TTS voice dropdown change. Update voice ID field."""
@@ -1424,6 +1582,339 @@ class SettingsDialog:
             self._elevenlabs_key_entry.focus_set()
             self._elevenlabs_key_btn.config(text="Cancel")
             self._elevenlabs_key_editing = True
+
+    def _on_tts_backend_changed(self, event=None) -> None:
+        """Handle TTS backend dropdown change. Show/hide cloud vs local controls."""
+        self._update_tts_backend_ui()
+        self._update_tts_model_status()
+
+    def _update_tts_backend_ui(self) -> None:
+        """Show/hide TTS cloud and local sub-frames based on backend selection."""
+        backend = self._tts_backend_var.get()
+        tk = self._tk
+
+        if "Local" in backend:
+            self._tts_cloud_frame.pack_forget()
+            self._tts_local_frame.pack(fill=tk.X, pady=(4, 0))
+        else:
+            self._tts_local_frame.pack_forget()
+            self._tts_cloud_frame.pack(fill=tk.X, pady=(4, 0))
+
+    def _get_selected_tts_voice_key(self) -> str:
+        """Return the Piper voice key from the selected display label.
+
+        Returns:
+            Voice name key (e.g., 'de_DE-thorsten-medium'), or empty string
+            if no match is found.
+        """
+        from constants import PIPER_VOICE_MODELS
+        selected_label = self._tts_piper_voice_var.get()
+        for key, info in PIPER_VOICE_MODELS.items():
+            if info["label"] == selected_label:
+                return key
+        return ""
+
+    def _on_tts_piper_voice_changed(self, event=None) -> None:
+        """Handle Piper voice dropdown change. Refresh download status."""
+        self._update_tts_model_status()
+
+    def _update_tts_model_status(self) -> None:
+        """Update the Piper model status label and buttons based on selection.
+
+        Checks whether the currently selected Piper voice model is downloaded
+        and updates the status label, download button, and delete button
+        accordingly. Skipped when a download is in progress.
+        """
+        backend = self._tts_backend_var.get()
+        if "Local" not in backend:
+            return
+
+        # Don't update while download is in progress
+        if self._tts_download_thread and self._tts_download_thread.is_alive():
+            return
+
+        voice_key = self._get_selected_tts_voice_key()
+        if not voice_key:
+            self._tts_model_status_label.config(
+                text="No voice selected.", foreground="#FFB347",
+            )
+            self._tts_download_btn.pack_forget()
+            self._tts_delete_btn.pack_forget()
+            return
+
+        try:
+            import tts_model_manager
+            if tts_model_manager.is_tts_model_available(voice_key):
+                self._tts_model_status_label.config(
+                    text="Downloaded and ready.",
+                    foreground="#66CC66",
+                )
+                self._tts_download_btn.pack_forget()
+                self._tts_progress_frame.pack_forget()
+                self._tts_delete_btn.config(state="normal")
+                self._tts_delete_btn.pack(side=self._tk.LEFT, padx=(8, 0))
+            else:
+                from constants import PIPER_VOICE_MODELS
+                info = PIPER_VOICE_MODELS.get(voice_key, {})
+                size_mb = info.get("download_mb", "?")
+                self._tts_model_status_label.config(
+                    text=f"Not downloaded (~{size_mb} MB).",
+                    foreground="#FFB347",
+                )
+                self._tts_download_btn.config(
+                    text="Download Model", state="normal"
+                )
+                self._tts_download_btn.pack(
+                    side=self._tk.LEFT, padx=(8, 0)
+                )
+                self._tts_delete_btn.pack_forget()
+                self._tts_progress_frame.pack_forget()
+        except Exception as e:
+            logger.debug("Could not check TTS model status: %s", e)
+            self._tts_model_status_label.config(
+                text="Could not check model status.",
+                foreground="#FF6B6B",
+            )
+            self._tts_download_btn.pack_forget()
+            self._tts_delete_btn.pack_forget()
+
+    def _on_tts_download_clicked(self) -> None:
+        """Handle TTS Download Model / Cancel button click.
+
+        If a download is in progress, signals cancellation. Otherwise starts
+        a background download thread and begins UI polling.
+        """
+        if self._tts_download_thread and self._tts_download_thread.is_alive():
+            # Cancel in progress
+            self._tts_download_cancel.set()
+            self._tts_download_btn.config(
+                text="Cancelling...", state="disabled"
+            )
+            return
+
+        voice_key = self._get_selected_tts_voice_key()
+        if not voice_key:
+            return
+
+        # Reset events and progress counters
+        self._tts_download_cancel.clear()
+        self._tts_download_done.clear()
+        self._tts_download_success = False
+        self._tts_download_error_msg = ""
+        self._tts_download_bytes = 0
+        self._tts_download_total = 0
+        self._tts_download_poll_count = 0
+
+        # Update UI to show progress
+        self._tts_download_btn.config(text="Cancel", state="normal")
+        self._tts_model_status_label.config(
+            text="Downloading...", foreground="#66B3FF",
+        )
+        self._tts_progress_frame.pack(
+            fill=self._tk.X, pady=(0, 4),
+            after=self._tts_model_status_label.master,
+        )
+        self._tts_progress_bar.config(value=0)
+        self._tts_progress_label.config(text="Connecting to Hugging Face...")
+
+        # Disable voice combo and backend combo during download
+        self._tts_piper_voice_combo.config(state="disabled")
+        self._tts_backend_combo.config(state="disabled")
+        self._tts_delete_btn.pack_forget()
+
+        # Launch download in background thread
+        self._tts_download_thread = threading.Thread(
+            target=self._tts_download_model_thread,
+            args=(voice_key,),
+            daemon=True,
+            name="tts-model-download",
+        )
+        self._tts_download_thread.start()
+
+        # Start polling for completion
+        self._dialog.after(250, self._tts_poll_download)
+
+    def _on_tts_download_progress(
+        self, bytes_downloaded: int, total_bytes: int
+    ) -> None:
+        """Progress callback invoked from the TTS download thread.
+
+        Updates shared counters that the UI poll reads on the tkinter
+        thread. Called from a background thread -- must not touch widgets.
+
+        Args:
+            bytes_downloaded: Bytes downloaded so far for the current file.
+            total_bytes: Total bytes for the current file being downloaded.
+        """
+        self._tts_download_bytes = bytes_downloaded
+        self._tts_download_total = total_bytes
+
+    def _tts_download_model_thread(self, voice_key: str) -> None:
+        """Background thread: download the Piper TTS model.
+
+        Args:
+            voice_key: The Piper voice name (e.g., "de_DE-thorsten-medium").
+        """
+        try:
+            import tts_model_manager
+            logger.info(
+                "Starting TTS model download: voice=%s, cache_dir=%s",
+                voice_key,
+                tts_model_manager.get_tts_cache_dir(),
+            )
+            self._tts_download_success = tts_model_manager.download_tts_model(
+                voice_key,
+                on_progress=self._on_tts_download_progress,
+                cancel_event=self._tts_download_cancel,
+            )
+            if (
+                not self._tts_download_success
+                and not self._tts_download_cancel.is_set()
+            ):
+                self._tts_download_error_msg = (
+                    "Download failed. Check your internet connection "
+                    "and try again. Run with --verbose for details."
+                )
+        except Exception as e:
+            logger.error(
+                "TTS model download failed: %s: %s",
+                type(e).__name__,
+                e,
+                exc_info=True,
+            )
+            self._tts_download_success = False
+            self._tts_download_error_msg = f"{type(e).__name__}: {e}"
+        finally:
+            self._tts_download_done.set()
+
+    def _reset_tts_download_ui(self) -> None:
+        """Reset TTS download UI controls to idle state."""
+        self._tts_progress_bar.config(mode="determinate", value=0)
+        self._tts_progress_frame.pack_forget()
+        self._tts_piper_voice_combo.config(state="readonly")
+        self._tts_backend_combo.config(state="readonly")
+
+    def _tts_poll_download(self) -> None:
+        """Poll the TTS download thread from the tkinter thread.
+
+        Called via ``after()`` every 250ms. Updates the progress bar and
+        label, then checks if the download is complete.
+        """
+        # Respond to cancel immediately
+        if (
+            self._tts_download_cancel.is_set()
+            and not self._tts_download_done.is_set()
+        ):
+            self._reset_tts_download_ui()
+            self._tts_model_status_label.config(
+                text="Download cancelled.", foreground="#FFB347",
+            )
+            self._tts_download_btn.config(
+                text="Download Model", state="normal"
+            )
+            self._tts_download_thread = None
+            return
+
+        if not self._tts_download_done.is_set():
+            self._tts_download_poll_count += 1
+            total = self._tts_download_total
+            downloaded = self._tts_download_bytes
+            if total > 0:
+                pct = min(100.0, (downloaded / total) * 100.0)
+                self._tts_progress_bar.config(
+                    mode="determinate", value=pct
+                )
+                downloaded_mb = downloaded / (1024 * 1024)
+                total_mb = total / (1024 * 1024)
+                self._tts_progress_label.config(
+                    text=f"Downloading: {downloaded_mb:.1f} / {total_mb:.1f} MB "
+                    f"({pct:.0f}%)"
+                )
+            else:
+                elapsed_s = self._tts_download_poll_count * 250 // 1000
+                self._tts_progress_bar.config(mode="indeterminate")
+                self._tts_progress_bar.step(2)
+                if elapsed_s >= 30:
+                    self._tts_progress_label.config(
+                        text=f"Connection slow ({elapsed_s}s). "
+                        f"Check internet or try again."
+                    )
+                else:
+                    self._tts_progress_label.config(
+                        text=f"Connecting to Hugging Face... ({elapsed_s}s)"
+                    )
+            self._dialog.after(250, self._tts_poll_download)
+            return
+
+        # Download finished -- update UI
+        self._reset_tts_download_ui()
+
+        if self._tts_download_cancel.is_set():
+            self._tts_model_status_label.config(
+                text="Download cancelled.", foreground="#FFB347",
+            )
+            self._tts_download_btn.config(
+                text="Download Model", state="normal"
+            )
+        elif self._tts_download_success:
+            self._tts_model_status_label.config(
+                text="Downloaded and ready.",
+                foreground="#66CC66",
+            )
+            self._tts_download_btn.pack_forget()
+        else:
+            error_hint = self._tts_download_error_msg or (
+                "Check logs or run with --verbose and try again."
+            )
+            if len(error_hint) > 100:
+                error_hint = error_hint[:97] + "..."
+            self._tts_model_status_label.config(
+                text=f"Download failed. {error_hint}",
+                foreground="#FF6B6B",
+            )
+            self._tts_download_btn.config(
+                text="Retry Download", state="normal"
+            )
+
+        self._tts_download_thread = None
+        # Refresh status to show correct buttons (download vs delete)
+        self._update_tts_model_status()
+
+    def _on_tts_delete_clicked(self) -> None:
+        """Handle TTS Delete button click. Remove the downloaded Piper model."""
+        voice_key = self._get_selected_tts_voice_key()
+        if not voice_key:
+            return
+
+        from tkinter import messagebox
+        confirmed = messagebox.askyesno(
+            "Delete TTS Voice",
+            f"Delete the '{voice_key}' voice model?\n\n"
+            f"You will need to download it again to use local TTS.",
+            parent=self._dialog,
+        )
+        if not confirmed:
+            return
+
+        self._tts_delete_btn.config(state="disabled")
+
+        try:
+            import tts_model_manager
+            success = tts_model_manager.delete_tts_model(voice_key)
+            if success:
+                logger.info(
+                    "TTS model '%s' deleted via Settings dialog.", voice_key
+                )
+            else:
+                logger.error(
+                    "Failed to delete TTS model '%s'.", voice_key
+                )
+        except Exception as e:
+            logger.error(
+                "Error deleting TTS model '%s': %s", voice_key, e
+            )
+
+        self._update_tts_model_status()
 
     def _reset_prompt(self) -> None:
         """Reset the custom prompt to the default."""
@@ -1483,20 +1974,30 @@ class SettingsDialog:
                 self._base_url_entry.focus_set()
                 return "Base URL must start with https:// for security (except localhost)."
 
-        # TTS validation (v0.6)
+        # TTS validation (v0.6, v0.7 local Piper)
         if self._tts_enabled_var.get():
-            if self._elevenlabs_key_editing:
-                el_key = self._elevenlabs_key_var.get().strip()
-                if not el_key:
-                    self._elevenlabs_key_entry.focus_set()
-                    return "ElevenLabs API key is required when TTS is enabled."
-            elif not self._elevenlabs_key_actual:
-                return "ElevenLabs API key is required for TTS. Click Edit to enter one."
+            tts_backend = self._tts_backend_var.get()
+            is_tts_cloud = "Cloud" in tts_backend
 
-            voice_id = self._tts_voice_id_var.get().strip()
-            if not voice_id:
-                self._tts_voice_id_entry.focus_set()
-                return "Voice ID is required when TTS is enabled."
+            if is_tts_cloud:
+                # Cloud (ElevenLabs) -- require API key and voice ID
+                if self._elevenlabs_key_editing:
+                    el_key = self._elevenlabs_key_var.get().strip()
+                    if not el_key:
+                        self._elevenlabs_key_entry.focus_set()
+                        return "ElevenLabs API key is required for cloud TTS."
+                elif not self._elevenlabs_key_actual:
+                    return "ElevenLabs API key is required for cloud TTS. Click Edit to enter one."
+
+                voice_id = self._tts_voice_id_var.get().strip()
+                if not voice_id:
+                    self._tts_voice_id_entry.focus_set()
+                    return "Voice ID is required for cloud TTS."
+            else:
+                # Local (Piper) -- just require a voice selection
+                piper_voice = self._get_selected_tts_voice_key()
+                if not piper_voice:
+                    return "Please select a Piper voice for local TTS."
 
         return None
 
@@ -1607,11 +2108,19 @@ class SettingsDialog:
             changed_fields["summarization_custom_prompt"] = new_prompt
             config.summarization_custom_prompt = new_prompt
 
-        # v0.6: TTS fields
+        # v0.6/v0.7: TTS fields
         new_tts_enabled = self._tts_enabled_var.get()
         if new_tts_enabled != config.tts_enabled:
             changed_fields["tts_enabled"] = new_tts_enabled
             config.tts_enabled = new_tts_enabled
+
+        # v0.7: TTS provider (cloud = elevenlabs, local = piper)
+        new_tts_provider = (
+            "piper" if "Local" in self._tts_backend_var.get() else "elevenlabs"
+        )
+        if new_tts_provider != config.tts_provider:
+            changed_fields["tts_provider"] = new_tts_provider
+            config.tts_provider = new_tts_provider
 
         # ElevenLabs API key
         if self._elevenlabs_key_editing:
@@ -1626,13 +2135,13 @@ class SettingsDialog:
                 except Exception as e:
                     logger.warning("Failed to store ElevenLabs key in keyring: %s", e)
 
-        # Voice ID
+        # Voice ID (ElevenLabs cloud)
         new_voice_id = self._tts_voice_id_var.get().strip()
         if new_voice_id and new_voice_id != config.tts_voice_id:
             changed_fields["tts_voice_id"] = new_voice_id
             config.tts_voice_id = new_voice_id
 
-        # Model ID
+        # Model ID (ElevenLabs cloud)
         new_model_display = self._tts_model_var.get()
         if "multilingual" in new_model_display:
             new_model_id = "eleven_multilingual_v2"
@@ -1641,6 +2150,12 @@ class SettingsDialog:
         if new_model_id != config.tts_model_id:
             changed_fields["tts_model_id"] = new_model_id
             config.tts_model_id = new_model_id
+
+        # v0.7: Local TTS voice (Piper)
+        new_tts_local_voice = self._get_selected_tts_voice_key()
+        if new_tts_local_voice and new_tts_local_voice != config.tts_local_voice:
+            changed_fields["tts_local_voice"] = new_tts_local_voice
+            config.tts_local_voice = new_tts_local_voice
 
         # Audio cues
         new_audio_cues = self._audio_cues_var.get()
