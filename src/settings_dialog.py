@@ -720,7 +720,7 @@ class SettingsDialog:
 
         # Track editing state for ElevenLabs key
         self._elevenlabs_key_editing = False
-        self._elevenlabs_key_actual = config.elevenlabs_api_key
+        self._elevenlabs_key_actual = self._config.elevenlabs_api_key
 
         tts_key_hint = ttk.Label(
             tts_frame,
