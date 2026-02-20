@@ -469,13 +469,14 @@ class TestTtsModelManager:
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         """get_tts_cache_dir creates the directory if it doesn't exist."""
-        monkeypatch.setenv("LOCALAPPDATA", str(tmp_path))
+        vp_cache = tmp_path / "VoicePaste"
+        monkeypatch.setattr("platform_impl.get_cache_dir", lambda: vp_cache)
 
         from tts_model_manager import get_tts_cache_dir
 
         cache_dir = get_tts_cache_dir()
         assert cache_dir.exists()
-        assert cache_dir == tmp_path / "VoicePaste" / "models" / "tts"
+        assert cache_dir == vp_cache / "models" / "tts"
 
     def test_is_tts_model_valid_with_both_files(
         self, model_dir: Path
@@ -534,7 +535,8 @@ class TestTtsModelManager:
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         """delete_tts_model removes the model directory."""
-        monkeypatch.setenv("LOCALAPPDATA", str(tmp_path))
+        vp_cache = tmp_path / "VoicePaste"
+        monkeypatch.setattr("platform_impl.get_cache_dir", lambda: vp_cache)
 
         from tts_model_manager import delete_tts_model, get_tts_cache_dir
 
@@ -550,7 +552,8 @@ class TestTtsModelManager:
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         """get_tts_model_size_mb returns correct size."""
-        monkeypatch.setenv("LOCALAPPDATA", str(tmp_path))
+        vp_cache = tmp_path / "VoicePaste"
+        monkeypatch.setattr("platform_impl.get_cache_dir", lambda: vp_cache)
 
         from tts_model_manager import get_tts_model_size_mb, get_tts_cache_dir
 
@@ -566,7 +569,8 @@ class TestTtsModelManager:
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         """get_tts_model_size_mb returns 0 for non-existent voice."""
-        monkeypatch.setenv("LOCALAPPDATA", str(tmp_path))
+        vp_cache = tmp_path / "VoicePaste"
+        monkeypatch.setattr("platform_impl.get_cache_dir", lambda: vp_cache)
 
         from tts_model_manager import get_tts_model_size_mb
 

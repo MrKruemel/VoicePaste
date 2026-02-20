@@ -1808,12 +1808,19 @@ def main() -> None:
     logger.info("Executable: %s", sys.executable)
     logger.info("Arguments: %s", sys.argv)
 
-    # Log keyboard library version for debugging hotkey issues
-    try:
-        import keyboard as _kb_diag
-        logger.info("keyboard library version: %s", _kb_diag.version)
-    except Exception as e:
-        logger.warning("Could not determine keyboard library version: %s", e)
+    # Log hotkey library version for debugging hotkey issues
+    if sys.platform == "win32":
+        try:
+            import keyboard as _kb_diag
+            logger.info("keyboard library version: %s", _kb_diag.version)
+        except Exception as e:
+            logger.warning("Could not determine keyboard library version: %s", e)
+    else:
+        try:
+            import pynput as _pynput_diag
+            logger.info("pynput library version: %s", _pynput_diag.__version__)
+        except Exception as e:
+            logger.warning("Could not determine pynput library version: %s", e)
 
     # Log sounddevice/PortAudio version for debugging audio issues
     try:

@@ -1,18 +1,24 @@
 """Global hotkey registration for the Voice-to-Summary Paste Tool.
 
-Uses the `keyboard` library for global hotkey hooks.
+Uses the `keyboard` library on Windows and `pynput` on Linux for
+global hotkey hooks.
 REQ-S15: Only hooks the specific hotkey combination, not blanket monitoring.
 
 v0.1: Ctrl+Win toggle hotkey.
 v0.2+: Escape cancel hotkey (active only during recording).
+v1.1: Linux support via pynput (X11/XWayland).
 """
 
 import logging
+import sys
 import time
 import threading
 from typing import Callable, Optional
 
-import keyboard as kb
+if sys.platform == "win32":
+    import keyboard as kb
+else:
+    kb = None  # pynput used on Linux; imported lazily
 
 from constants import (
     CANCEL_HOTKEY,
@@ -26,11 +32,121 @@ from constants import (
 logger = logging.getLogger(__name__)
 
 
+# ---------------------------------------------------------------------------
+# Linux pynput helpers
+# ---------------------------------------------------------------------------
+
+def _hotkey_to_pynput(combo: str) -> str:
+    """Convert keyboard-library hotkey string to pynput GlobalHotKeys format.
+
+    'ctrl+alt+r' -> '<ctrl>+<alt>+r'
+    """
+    parts = combo.lower().split("+")
+    converted = []
+    for part in parts:
+        p = part.strip()
+        if p in ("ctrl", "alt", "shift", "cmd", "super"):
+            converted.append(f"<{p}>")
+        else:
+            converted.append(p)
+    return "+".join(converted)
+
+
+def _pynput_add_hotkey(combo: str, callback: Callable[[], None]):
+    """Register a global hotkey using pynput. Returns the listener."""
+    from pynput import keyboard as pynput_kb
+
+    pynput_combo = _hotkey_to_pynput(combo)
+    hotkeys = pynput_kb.GlobalHotKeys({pynput_combo: callback})
+    hotkeys.daemon = True
+    hotkeys.start()
+    return hotkeys
+
+
+def _pynput_add_key_listener(key_name: str, callback: Callable[[], None]):
+    """Register a single-key listener using pynput (for Escape, Enter, etc.)."""
+    from pynput import keyboard as pynput_kb
+
+    key_map = {
+        "escape": pynput_kb.Key.esc,
+        "esc": pynput_kb.Key.esc,
+        "enter": pynput_kb.Key.enter,
+        "tab": pynput_kb.Key.tab,
+        "space": pynput_kb.Key.space,
+    }
+    target = key_map.get(key_name.lower())
+    if target is None:
+        target = pynput_kb.KeyCode.from_char(key_name.lower())
+
+    def on_press(pressed_key):
+        if pressed_key == target:
+            callback()
+
+    listener = pynput_kb.Listener(on_press=on_press)
+    listener.daemon = True
+    listener.start()
+    return listener
+
+
+def _pynput_remove_hotkey(handle) -> None:
+    """Stop a pynput GlobalHotKeys or Listener."""
+    if handle is not None:
+        try:
+            handle.stop()
+        except Exception:
+            pass
+
+
+# ---------------------------------------------------------------------------
+# Platform-dispatched helpers
+# ---------------------------------------------------------------------------
+
+def _add_hotkey(combo: str, callback: Callable[[], None], suppress: bool = False):
+    """Register a global hotkey. Returns a handle for later removal."""
+    if sys.platform == "win32":
+        return kb.add_hotkey(combo, callback, suppress=suppress)
+    else:
+        return _pynput_add_hotkey(combo, callback)
+
+
+def _add_single_key(key_name: str, callback: Callable[[], None], suppress: bool = False):
+    """Register a single-key hotkey (e.g. Escape). Returns a handle."""
+    if sys.platform == "win32":
+        return kb.add_hotkey(key_name, callback, suppress=suppress)
+    else:
+        return _pynput_add_key_listener(key_name, callback)
+
+
+def _remove_hotkey(handle) -> None:
+    """Remove a previously registered hotkey."""
+    if handle is None:
+        return
+    if sys.platform == "win32":
+        kb.remove_hotkey(handle)
+    else:
+        _pynput_remove_hotkey(handle)
+
+
+def _parse_hotkey(combo: str):
+    """Parse/validate a hotkey string. Raises on invalid format."""
+    if sys.platform == "win32":
+        return kb.parse_hotkey(combo)
+    else:
+        # Basic validation: ensure non-empty and well-formed
+        parts = combo.lower().split("+")
+        if not parts or not all(p.strip() for p in parts):
+            raise ValueError(f"Invalid hotkey format: '{combo}'")
+        return parts
+
+
 class HotkeyManager:
     """Manages global hotkey registration and debouncing.
 
-    REQ-S15: Only registers the specific Ctrl+Win and Escape hotkeys.
+    REQ-S15: Only registers the specific configured hotkeys.
     Does not perform blanket keyboard monitoring.
+
+    On Windows uses the `keyboard` library. On Linux uses `pynput`
+    (X11/XWayland).
 
     Attributes:
         hotkey: The hotkey combination string.
@@ -94,18 +210,18 @@ class HotkeyManager:
             self.debounce_ms,
         )
 
-        # Log the parsed hotkey for diagnostics
+        # Validate the hotkey string
         try:
-            parsed = kb.parse_hotkey(self.hotkey)
-            logger.debug("Parsed hotkey scan codes: %s", parsed)
+            parsed = _parse_hotkey(self.hotkey)
+            logger.debug("Parsed hotkey: %s", parsed)
         except Exception as parse_err:
             logger.error(
-                "keyboard.parse_hotkey('%s') failed: %s", self.hotkey, parse_err
+                "parse_hotkey('%s') failed: %s", self.hotkey, parse_err
             )
             raise
 
         try:
-            self._hotkey_handle = kb.add_hotkey(
+            self._hotkey_handle = _add_hotkey(
                 self.hotkey, self._on_hotkey, suppress=False
             )
             self._registered = True
@@ -173,16 +289,16 @@ class HotkeyManager:
         )
 
         try:
-            parsed = kb.parse_hotkey(self.prompt_hotkey)
-            logger.debug("Parsed prompt hotkey scan codes: %s", parsed)
+            parsed = _parse_hotkey(self.prompt_hotkey)
+            logger.debug("Parsed prompt hotkey: %s", parsed)
         except Exception as parse_err:
             logger.error(
-                "keyboard.parse_hotkey('%s') failed: %s", self.prompt_hotkey, parse_err
+                "parse_hotkey('%s') failed: %s", self.prompt_hotkey, parse_err
             )
             raise
 
         try:
-            self._prompt_handle = kb.add_hotkey(
+            self._prompt_handle = _add_hotkey(
                 self.prompt_hotkey, self._on_prompt_hotkey, suppress=False
             )
             self._prompt_registered = True
@@ -242,7 +358,7 @@ class HotkeyManager:
         logger.info("Attempting to register TTS hotkey: '%s'", self.tts_hotkey)
 
         try:
-            self._tts_handle = kb.add_hotkey(
+            self._tts_handle = _add_hotkey(
                 self.tts_hotkey, self._on_tts_hotkey, suppress=False
             )
             self._tts_registered = True
@@ -278,7 +394,7 @@ class HotkeyManager:
         logger.info("Attempting to register TTS Ask hotkey: '%s'", self.tts_ask_hotkey)
 
         try:
-            self._tts_ask_handle = kb.add_hotkey(
+            self._tts_ask_handle = _add_hotkey(
                 self.tts_ask_hotkey, self._on_tts_ask_hotkey, suppress=False
             )
             self._tts_ask_registered = True
@@ -311,7 +427,7 @@ class HotkeyManager:
         ]:
             if getattr(self, attr_reg) and getattr(self, attr_handle) is not None:
                 try:
-                    kb.remove_hotkey(getattr(self, attr_handle))
+                    _remove_hotkey(getattr(self, attr_handle))
                     logger.info("%s hotkey unregistered.", label)
                 except Exception as e:
                     logger.warning("Failed to unregister %s hotkey: %s", label, e)
@@ -336,7 +452,7 @@ class HotkeyManager:
 
         self._cancel_callback = callback
         try:
-            self._cancel_handle = kb.add_hotkey(
+            self._cancel_handle = _add_single_key(
                 CANCEL_HOTKEY, self._on_cancel, suppress=False
             )
             self._cancel_registered = True
@@ -361,7 +477,7 @@ class HotkeyManager:
         """
         if self._cancel_registered and self._cancel_handle is not None:
             try:
-                kb.remove_hotkey(self._cancel_handle)
+                _remove_hotkey(self._cancel_handle)
                 self._cancel_registered = False
                 self._cancel_handle = None
                 logger.info("Cancel hotkey unregistered: %s", CANCEL_HOTKEY)
@@ -381,7 +497,7 @@ class HotkeyManager:
         # Unregister prompt hotkey
         if self._prompt_registered and self._prompt_handle is not None:
             try:
-                kb.remove_hotkey(self._prompt_handle)
+                _remove_hotkey(self._prompt_handle)
                 self._prompt_registered = False
                 self._prompt_handle = None
                 logger.info("Prompt hotkey unregistered: %s", self.prompt_hotkey)
@@ -393,7 +509,7 @@ class HotkeyManager:
         # Unregister main hotkey
         if self._registered and self._hotkey_handle is not None:
             try:
-                kb.remove_hotkey(self._hotkey_handle)
+                _remove_hotkey(self._hotkey_handle)
                 self._registered = False
                 self._hotkey_handle = None
                 logger.info("Global hotkey unregistered: %s", self.hotkey)

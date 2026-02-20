@@ -5,8 +5,13 @@ Validates:
 - REQ-S15: Only specific hotkey hooks
 - Debounce behavior
 - Configurable hotkey support
+
+Tests that call register() require the hotkey backend library:
+- Windows: keyboard library
+- Linux: pynput library
 """
 
+import sys
 import time
 import pytest
 from unittest.mock import patch, MagicMock, call
@@ -14,10 +19,16 @@ from unittest.mock import patch, MagicMock, call
 from constants import DEFAULT_HOTKEY
 from hotkey import HotkeyManager
 
+_windows_only = pytest.mark.skipif(
+    sys.platform != "win32",
+    reason="Tests mock keyboard library (Windows hotkey backend)",
+)
+
 
 class TestHotkeyManager:
     """Test the HotkeyManager class."""
 
+    @_windows_only
     @patch("hotkey.kb")
     def test_register_hotkey_with_default(self, mock_kb):
         """US-0.1.1: Default hotkey is registered globally."""
@@ -30,6 +41,7 @@ class TestHotkeyManager:
         call_args = mock_kb.add_hotkey.call_args
         assert call_args[0][0] == DEFAULT_HOTKEY
 
+    @_windows_only
     @patch("hotkey.kb")
     def test_register_hotkey_with_custom_combination(self, mock_kb):
         """A custom hotkey string should be forwarded to kb.add_hotkey."""
@@ -42,6 +54,7 @@ class TestHotkeyManager:
         call_args = mock_kb.add_hotkey.call_args
         assert call_args[0][0] == "ctrl+alt+r"
 
+    @_windows_only
     @patch("hotkey.kb")
     def test_unregister_hotkey(self, mock_kb):
         """Hotkey can be unregistered cleanly."""
@@ -92,6 +105,7 @@ class TestHotkeyManager:
 class TestOnlySpecificHotkeys:
     """REQ-S15: Verify only specific hotkey combinations are hooked."""
 
+    @_windows_only
     @patch("hotkey.kb")
     def test_no_blanket_monitoring(self, mock_kb):
         """Should not use keyboard.hook() or keyboard.on_press()."""

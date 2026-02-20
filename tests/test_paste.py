@@ -4,10 +4,18 @@ Validates:
 - US-0.1.4: Paste transcript at cursor
 - REQ-S18: Plain text paste only (CF_UNICODETEXT)
 - REQ-S14: Never log clipboard contents
+
+Windows-only: paste.py uses ctypes.windll (Win32 clipboard API).
 """
 
+import sys
 import pytest
 from unittest.mock import patch, MagicMock, call
+
+pytestmark = pytest.mark.skipif(
+    sys.platform != "win32",
+    reason="paste.py requires Windows (ctypes.windll)",
+)
 
 from paste import paste_text, CF_UNICODETEXT
 

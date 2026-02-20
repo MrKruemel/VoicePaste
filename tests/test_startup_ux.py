@@ -20,11 +20,17 @@ from unittest.mock import patch, MagicMock, call
 
 from constants import APP_NAME, APP_VERSION
 
+_windows_only = pytest.mark.skipif(
+    sys.platform != "win32",
+    reason="Tests Win32 platform_impl._windows functions",
+)
+
 
 # =========================================================================
 # _show_fatal_error
 # =========================================================================
 
+@_windows_only
 class TestShowFatalError:
     """Test the show_fatal_error() helper for MessageBox display."""
 
@@ -94,6 +100,7 @@ class TestShowFatalError:
 # _enable_debug_console
 # =========================================================================
 
+@_windows_only
 class TestEnableDebugConsole:
     """Test the enable_debug_console() helper for --debug flag."""
 

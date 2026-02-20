@@ -634,12 +634,13 @@ def load_config() -> Optional[AppConfig]:
                 "enabled" if vad_filter else "disabled",
             )
 
-    # Validate hotkey strings using the keyboard library
+    # Validate hotkey strings using the platform-aware parser from hotkey module
+    from hotkey import _parse_hotkey
+
     if hotkey and hotkey.strip():
         hotkey = hotkey.strip()
         try:
-            import keyboard as _kb
-            _kb.parse_hotkey(hotkey)
+            _parse_hotkey(hotkey)
             logger.info("Hotkey configured: '%s'", hotkey)
         except Exception as e:
             logger.warning(
@@ -656,8 +657,7 @@ def load_config() -> Optional[AppConfig]:
     if prompt_hotkey and prompt_hotkey.strip():
         prompt_hotkey = prompt_hotkey.strip()
         try:
-            import keyboard as _kb
-            _kb.parse_hotkey(prompt_hotkey)
+            _parse_hotkey(prompt_hotkey)
             logger.info("Prompt hotkey configured: '%s'", prompt_hotkey)
         except Exception as e:
             logger.warning(
@@ -676,8 +676,7 @@ def load_config() -> Optional[AppConfig]:
     if tts_hotkey and tts_hotkey.strip():
         tts_hotkey = tts_hotkey.strip()
         try:
-            import keyboard as _kb
-            _kb.parse_hotkey(tts_hotkey)
+            _parse_hotkey(tts_hotkey)
             logger.info("TTS hotkey configured: '%s'", tts_hotkey)
         except Exception as e:
             logger.warning(
@@ -692,8 +691,7 @@ def load_config() -> Optional[AppConfig]:
     if tts_ask_hotkey and tts_ask_hotkey.strip():
         tts_ask_hotkey = tts_ask_hotkey.strip()
         try:
-            import keyboard as _kb
-            _kb.parse_hotkey(tts_ask_hotkey)
+            _parse_hotkey(tts_ask_hotkey)
             logger.info("TTS Ask hotkey configured: '%s'", tts_ask_hotkey)
         except Exception as e:
             logger.warning(

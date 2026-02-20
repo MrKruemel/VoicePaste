@@ -8,16 +8,23 @@ Validates:
 - Cancel hotkey registration/deregistration lifecycle
 """
 
+import sys
 import time
 import pytest
 from unittest.mock import MagicMock, patch, PropertyMock
 
 from constants import AppState, CANCEL_HOTKEY
 
+_windows_only = pytest.mark.skipif(
+    sys.platform != "win32",
+    reason="Tests mock keyboard library (Windows hotkey backend)",
+)
+
 
 class TestCancelHotkeyRegistration:
     """Test cancel hotkey registration on HotkeyManager."""
 
+    @_windows_only
     @patch("hotkey.kb")
     def test_register_cancel_adds_hotkey(self, mock_kb):
         """register_cancel should call kb.add_hotkey with Escape."""
@@ -31,6 +38,7 @@ class TestCancelHotkeyRegistration:
             CANCEL_HOTKEY, mgr._on_cancel, suppress=False
         )
 
+    @_windows_only
     @patch("hotkey.kb")
     def test_unregister_cancel_removes_hotkey(self, mock_kb):
         """unregister_cancel should call kb.remove_hotkey with the handle from add_hotkey."""
@@ -45,6 +53,7 @@ class TestCancelHotkeyRegistration:
 
         mock_kb.remove_hotkey.assert_called_with(expected_handle)
 
+    @_windows_only
     @patch("hotkey.kb")
     def test_double_register_cancel_ignored(self, mock_kb):
         """Registering cancel twice should be idempotent."""
@@ -70,6 +79,7 @@ class TestCancelHotkeyRegistration:
         # Should not raise
         mgr.unregister_cancel()
 
+    @_windows_only
     @patch("hotkey.kb")
     def test_unregister_all_also_unregisters_cancel(self, mock_kb):
         """unregister() should also unregister cancel hotkey."""

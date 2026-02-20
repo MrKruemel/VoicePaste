@@ -18,26 +18,34 @@ import pytest
 import model_manager
 
 
+@pytest.fixture(autouse=True)
+def _mock_platform_cache(tmp_path, monkeypatch):
+    """Redirect platform_impl.get_cache_dir() to tmp_path/VoicePaste for all tests."""
+    cache_root = tmp_path / "VoicePaste"
+    cache_root.mkdir(parents=True, exist_ok=True)
+    monkeypatch.setattr("platform_impl.get_cache_dir", lambda: cache_root)
+
+
 class TestGetCacheDir:
     """Test cache directory resolution."""
 
-    def test_uses_localappdata_env(self, tmp_path, monkeypatch):
-        """Cache dir should use %LOCALAPPDATA%."""
-        monkeypatch.setenv("LOCALAPPDATA", str(tmp_path))
-        result = model_manager.get_cache_dir()
-        assert result == tmp_path / "VoicePaste" / "models"
+    def test_uses_platform_cache_dir(self, tmp_path):
+        """Cache dir should use platform_impl.get_cache_dir() / models."""
+        vp_cache = tmp_path / "VoicePaste"
+        with patch("platform_impl.get_cache_dir", return_value=vp_cache):
+            result = model_manager.get_cache_dir()
+        assert result == vp_cache / "models"
         assert result.exists()
 
-    def test_creates_directory_if_missing(self, tmp_path, monkeypatch):
+    def test_creates_directory_if_missing(self, tmp_path):
         """Cache dir should be created if it doesn't exist."""
-        target = tmp_path / "custom"
-        monkeypatch.setenv("LOCALAPPDATA", str(target))
-        result = model_manager.get_cache_dir()
+        target = tmp_path / "custom" / "VoicePaste"
+        with patch("platform_impl.get_cache_dir", return_value=target):
+            result = model_manager.get_cache_dir()
         assert result.exists()
 
-    def test_fallback_when_no_localappdata(self, monkeypatch):
-        """Falls back to ~/AppData/Local when env var is missing."""
-        monkeypatch.delenv("LOCALAPPDATA", raising=False)
+    def test_result_contains_voicepaste_and_models(self):
+        """Cache dir path should contain VoicePaste and models."""
         result = model_manager.get_cache_dir()
         assert "VoicePaste" in str(result)
         assert "models" in str(result)
@@ -78,9 +86,8 @@ class TestIsModelValid:
 class TestGetModelPath:
     """Test model path retrieval."""
 
-    def test_returns_path_for_valid_model(self, tmp_path, monkeypatch):
+    def test_returns_path_for_valid_model(self, tmp_path):
         """Returns path when model is downloaded and valid."""
-        monkeypatch.setenv("LOCALAPPDATA", str(tmp_path))
         model_dir = tmp_path / "VoicePaste" / "models" / "base"
         model_dir.mkdir(parents=True)
         (model_dir / "model.bin").write_bytes(b"fake")
@@ -91,19 +98,19 @@ class TestGetModelPath:
 
     def test_returns_none_for_missing_model(self, tmp_path, monkeypatch):
         """Returns None when model is not downloaded."""
-        monkeypatch.setenv("LOCALAPPDATA", str(tmp_path))
+
         result = model_manager.get_model_path("base")
         assert result is None
 
     def test_returns_none_for_unknown_size(self, tmp_path, monkeypatch):
         """Returns None for unrecognized model size."""
-        monkeypatch.setenv("LOCALAPPDATA", str(tmp_path))
+
         result = model_manager.get_model_path("gigantic")
         assert result is None
 
     def test_returns_none_for_invalid_model(self, tmp_path, monkeypatch):
         """Returns None when model dir exists but is incomplete."""
-        monkeypatch.setenv("LOCALAPPDATA", str(tmp_path))
+
         model_dir = tmp_path / "VoicePaste" / "models" / "base"
         model_dir.mkdir(parents=True)
         # Only config.json, missing model.bin
@@ -118,7 +125,7 @@ class TestIsModelAvailable:
 
     def test_available_when_valid(self, tmp_path, monkeypatch):
         """Returns True when model is downloaded and valid."""
-        monkeypatch.setenv("LOCALAPPDATA", str(tmp_path))
+
         model_dir = tmp_path / "VoicePaste" / "models" / "tiny"
         model_dir.mkdir(parents=True)
         (model_dir / "model.bin").write_bytes(b"fake")
@@ -128,7 +135,7 @@ class TestIsModelAvailable:
 
     def test_not_available_when_missing(self, tmp_path, monkeypatch):
         """Returns False when model is not downloaded."""
-        monkeypatch.setenv("LOCALAPPDATA", str(tmp_path))
+
         assert model_manager.is_model_available("tiny") is False
 
 
@@ -137,7 +144,7 @@ class TestGetModelInfo:
 
     def test_info_for_base_model(self, tmp_path, monkeypatch):
         """Returns correct info for base model."""
-        monkeypatch.setenv("LOCALAPPDATA", str(tmp_path))
+
         info = model_manager.get_model_info("base")
         assert info["repo"] == "Systran/faster-whisper-base"
         assert info["download_mb"] == 145
@@ -174,12 +181,12 @@ class TestGetAvailableModelSizes:
 
     def test_empty_when_none_downloaded(self, tmp_path, monkeypatch):
         """Returns empty list when no models are downloaded."""
-        monkeypatch.setenv("LOCALAPPDATA", str(tmp_path))
+
         assert model_manager.get_available_model_sizes() == []
 
     def test_lists_downloaded_models(self, tmp_path, monkeypatch):
         """Returns only downloaded model sizes."""
-        monkeypatch.setenv("LOCALAPPDATA", str(tmp_path))
+
         # Create a valid "tiny" model
         model_dir = tmp_path / "VoicePaste" / "models" / "tiny"
         model_dir.mkdir(parents=True)
@@ -198,7 +205,7 @@ class TestDownloadModel:
     @patch("model_manager._verify_stt_integrity", return_value=True)
     def test_successful_download(self, mock_verify, mock_download, tmp_path, monkeypatch):
         """Successful download returns True."""
-        monkeypatch.setenv("LOCALAPPDATA", str(tmp_path))
+
 
         target_dir = tmp_path / "VoicePaste" / "models" / "base"
 
@@ -225,7 +232,7 @@ class TestDownloadModel:
 
     def test_cancelled_before_start(self, tmp_path, monkeypatch):
         """Cancelled download returns False."""
-        monkeypatch.setenv("LOCALAPPDATA", str(tmp_path))
+
         cancel = threading.Event()
         cancel.set()  # Pre-cancelled
 
@@ -237,7 +244,7 @@ class TestDownloadModel:
 
     def test_download_failure_cleans_up(self, tmp_path, monkeypatch):
         """Failed download cleans up partial directory."""
-        monkeypatch.setenv("LOCALAPPDATA", str(tmp_path))
+
 
         mock_hf = MagicMock()
         mock_hf.snapshot_download.side_effect = ConnectionError("Network error")
@@ -252,7 +259,7 @@ class TestDownloadModel:
 
     def test_missing_huggingface_hub(self, tmp_path, monkeypatch):
         """Returns False when huggingface_hub is not installed."""
-        monkeypatch.setenv("LOCALAPPDATA", str(tmp_path))
+
 
         # Remove huggingface_hub from sys.modules if present
         import sys
@@ -268,7 +275,7 @@ class TestDeleteModel:
 
     def test_delete_existing_model(self, tmp_path, monkeypatch):
         """Deleting an existing model returns True."""
-        monkeypatch.setenv("LOCALAPPDATA", str(tmp_path))
+
         model_dir = tmp_path / "VoicePaste" / "models" / "tiny"
         model_dir.mkdir(parents=True)
         (model_dir / "model.bin").write_bytes(b"data")
@@ -279,7 +286,7 @@ class TestDeleteModel:
 
     def test_delete_nonexistent_model(self, tmp_path, monkeypatch):
         """Deleting a model that doesn't exist returns True."""
-        monkeypatch.setenv("LOCALAPPDATA", str(tmp_path))
+
         # Ensure cache dir exists
         (tmp_path / "VoicePaste" / "models").mkdir(parents=True)
 
@@ -292,13 +299,13 @@ class TestGetCacheSizeMb:
 
     def test_empty_cache(self, tmp_path, monkeypatch):
         """Empty cache returns 0."""
-        monkeypatch.setenv("LOCALAPPDATA", str(tmp_path))
+
         size = model_manager.get_cache_size_mb()
         assert size == 0.0
 
     def test_cache_with_files(self, tmp_path, monkeypatch):
         """Cache with files returns correct size."""
-        monkeypatch.setenv("LOCALAPPDATA", str(tmp_path))
+
         model_dir = tmp_path / "VoicePaste" / "models" / "tiny"
         model_dir.mkdir(parents=True)
         # Write 1 MB of data

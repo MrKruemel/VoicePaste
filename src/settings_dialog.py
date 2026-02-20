@@ -66,12 +66,17 @@ def _apply_dark_title_bar(widget) -> None:
     DwmSetWindowAttribute with DWMWA_USE_IMMERSIVE_DARK_MODE (attribute 20)
     to request a dark title bar.
 
+    On Linux this is a no-op (GNOME/KDE handle title bar theming natively).
+
     Must be called AFTER the window has been created and update_idletasks()
     has run (so that a valid HWND exists).
 
     Args:
         widget: A tkinter Tk or Toplevel instance.
     """
+    import sys
+    if sys.platform != "win32":
+        return
     try:
         import ctypes
         hwnd = ctypes.windll.user32.GetParent(widget.winfo_id())
@@ -2151,18 +2156,13 @@ class SettingsDialog:
     def _get_tts_cache_dir(self) -> "Path":
         """Return the TTS cache directory path.
 
-        Uses the same logic as TTSAudioCache to locate the cache directory
-        at %LOCALAPPDATA%\\VoicePaste\\cache\\tts.
+        Uses platform_impl.get_cache_dir() for cross-platform support.
 
         Returns:
             Path to the TTS cache directory.
         """
-        import os
-        from pathlib import Path
-        local_appdata = os.environ.get("LOCALAPPDATA", "")
-        if not local_appdata:
-            local_appdata = str(Path.home() / "AppData" / "Local")
-        return Path(local_appdata) / "VoicePaste" / "cache" / "tts"
+        from platform_impl import get_cache_dir as _platform_cache_dir
+        return _platform_cache_dir() / "cache" / "tts"
 
     def _refresh_tts_cache_stats(self) -> None:
         """Read TTS cache stats from disk and update the usage label.

@@ -404,12 +404,10 @@ class TestLoadConfigHotkey:
             '[hotkey]\ncombination = "not+a+real+key+combo+!@#$"\n',
             encoding="utf-8",
         )
-        mock_kb_module = MagicMock()
-        mock_kb_module.parse_hotkey.side_effect = ValueError("Invalid hotkey")
 
         with patch("config._get_app_directory", return_value=tmp_path), \
+             patch("hotkey._parse_hotkey", side_effect=ValueError("Invalid hotkey")), \
              patch.dict("sys.modules", {
-                 "keyboard": mock_kb_module,
                  "keyring_store": _mock_keyring_unavailable(),
              }):
             result = load_config()

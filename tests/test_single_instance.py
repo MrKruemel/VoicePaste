@@ -13,6 +13,11 @@ import sys
 import pytest
 from unittest.mock import patch, MagicMock
 
+pytestmark = pytest.mark.skipif(
+    sys.platform != "win32",
+    reason="Tests Win32 named mutex (platform_impl._windows)",
+)
+
 # Import the platform-specific implementation directly for testing
 from platform_impl._windows import (
     acquire_single_instance_lock,

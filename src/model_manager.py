@@ -63,18 +63,15 @@ ProgressCallback = Callable[[int, int], None]
 def get_cache_dir() -> Path:
     """Get the model cache directory.
 
-    Uses %LOCALAPPDATA%\\VoicePaste\\models\\ on Windows.
+    Uses platform_impl.get_cache_dir() / models on all platforms.
     Creates the directory if it does not exist.
 
     Returns:
         Path to the model cache directory.
     """
-    local_app_data = os.environ.get("LOCALAPPDATA", "")
-    if not local_app_data:
-        # Fallback: use the user's home directory
-        local_app_data = str(Path.home() / "AppData" / "Local")
+    from platform_impl import get_cache_dir as _platform_cache_dir
 
-    cache_dir = Path(local_app_data) / "VoicePaste" / "models"
+    cache_dir = _platform_cache_dir() / "models"
     cache_dir.mkdir(parents=True, exist_ok=True)
     return cache_dir
 
