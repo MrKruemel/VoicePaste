@@ -94,6 +94,9 @@ class TrayManager:
         tts_ask_hotkey_label: str = "Ctrl+Alt+Y",
         on_handsfree_toggle: Optional[Callable[[], None]] = None,
         get_handsfree_active: Optional[Callable[[], bool]] = None,
+        get_tts_cache_entries: Optional[Callable[[], list]] = None,
+        on_tts_replay: Optional[Callable[[str], None]] = None,
+        on_tts_cache_clear: Optional[Callable[[], int]] = None,
     ) -> None:
         """Initialize the tray manager.
 
@@ -121,6 +124,9 @@ class TrayManager:
         self._tts_ask_hotkey_label = tts_ask_hotkey_label
         self._on_handsfree_toggle = on_handsfree_toggle
         self._get_handsfree_active = get_handsfree_active
+        self._get_tts_cache_entries = get_tts_cache_entries
+        self._on_tts_replay = on_tts_replay
+        self._on_tts_cache_clear = on_tts_cache_clear
         self._icon: Optional[pystray.Icon] = None
         self._running = False
         self._current_state = AppState.IDLE
@@ -209,6 +215,12 @@ class TrayManager:
                 self._handle_settings,
                 enabled=lambda _: self._is_settings_enabled(),
             ),
+            # v1.0: Recent TTS submenu (dynamically populated from cache)
+            pystray.MenuItem(
+                "Recent TTS",
+                self._build_tts_cache_submenu(),
+                enabled=lambda _: self._get_tts_cache_entries is not None,
+            ),
             # v0.9: Hands-Free toggle
             pystray.MenuItem(
                 lambda _: (
@@ -222,6 +234,52 @@ class TrayManager:
             pystray.Menu.SEPARATOR,
             pystray.MenuItem("Quit", self._handle_quit),
         )
+
+    def _build_tts_cache_submenu(self) -> pystray.Menu:
+        """Build the 'Recent TTS' submenu from cache entries."""
+        items = []
+
+        if self._get_tts_cache_entries:
+            try:
+                entries = self._get_tts_cache_entries()
+            except Exception:
+                entries = []
+
+            from constants import TTS_CACHE_TRAY_MENU_LIMIT
+            for entry in entries[:TTS_CACHE_TRAY_MENU_LIMIT]:
+                preview = entry.get("text_preview", "")[:40]
+                duration = entry.get("duration_seconds", 0)
+                voice = entry.get("voice_label", "")
+                label = f'"{preview}..." ({duration:.0f}s, {voice})'
+                entry_id = entry.get("id", "")
+                items.append(pystray.MenuItem(
+                    label,
+                    self._make_replay_handler(entry_id),
+                ))
+
+        if not items:
+            items.append(pystray.MenuItem("(empty)", None, enabled=False))
+
+        items.append(pystray.Menu.SEPARATOR)
+        items.append(pystray.MenuItem(
+            "Clear TTS Cache",
+            self._handle_tts_cache_clear,
+        ))
+
+        return pystray.Menu(*items)
+
+    def _make_replay_handler(self, entry_id: str) -> Callable:
+        """Create a menu click handler that replays a specific cache entry."""
+        def handler(icon, item):
+            if self._on_tts_replay:
+                self._on_tts_replay(entry_id)
+        return handler
+
+    def _handle_tts_cache_clear(self, icon: pystray.Icon, item: pystray.MenuItem) -> None:
+        """Handle 'Clear TTS Cache' menu action."""
+        if self._on_tts_cache_clear:
+            count = self._on_tts_cache_clear()
+            self.notify(APP_NAME, f"TTS cache cleared ({count} entries removed).")
 
     def _handle_default_action(self, icon: pystray.Icon, item: pystray.MenuItem) -> None:
         """Handle the default tray icon action (left-click / double-click).

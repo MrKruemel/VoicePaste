@@ -62,6 +62,8 @@ from paste import clipboard_backup, clipboard_restore, paste_text
 from hotkey import HotkeyManager
 from tray import TrayManager
 from tts import TTSError, create_tts_backend
+from tts_cache import TTSAudioCache, CacheConfig, CacheKey
+from tts_export import TTSAudioExporter
 from audio_playback import AudioPlayer
 from notifications import (
     play_cancel_cue,
@@ -283,6 +285,12 @@ class VoicePasteApp:
         self._audio_player = AudioPlayer()
         self._rebuild_tts()
 
+        # v1.0: TTS audio cache
+        self._tts_cache = self._create_tts_cache()
+
+        # v1.0: TTS audio export (permanent saves to user directory)
+        self._tts_exporter = self._create_tts_exporter()
+
         self._hotkey_manager = HotkeyManager(
             hotkey=config.hotkey,
             prompt_hotkey=config.prompt_hotkey,
@@ -303,6 +311,9 @@ class VoicePasteApp:
             tts_ask_hotkey_label=config.tts_ask_hotkey,
             on_handsfree_toggle=self._toggle_handsfree,
             get_handsfree_active=lambda: self._handsfree_active,
+            get_tts_cache_entries=lambda: self._tts_cache.list_entries(),
+            on_tts_replay=lambda eid: self.replay_tts_entry(eid),
+            on_tts_cache_clear=lambda: self._tts_cache.clear(),
         )
 
         # v0.8: Floating overlay window — DISABLED.
@@ -410,6 +421,99 @@ class VoicePasteApp:
         else:
             logger.warning("TTS backend unavailable (no API key?).")
 
+    def _create_tts_cache(self) -> TTSAudioCache:
+        """Create a TTS audio cache from current config."""
+        cfg = CacheConfig(
+            enabled=self.config.tts_cache_enabled,
+            max_size_mb=self.config.tts_cache_max_size_mb,
+            max_age_days=self.config.tts_cache_max_age_days,
+            max_entries=self.config.tts_cache_max_entries,
+        )
+        return TTSAudioCache(cfg)
+
+    def _get_tts_cache_key(self, text: str) -> CacheKey:
+        """Build a CacheKey from the current TTS config and text."""
+        config = self.config
+        if config.tts_provider == "piper":
+            return CacheKey(
+                provider="piper",
+                voice_id=config.tts_local_voice,
+                text=text,
+            )
+        return CacheKey(
+            provider="elevenlabs",
+            voice_id=config.tts_voice_id,
+            text=text,
+        )
+
+    def _get_tts_voice_label(self) -> str:
+        """Get a human-readable label for the current TTS voice."""
+        config = self.config
+        if config.tts_provider == "piper":
+            return config.tts_local_voice
+        from constants import ELEVENLABS_VOICE_PRESETS
+        preset = ELEVENLABS_VOICE_PRESETS.get(config.tts_voice_id, {})
+        return preset.get("name", config.tts_voice_id)
+
+    def _create_tts_exporter(self) -> TTSAudioExporter:
+        """Create a TTS audio exporter from current config.
+
+        Returns:
+            Configured TTSAudioExporter instance.
+        """
+        from pathlib import Path
+
+        export_path = Path(self.config.tts_export_path) if self.config.tts_export_path else Path("")
+        return TTSAudioExporter(
+            export_dir=export_path,
+            enabled=self.config.tts_export_enabled,
+        )
+
+    def _export_tts_audio(self, text: str, audio_data: bytes) -> None:
+        """Export TTS audio to the user's export directory if enabled.
+
+        This is a fire-and-forget helper. Errors are logged but never
+        raised, so export failures do not disrupt the TTS pipeline.
+
+        Args:
+            text: The TTS input text (used for filename generation).
+            audio_data: Raw audio bytes to export.
+        """
+        try:
+            result = self._tts_exporter.export(text, audio_data)
+            if result is not None:
+                logger.info("TTS audio exported to: %s", result)
+        except Exception:
+            logger.exception("Error exporting TTS audio (non-fatal).")
+
+    def replay_tts_entry(self, entry_id: str) -> bool:
+        """Replay a cached TTS entry by its ID. Returns True if started."""
+        if self.state != AppState.IDLE:
+            return False
+        audio_data = self._tts_cache.replay(entry_id)
+        if audio_data is None:
+            return False
+        self._set_state(AppState.SPEAKING)
+        thread = threading.Thread(
+            target=self._play_cached_audio,
+            args=(audio_data,),
+            daemon=True,
+            name="cache-replay-worker",
+        )
+        thread.start()
+        return True
+
+    def _play_cached_audio(self, audio_data: bytes) -> None:
+        """Play cached audio bytes. Runs in worker thread."""
+        try:
+            self._hotkey_manager.register_cancel(self._on_cancel)
+            self._audio_player.play(audio_data)
+        except Exception:
+            logger.exception("Error during cached audio playback.")
+        finally:
+            self._hotkey_manager.unregister_cancel()
+            self._set_state(AppState.IDLE)
+
     def _on_tts_hotkey(self) -> None:
         """Handle the TTS clipboard readout hotkey (Ctrl+Alt+T).
 
@@ -496,12 +600,30 @@ class VoicePasteApp:
     def _run_tts_pipeline(self, text: str) -> None:
         """Synthesize text and play audio. Runs in a worker thread.
 
+        Uses cache-through: checks cache before synthesis, stores after.
+
         Args:
             text: Text to synthesize and play.
         """
         try:
-            # Synthesize
-            audio_data = self._tts.synthesize(text)
+            # v1.0: Cache-through — check cache first
+            cache_key = self._get_tts_cache_key(text)
+            audio_data = self._tts_cache.get(cache_key)
+            cached = audio_data is not None
+
+            if audio_data is None:
+                # Cache miss — synthesize
+                audio_data = self._tts.synthesize(text)
+                # Store in cache
+                self._tts_cache.put(
+                    cache_key, audio_data,
+                    voice_label=self._get_tts_voice_label(),
+                )
+            else:
+                logger.info("TTS cache hit — skipping synthesis.")
+
+            # v1.0: Export to user directory (non-blocking, fire-and-forget)
+            self._export_tts_audio(text, audio_data)
 
             # Play
             self._set_state(AppState.SPEAKING)
@@ -521,6 +643,50 @@ class VoicePasteApp:
 
         finally:
             self._hotkey_manager.unregister_cancel()
+            self._set_state(AppState.IDLE)
+
+    def _run_tts_export_pipeline(self, text: str, filename_hint: str = "") -> None:
+        """Synthesize text and save to the export directory (API-driven).
+
+        Unlike _run_tts_pipeline, this does NOT play the audio -- it only
+        synthesizes and exports. Used by the POST /tts/export API endpoint.
+
+        Args:
+            text: Text to synthesize and export.
+            filename_hint: Optional custom filename hint.
+        """
+        try:
+            # Cache-through: check cache first
+            cache_key = self._get_tts_cache_key(text)
+            audio_data = self._tts_cache.get(cache_key)
+
+            if audio_data is None:
+                audio_data = self._tts.synthesize(text)
+                self._tts_cache.put(
+                    cache_key, audio_data,
+                    voice_label=self._get_tts_voice_label(),
+                )
+            else:
+                logger.info("TTS cache hit — skipping synthesis for export.")
+
+            # Export to user directory
+            result = self._tts_exporter.export(
+                text, audio_data, filename_hint=filename_hint,
+            )
+            if result is not None:
+                logger.info("API TTS export complete: %s", result)
+            else:
+                logger.warning("API TTS export returned None (check config).")
+
+        except TTSError as e:
+            logger.error("TTS error in export pipeline: %s", e)
+            self._show_error(f"TTS export error:\n{e}")
+
+        except Exception:
+            logger.exception("Unexpected error in TTS export pipeline.")
+            self._show_error("TTS export failed.\nCheck the log file.")
+
+        finally:
             self._set_state(AppState.IDLE)
 
     # --- v0.9: HTTP API ---
@@ -623,6 +789,124 @@ class VoicePasteApp:
             elif current == AppState.AWAITING_PASTE:
                 self._paste_cancel_event.set()
             return {"status": "ok"}
+
+        # --- v1.0: TTS Cache API ---
+
+        if action == "tts_history_list":
+            entries = self._tts_cache.list_entries(limit=50)
+            stats = self._tts_cache.stats()
+            return {
+                "status": "ok",
+                "data": {
+                    "entries": entries,
+                    "total_entries": stats["total_entries"],
+                    "total_size_mb": stats["total_size_mb"],
+                    "cache_enabled": stats["cache_enabled"],
+                },
+            }
+
+        if action == "tts_history_get":
+            entry_id = command.get("id", "")
+            entry = self._tts_cache.get_entry(entry_id)
+            if entry is None:
+                return {
+                    "status": "error",
+                    "error_code": "NOT_FOUND",
+                    "message": f"Cache entry '{entry_id}' not found",
+                }
+            return {"status": "ok", "data": entry}
+
+        if action == "tts_replay":
+            entry_id = command.get("id", "")
+            if self.state != AppState.IDLE:
+                return {
+                    "status": "busy",
+                    "state": self.state.value,
+                    "message": "Another operation is in progress",
+                }
+            success = self.replay_tts_entry(entry_id)
+            if not success:
+                return {
+                    "status": "error",
+                    "error_code": "NOT_FOUND",
+                    "message": f"Cache entry '{entry_id}' not found",
+                }
+            return {"status": "ok"}
+
+        if action == "tts_history_delete":
+            entry_id = command.get("id", "")
+            deleted = self._tts_cache.delete(entry_id)
+            if not deleted:
+                return {
+                    "status": "error",
+                    "error_code": "NOT_FOUND",
+                    "message": f"Cache entry '{entry_id}' not found",
+                }
+            return {"status": "ok", "deleted": True}
+
+        if action == "tts_history_clear":
+            count = self._tts_cache.clear()
+            return {"status": "ok", "deleted_count": count}
+
+        # --- v1.0: TTS Export API ---
+
+        if action == "tts_export_list":
+            exports = self._tts_exporter.list_exports()
+            stats = self._tts_exporter.stats()
+            return {
+                "status": "ok",
+                "data": {
+                    "exports": exports,
+                    "total_files": stats["total_files"],
+                    "total_size_mb": stats["total_size_mb"],
+                    "export_enabled": stats["enabled"],
+                    "export_dir": stats["export_dir"],
+                },
+            }
+
+        if action == "tts_export":
+            text = command.get("text", "")
+            if not text or not text.strip():
+                return {
+                    "status": "error",
+                    "error_code": "INVALID_PARAMS",
+                    "message": "text is required and must be non-empty",
+                }
+            text = text.strip()
+            if len(text) > TTS_MAX_TEXT_LENGTH:
+                return {
+                    "status": "error",
+                    "error_code": "TEXT_TOO_LONG",
+                    "message": f"Text exceeds {TTS_MAX_TEXT_LENGTH} character limit",
+                }
+            if not self._tts:
+                return {
+                    "status": "error",
+                    "error_code": "TTS_NOT_CONFIGURED",
+                    "message": "TTS is not enabled or configured",
+                }
+            if not self._tts_exporter.enabled:
+                return {
+                    "status": "error",
+                    "error_code": "EXPORT_DISABLED",
+                    "message": "TTS export is not enabled. Enable in Settings.",
+                }
+            if self.state != AppState.IDLE:
+                return {
+                    "status": "busy",
+                    "state": self.state.value,
+                    "message": "Another operation is in progress",
+                }
+            # Synthesize + export in worker thread (fire-and-forget)
+            self._set_state(AppState.PROCESSING)
+            thread = threading.Thread(
+                target=self._run_tts_export_pipeline,
+                args=(text, command.get("filename_hint", "")),
+                daemon=True,
+                name="api-tts-export-worker",
+            )
+            thread.start()
+            return {"status": "ok", "message": "Export started"}
 
         return {
             "status": "error",
@@ -900,6 +1184,21 @@ class VoicePasteApp:
             # Only restart if IDLE — avoid stream conflicts during recording
             if self.config.handsfree_enabled and self.state == AppState.IDLE:
                 self._start_handsfree()
+
+        # v1.0: TTS cache hot-reload
+        cache_keys = {
+            "tts_cache_enabled", "tts_cache_max_size_mb",
+            "tts_cache_max_age_days", "tts_cache_max_entries",
+        }
+        if changed_fields.keys() & cache_keys:
+            self._tts_cache = self._create_tts_cache()
+            logger.info("TTS cache rebuilt with updated settings.")
+
+        # v1.0: TTS export hot-reload
+        export_keys = {"tts_export_enabled", "tts_export_path"}
+        if changed_fields.keys() & export_keys:
+            self._tts_exporter = self._create_tts_exporter()
+            logger.info("TTS exporter rebuilt with updated settings.")
 
         # v0.9: API server hot-reload
         api_keys = {"api_enabled", "api_port"}
@@ -1298,9 +1597,23 @@ class VoicePasteApp:
                 # Prevent the finally block from overwriting the AI answer
                 clip_backup = None
 
-                # Synthesize and speak
+                # v1.0: Cache-through for TTS Ask mode
                 try:
-                    tts_audio = self._tts.synthesize(summary)
+                    cache_key = self._get_tts_cache_key(summary)
+                    tts_audio = self._tts_cache.get(cache_key)
+
+                    if tts_audio is None:
+                        tts_audio = self._tts.synthesize(summary)
+                        self._tts_cache.put(
+                            cache_key, tts_audio,
+                            voice_label=self._get_tts_voice_label(),
+                        )
+                    else:
+                        logger.info("TTS cache hit in Ask+TTS — skipping synthesis.")
+
+                    # v1.0: Export to user directory (non-blocking, fire-and-forget)
+                    self._export_tts_audio(summary, tts_audio)
+
                     self._set_state(AppState.SPEAKING)
                     self._hotkey_manager.register_cancel(self._on_cancel)
                     self._audio_player.play(tts_audio)
@@ -1537,6 +1850,14 @@ class VoicePasteApp:
             self.config.tts_hotkey if self.config.tts_enabled else "(disabled)",
             self.config.tts_ask_hotkey if self.config.tts_enabled else "(disabled)",
         )
+
+        # v1.0: Run startup cache eviction on a deferred thread
+        if self.config.tts_cache_enabled:
+            threading.Thread(
+                target=self._tts_cache.evict,
+                daemon=True,
+                name="cache-evict",
+            ).start()
 
         # v0.9: Start HTTP API server
         self._start_api_server()

@@ -379,6 +379,17 @@ PIPER_VOICE_MODELS: dict[str, dict[str, Any]] = {
     },
 }
 
+# --- v1.0: TTS Audio Cache configuration ---
+DEFAULT_TTS_CACHE_ENABLED = True
+DEFAULT_TTS_CACHE_MAX_SIZE_MB = 200
+DEFAULT_TTS_CACHE_MAX_AGE_DAYS = 30
+DEFAULT_TTS_CACHE_MAX_ENTRIES = 500
+TTS_CACHE_TRAY_MENU_LIMIT = 10  # Max entries shown in tray submenu
+
+# --- v1.0: TTS Audio Export configuration ---
+DEFAULT_TTS_EXPORT_ENABLED = False
+DEFAULT_TTS_EXPORT_PATH = ""  # Empty = ask user on first export
+
 # Parse the comma-separated file paths into lists for runtime use.
 # This is done here rather than using list literals in the dict above
 # because TOML-style constants should use simple string values.

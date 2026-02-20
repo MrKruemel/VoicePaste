@@ -1004,6 +1004,118 @@ class SettingsDialog:
         self._tts_download_total: int = 0
         self._tts_download_poll_count: int = 0
 
+        # --- TTS Cache section ---
+        ttk.Separator(parent, orient=tk.HORIZONTAL).pack(fill=tk.X, pady=(8, 8))
+
+        ttk.Label(
+            parent, text="TTS Cache", font=("", 9, "bold"),
+        ).pack(fill=tk.X, pady=(0, 4))
+
+        self._tts_cache_enabled_var = tk.BooleanVar()
+        self._tts_cache_checkbox = ttk.Checkbutton(
+            parent,
+            text="Enable TTS audio cache",
+            variable=self._tts_cache_enabled_var,
+        )
+        self._tts_cache_checkbox.pack(fill=tk.X, pady=(0, 4))
+
+        # Max size (MB)
+        cache_size_row = ttk.Frame(parent)
+        cache_size_row.pack(fill=tk.X, pady=(0, 2))
+        ttk.Label(cache_size_row, text="Max size:", width=12, anchor=tk.W).pack(side=tk.LEFT)
+        self._tts_cache_max_size_var = tk.StringVar()
+        self._tts_cache_max_size_spin = ttk.Spinbox(
+            cache_size_row, from_=10, to=2000, increment=10, width=6,
+            textvariable=self._tts_cache_max_size_var,
+        )
+        self._tts_cache_max_size_spin.pack(side=tk.LEFT, padx=(4, 0))
+        ttk.Label(cache_size_row, text="MB").pack(side=tk.LEFT, padx=(4, 0))
+
+        # Max age (days)
+        cache_age_row = ttk.Frame(parent)
+        cache_age_row.pack(fill=tk.X, pady=(0, 2))
+        ttk.Label(cache_age_row, text="Max age:", width=12, anchor=tk.W).pack(side=tk.LEFT)
+        self._tts_cache_max_age_var = tk.StringVar()
+        self._tts_cache_max_age_spin = ttk.Spinbox(
+            cache_age_row, from_=0, to=365, increment=1, width=6,
+            textvariable=self._tts_cache_max_age_var,
+        )
+        self._tts_cache_max_age_spin.pack(side=tk.LEFT, padx=(4, 0))
+        ttk.Label(cache_age_row, text="days (0 = no limit)").pack(side=tk.LEFT, padx=(4, 0))
+
+        # Max entries
+        cache_entries_row = ttk.Frame(parent)
+        cache_entries_row.pack(fill=tk.X, pady=(0, 4))
+        ttk.Label(cache_entries_row, text="Max entries:", width=12, anchor=tk.W).pack(side=tk.LEFT)
+        self._tts_cache_max_entries_var = tk.StringVar()
+        self._tts_cache_max_entries_spin = ttk.Spinbox(
+            cache_entries_row, from_=0, to=5000, increment=50, width=6,
+            textvariable=self._tts_cache_max_entries_var,
+        )
+        self._tts_cache_max_entries_spin.pack(side=tk.LEFT, padx=(4, 0))
+        ttk.Label(cache_entries_row, text="entries (0 = no limit)").pack(side=tk.LEFT, padx=(4, 0))
+
+        # Cache usage label
+        cache_usage_row = ttk.Frame(parent)
+        cache_usage_row.pack(fill=tk.X, pady=(0, 4))
+        ttk.Label(cache_usage_row, text="Usage:", width=12, anchor=tk.W).pack(side=tk.LEFT)
+        self._tts_cache_usage_label = ttk.Label(
+            cache_usage_row, text="Calculating...", foreground="#999999",
+        )
+        self._tts_cache_usage_label.pack(side=tk.LEFT, padx=(4, 0))
+
+        # Clear Cache + Open Folder buttons
+        cache_btn_row = ttk.Frame(parent)
+        cache_btn_row.pack(fill=tk.X, pady=(0, 4))
+        ttk.Label(cache_btn_row, text="", width=12).pack(side=tk.LEFT)
+        self._tts_cache_clear_btn = ttk.Button(
+            cache_btn_row, text="Clear Cache", width=14,
+            command=self._on_tts_cache_clear_clicked,
+        )
+        self._tts_cache_clear_btn.pack(side=tk.LEFT, padx=(4, 4))
+        self._tts_cache_open_btn = ttk.Button(
+            cache_btn_row, text="Open Folder", width=14,
+            command=self._on_tts_cache_open_folder,
+        )
+        self._tts_cache_open_btn.pack(side=tk.LEFT, padx=(0, 0))
+
+        # --- TTS Export section ---
+        ttk.Separator(parent, orient=tk.HORIZONTAL).pack(fill=tk.X, pady=(8, 8))
+
+        ttk.Label(
+            parent, text="TTS Export", font=("", 9, "bold"),
+        ).pack(fill=tk.X, pady=(0, 4))
+
+        self._tts_export_enabled_var = tk.BooleanVar()
+        self._tts_export_checkbox = ttk.Checkbutton(
+            parent,
+            text="Auto-export TTS audio to folder",
+            variable=self._tts_export_enabled_var,
+        )
+        self._tts_export_checkbox.pack(fill=tk.X, pady=(0, 4))
+
+        # Export path row
+        export_path_row = ttk.Frame(parent)
+        export_path_row.pack(fill=tk.X, pady=(0, 2))
+        ttk.Label(export_path_row, text="Export path:", width=12, anchor=tk.W).pack(side=tk.LEFT)
+        self._tts_export_path_var = tk.StringVar()
+        self._tts_export_path_entry = ttk.Entry(
+            export_path_row, textvariable=self._tts_export_path_var, width=30,
+        )
+        self._tts_export_path_entry.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(4, 4))
+        self._tts_export_browse_btn = ttk.Button(
+            export_path_row, text="Browse...", width=10,
+            command=self._on_tts_export_browse,
+        )
+        self._tts_export_browse_btn.pack(side=tk.LEFT)
+
+        ttk.Label(
+            parent,
+            text="When enabled, every TTS audio file is also saved to this folder.",
+            foreground="#999999",
+            font=("", 8),
+        ).pack(fill=tk.X, pady=(0, 4))
+
         # Store references for enable/disable
         self._tts_widgets = [
             self._tts_backend_combo,
@@ -1015,6 +1127,15 @@ class SettingsDialog:
             self._tts_piper_voice_combo,
             self._tts_download_btn,
             self._tts_delete_btn,
+            self._tts_cache_checkbox,
+            self._tts_cache_max_size_spin,
+            self._tts_cache_max_age_spin,
+            self._tts_cache_max_entries_spin,
+            self._tts_cache_clear_btn,
+            self._tts_cache_open_btn,
+            self._tts_export_checkbox,
+            self._tts_export_path_entry,
+            self._tts_export_browse_btn,
         ]
 
     def _build_general_tab(self, parent: "ttk.Frame") -> None:
@@ -1451,6 +1572,17 @@ class SettingsDialog:
 
         # Show/hide TTS cloud vs local sub-frames
         self._update_tts_backend_ui()
+
+        # TTS Cache fields
+        self._tts_cache_enabled_var.set(config.tts_cache_enabled)
+        self._tts_cache_max_size_var.set(str(config.tts_cache_max_size_mb))
+        self._tts_cache_max_age_var.set(str(config.tts_cache_max_age_days))
+        self._tts_cache_max_entries_var.set(str(config.tts_cache_max_entries))
+        self._refresh_tts_cache_stats()
+
+        # TTS Export fields
+        self._tts_export_enabled_var.set(config.tts_export_enabled)
+        self._tts_export_path_var.set(config.tts_export_path)
 
         # Enable/disable TTS widgets
         self._on_tts_toggled()
@@ -2023,6 +2155,128 @@ class SettingsDialog:
         """Handle Piper voice dropdown change. Refresh download status."""
         self._update_tts_model_status()
 
+    def _get_tts_cache_dir(self) -> "Path":
+        """Return the TTS cache directory path.
+
+        Uses the same logic as TTSAudioCache to locate the cache directory
+        at %LOCALAPPDATA%\\VoicePaste\\cache\\tts.
+
+        Returns:
+            Path to the TTS cache directory.
+        """
+        import os
+        from pathlib import Path
+        local_appdata = os.environ.get("LOCALAPPDATA", "")
+        if not local_appdata:
+            local_appdata = str(Path.home() / "AppData" / "Local")
+        return Path(local_appdata) / "VoicePaste" / "cache" / "tts"
+
+    def _refresh_tts_cache_stats(self) -> None:
+        """Read TTS cache stats from disk and update the usage label.
+
+        Reads the index.json file directly to avoid importing the full
+        TTSAudioCache module (which would duplicate the lock / instance).
+        Falls back gracefully if the cache directory or index does not exist.
+        """
+        try:
+            import json
+            cache_dir = self._get_tts_cache_dir()
+            index_path = cache_dir / "index.json"
+
+            if not index_path.exists():
+                self._tts_cache_usage_label.config(
+                    text="Empty (no cached files)", foreground="#999999",
+                )
+                return
+
+            with open(index_path, "r", encoding="utf-8") as f:
+                index = json.load(f)
+
+            entries = index.get("entries", {})
+            total_bytes = sum(
+                e.get("file_size_bytes", 0) for e in entries.values()
+            )
+            total_mb = total_bytes / (1024 * 1024)
+            count = len(entries)
+
+            self._tts_cache_usage_label.config(
+                text=f"{count} entries, {total_mb:.1f} MB",
+                foreground="#e0e0e0",
+            )
+        except Exception as e:
+            logger.debug("Could not read TTS cache stats: %s", e)
+            self._tts_cache_usage_label.config(
+                text="Could not read cache stats", foreground="#FF6B6B",
+            )
+
+    def _on_tts_cache_clear_clicked(self) -> None:
+        """Handle Clear Cache button click. Remove all cached TTS audio files.
+
+        Prompts for confirmation, then deletes all files in the TTS cache
+        directory and removes the index.json. Refreshes the usage label after.
+        """
+        from tkinter import messagebox
+        confirmed = messagebox.askyesno(
+            "Clear TTS Cache",
+            "Delete all cached TTS audio files?\n\n"
+            "This cannot be undone. New audio will be re-generated on demand.",
+            parent=self._dialog,
+        )
+        if not confirmed:
+            return
+
+        try:
+            cache_dir = self._get_tts_cache_dir()
+            removed = 0
+            if cache_dir.exists():
+                for f in cache_dir.iterdir():
+                    if f.is_file():
+                        try:
+                            f.unlink()
+                            removed += 1
+                        except OSError:
+                            pass
+
+            logger.info("TTS cache cleared: %d files removed.", removed)
+            self._refresh_tts_cache_stats()
+        except Exception as e:
+            logger.warning("Failed to clear TTS cache: %s", e)
+            from tkinter import messagebox as mb
+            mb.showerror(
+                "Error", f"Failed to clear cache:\n{e}", parent=self._dialog,
+            )
+
+    def _on_tts_cache_open_folder(self) -> None:
+        """Open the TTS cache folder in Windows Explorer.
+
+        Creates the directory if it does not exist, then opens it using
+        os.startfile (Windows-only).
+        """
+        try:
+            cache_dir = self._get_tts_cache_dir()
+            cache_dir.mkdir(parents=True, exist_ok=True)
+            import os
+            os.startfile(str(cache_dir))
+        except Exception as e:
+            logger.warning("Failed to open TTS cache folder: %s", e)
+
+    def _on_tts_export_browse(self) -> None:
+        """Open a folder picker dialog for the TTS export path.
+
+        Uses tkinter's askdirectory dialog. Sets the selected path into
+        the export path entry field.
+        """
+        from tkinter import filedialog
+        current = self._tts_export_path_var.get().strip()
+        initial_dir = current if current else None
+        folder = filedialog.askdirectory(
+            title="Select TTS Export Folder",
+            initialdir=initial_dir,
+            parent=self._dialog,
+        )
+        if folder:
+            self._tts_export_path_var.set(folder)
+
     def _update_tts_model_status(self) -> None:
         """Update the Piper model status label and buttons based on selection.
 
@@ -2563,6 +2817,50 @@ class SettingsDialog:
         if new_tts_local_voice and new_tts_local_voice != config.tts_local_voice:
             changed_fields["tts_local_voice"] = new_tts_local_voice
             config.tts_local_voice = new_tts_local_voice
+
+        # TTS Cache settings
+        new_cache_enabled = self._tts_cache_enabled_var.get()
+        if new_cache_enabled != config.tts_cache_enabled:
+            changed_fields["tts_cache_enabled"] = new_cache_enabled
+            config.tts_cache_enabled = new_cache_enabled
+
+        try:
+            new_cache_max_size = int(self._tts_cache_max_size_var.get())
+            new_cache_max_size = max(10, min(new_cache_max_size, 2000))
+        except (ValueError, TypeError):
+            new_cache_max_size = config.tts_cache_max_size_mb
+        if new_cache_max_size != config.tts_cache_max_size_mb:
+            changed_fields["tts_cache_max_size_mb"] = new_cache_max_size
+            config.tts_cache_max_size_mb = new_cache_max_size
+
+        try:
+            new_cache_max_age = int(self._tts_cache_max_age_var.get())
+            new_cache_max_age = max(0, min(new_cache_max_age, 365))
+        except (ValueError, TypeError):
+            new_cache_max_age = config.tts_cache_max_age_days
+        if new_cache_max_age != config.tts_cache_max_age_days:
+            changed_fields["tts_cache_max_age_days"] = new_cache_max_age
+            config.tts_cache_max_age_days = new_cache_max_age
+
+        try:
+            new_cache_max_entries = int(self._tts_cache_max_entries_var.get())
+            new_cache_max_entries = max(0, min(new_cache_max_entries, 5000))
+        except (ValueError, TypeError):
+            new_cache_max_entries = config.tts_cache_max_entries
+        if new_cache_max_entries != config.tts_cache_max_entries:
+            changed_fields["tts_cache_max_entries"] = new_cache_max_entries
+            config.tts_cache_max_entries = new_cache_max_entries
+
+        # TTS Export settings
+        new_export_enabled = self._tts_export_enabled_var.get()
+        if new_export_enabled != config.tts_export_enabled:
+            changed_fields["tts_export_enabled"] = new_export_enabled
+            config.tts_export_enabled = new_export_enabled
+
+        new_export_path = self._tts_export_path_var.get().strip()
+        if new_export_path != config.tts_export_path:
+            changed_fields["tts_export_path"] = new_export_path
+            config.tts_export_path = new_export_path
 
         # Audio cues
         new_audio_cues = self._audio_cues_var.get()

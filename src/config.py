@@ -32,6 +32,12 @@ from constants import (
     DEFAULT_STT_BACKEND,
     DEFAULT_SUMMARIZATION_PROVIDER,
     DEFAULT_TTS_ASK_HOTKEY,
+    DEFAULT_TTS_CACHE_ENABLED,
+    DEFAULT_TTS_CACHE_MAX_AGE_DAYS,
+    DEFAULT_TTS_CACHE_MAX_ENTRIES,
+    DEFAULT_TTS_CACHE_MAX_SIZE_MB,
+    DEFAULT_TTS_EXPORT_ENABLED,
+    DEFAULT_TTS_EXPORT_PATH,
     DEFAULT_TTS_HOTKEY,
     DEFAULT_TTS_MODEL_ID,
     DEFAULT_TTS_OUTPUT_FORMAT,
@@ -131,6 +137,25 @@ delay_seconds = 0.0
 confirmation_timeout_seconds = 30.0
 # Automatically press Enter after pasting (e.g. to run a command in terminal)
 auto_enter = false
+
+[tts_cache]
+# Cache TTS audio locally to avoid re-synthesis of the same text.
+# Saves API credits (ElevenLabs) and reduces latency on repeated playback.
+enabled = true
+# Maximum total cache size in MB. Oldest entries are evicted when exceeded.
+max_size_mb = 200
+# Maximum age of unused cache entries in days. Set to 0 to disable age limit.
+max_age_days = 30
+# Maximum number of cached entries. Set to 0 for unlimited (bounded by size).
+max_entries = 500
+
+[tts_export]
+# TTS Audio Export: save generated audio to a user-chosen folder with
+# human-readable filenames. Useful for creating audio collections,
+# training material, or any batch TTS output you want to keep.
+enabled = false
+# Default export directory (empty = ask on first export).
+export_path = ""
 
 [feedback]
 # Play audio cues on recording start/stop (default: true)
@@ -236,6 +261,16 @@ class AppConfig:
     handsfree_max_recording_seconds: int = DEFAULT_HANDSFREE_MAX_RECORDING_SECONDS
     handsfree_pipeline: str = DEFAULT_HANDSFREE_PIPELINE
     handsfree_cooldown_seconds: float = DEFAULT_HANDSFREE_COOLDOWN_SECONDS
+
+    # --- v1.0: TTS Audio Cache ---
+    tts_cache_enabled: bool = DEFAULT_TTS_CACHE_ENABLED
+    tts_cache_max_size_mb: int = DEFAULT_TTS_CACHE_MAX_SIZE_MB
+    tts_cache_max_age_days: int = DEFAULT_TTS_CACHE_MAX_AGE_DAYS
+    tts_cache_max_entries: int = DEFAULT_TTS_CACHE_MAX_ENTRIES
+
+    # --- v1.0: TTS Audio Export ---
+    tts_export_enabled: bool = DEFAULT_TTS_EXPORT_ENABLED
+    tts_export_path: str = DEFAULT_TTS_EXPORT_PATH
 
     @property
     def config_path(self) -> Path:
@@ -396,6 +431,18 @@ max_recording_seconds = {self.handsfree_max_recording_seconds}
 pipeline = "{esc(self.handsfree_pipeline)}"
 # Cooldown in seconds after wake word detection (prevents re-trigger)
 cooldown_seconds = {self.handsfree_cooldown_seconds}
+
+[tts_cache]
+# Cache TTS audio locally to avoid re-synthesis of the same text.
+enabled = {str(self.tts_cache_enabled).lower()}
+max_size_mb = {self.tts_cache_max_size_mb}
+max_age_days = {self.tts_cache_max_age_days}
+max_entries = {self.tts_cache_max_entries}
+
+[tts_export]
+# Save generated TTS audio to a user-chosen folder with readable filenames.
+enabled = {str(self.tts_export_enabled).lower()}
+export_path = "{esc(self.tts_export_path)}"
 
 [feedback]
 audio_cues = {str(self.audio_cues_enabled).lower()}
@@ -688,6 +735,21 @@ def load_config() -> Optional[AppConfig]:
         )
         tts_local_voice = DEFAULT_PIPER_VOICE
 
+    # --- v1.0: TTS Audio Cache ---
+    tts_cache_section = data.get("tts_cache", {})
+    tts_cache_enabled = bool(tts_cache_section.get("enabled", DEFAULT_TTS_CACHE_ENABLED))
+    tts_cache_max_size_mb = int(tts_cache_section.get("max_size_mb", DEFAULT_TTS_CACHE_MAX_SIZE_MB))
+    tts_cache_max_size_mb = max(10, min(tts_cache_max_size_mb, 2000))
+    tts_cache_max_age_days = int(tts_cache_section.get("max_age_days", DEFAULT_TTS_CACHE_MAX_AGE_DAYS))
+    tts_cache_max_age_days = max(0, min(tts_cache_max_age_days, 365))
+    tts_cache_max_entries = int(tts_cache_section.get("max_entries", DEFAULT_TTS_CACHE_MAX_ENTRIES))
+    tts_cache_max_entries = max(0, min(tts_cache_max_entries, 5000))
+
+    # --- v1.0: TTS Audio Export ---
+    tts_export_section = data.get("tts_export", {})
+    tts_export_enabled = bool(tts_export_section.get("enabled", DEFAULT_TTS_EXPORT_ENABLED))
+    tts_export_path = str(tts_export_section.get("export_path", DEFAULT_TTS_EXPORT_PATH)).strip()
+
     # --- v0.9: Hands-Free Mode ---
     handsfree_section = data.get("handsfree", {})
     handsfree_enabled = bool(handsfree_section.get("enabled", DEFAULT_HANDSFREE_ENABLED))
@@ -803,6 +865,14 @@ def load_config() -> Optional[AppConfig]:
         paste_delay_seconds=paste_delay_seconds,
         paste_confirmation_timeout=paste_confirmation_timeout,
         paste_auto_enter=paste_auto_enter,
+        # v1.0: TTS Audio Cache
+        tts_cache_enabled=tts_cache_enabled,
+        tts_cache_max_size_mb=tts_cache_max_size_mb,
+        tts_cache_max_age_days=tts_cache_max_age_days,
+        tts_cache_max_entries=tts_cache_max_entries,
+        # v1.0: TTS Audio Export
+        tts_export_enabled=tts_export_enabled,
+        tts_export_path=tts_export_path,
         # v0.9: Hands-Free Mode
         handsfree_enabled=handsfree_enabled,
         wake_phrase=wake_phrase,

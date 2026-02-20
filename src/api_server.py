@@ -8,7 +8,9 @@ Uses http.server from the Python standard library (zero dependencies).
 Endpoints:
     GET  /health         - Health check (always 200)
     GET  /status         - App state + info
+    GET  /tts/exports    - List exported TTS audio files
     POST /tts            - Speak text via TTS
+    POST /tts/export     - Synthesize text and save to export directory
     POST /stop           - Stop TTS playback
     POST /record/start   - Start recording
     POST /record/stop    - Stop recording, trigger pipeline
@@ -108,6 +110,19 @@ class VoicePasteAPIHandler(BaseHTTPRequestHandler):
         elif self.path == "/status":
             result = self.server.dispatch({"action": "status"})
             self._send_json(200, result)
+        elif self.path == "/tts/history":
+            result = self.server.dispatch({"action": "tts_history_list"})
+            self._send_json(200, result)
+        elif self.path.startswith("/tts/history/"):
+            entry_id = self.path.split("/")[-1]
+            result = self.server.dispatch({
+                "action": "tts_history_get", "id": entry_id,
+            })
+            code = 200 if result.get("status") == "ok" else 404
+            self._send_json(code, result)
+        elif self.path == "/tts/exports":
+            result = self.server.dispatch({"action": "tts_export_list"})
+            self._send_json(200, result)
         else:
             self._send_json(404, {
                 "status": "error",
@@ -148,6 +163,7 @@ class VoicePasteAPIHandler(BaseHTTPRequestHandler):
         # Route to action
         route_map = {
             "/tts": "tts",
+            "/tts/export": "tts_export",
             "/stop": "stop_tts",
             "/record/start": "record_start",
             "/record/stop": "record_stop",
@@ -155,6 +171,13 @@ class VoicePasteAPIHandler(BaseHTTPRequestHandler):
         }
 
         action = route_map.get(self.path)
+
+        # v1.0: TTS cache replay route (POST /tts/replay/{id})
+        if action is None and self.path.startswith("/tts/replay/"):
+            entry_id = self.path.split("/")[-1]
+            body["action"] = "tts_replay"
+            body["id"] = entry_id
+            action = "tts_replay"
         if action is None:
             self._send_json(404, {
                 "status": "error",
@@ -179,10 +202,38 @@ class VoicePasteAPIHandler(BaseHTTPRequestHandler):
                 "INVALID_PARAMS": 400,
                 "TEXT_TOO_LONG": 413,
                 "TTS_NOT_CONFIGURED": 503,
+                "EXPORT_DISABLED": 403,
                 "RATE_LIMITED": 429,
             }.get(error_code, 500)
 
         self._send_json(status_code, result)
+
+    def do_DELETE(self) -> None:
+        """Handle DELETE requests (v1.0: TTS cache)."""
+        if not self.server.rate_limiter.allow():
+            self._send_json(429, {
+                "status": "error",
+                "error_code": "RATE_LIMITED",
+                "message": "Too many requests",
+            })
+            return
+
+        if self.path == "/tts/history":
+            result = self.server.dispatch({"action": "tts_history_clear"})
+            self._send_json(200, result)
+        elif self.path.startswith("/tts/history/"):
+            entry_id = self.path.split("/")[-1]
+            result = self.server.dispatch({
+                "action": "tts_history_delete", "id": entry_id,
+            })
+            code = 200 if result.get("status") == "ok" else 404
+            self._send_json(code, result)
+        else:
+            self._send_json(404, {
+                "status": "error",
+                "error_code": "NOT_FOUND",
+                "message": "Unknown endpoint",
+            })
 
     def do_OPTIONS(self) -> None:
         """Handle CORS preflight requests."""
@@ -190,7 +241,7 @@ class VoicePasteAPIHandler(BaseHTTPRequestHandler):
         origin = self.headers.get("Origin", "")
         if _ALLOWED_ORIGIN_RE.match(origin):
             self.send_header("Access-Control-Allow-Origin", origin)
-            self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+            self.send_header("Access-Control-Allow-Methods", "GET, POST, DELETE, OPTIONS")
             self.send_header("Access-Control-Allow-Headers", "Content-Type")
         self.send_header("Content-Length", "0")
         self.end_headers()
