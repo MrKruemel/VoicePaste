@@ -94,6 +94,7 @@ class WakeWordDetector:
         buffer_duration_seconds: float = DEFAULT_HANDSFREE_BUFFER_SECONDS,
         cooldown_seconds: float = DEFAULT_HANDSFREE_COOLDOWN_SECONDS,
         match_mode: str = DEFAULT_WAKE_PHRASE_MATCH_MODE,
+        language: Optional[str] = None,
     ) -> None:
         self._wake_phrase = wake_phrase
         self._wake_phrase_normalized = _normalize_text(wake_phrase)
@@ -103,6 +104,8 @@ class WakeWordDetector:
         self._buffer_duration = buffer_duration_seconds
         self._cooldown = cooldown_seconds
         self._match_mode = match_mode
+        # Language hint for STT (e.g. "en", "de"). None = auto-detect.
+        self._language = language
 
         self._model = None
         self._model_lock = threading.Lock()
@@ -221,9 +224,13 @@ class WakeWordDetector:
             segments, _ = self._model.transcribe(
                 audio_float,
                 beam_size=1,
-                language=None,  # Auto-detect
+                language=self._language,
                 vad_filter=False,  # We do our own VAD
                 without_timestamps=True,
+                # Permissive thresholds for short wake word clips:
+                # defaults reject too many valid short utterances.
+                no_speech_threshold=0.9,
+                log_prob_threshold=-2.0,
             )
             text = " ".join(seg.text for seg in segments).strip()
             return text

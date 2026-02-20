@@ -685,6 +685,7 @@ class VoicePasteApp:
             on_detected=self._on_wake_word_detected,
             cooldown_seconds=self.config.handsfree_cooldown_seconds,
             match_mode=self.config.wake_phrase_match_mode,
+            language="en",  # Wake phrases are typically English
         )
 
         success = self._wake_detector.start()
