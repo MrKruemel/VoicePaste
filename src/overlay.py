@@ -185,6 +185,9 @@ class OverlayWindow:
         """Stop the overlay and destroy the window.
 
         Safe to call from any thread. Safe to call if not running.
+        Blocks until the overlay thread has fully exited and the Tcl
+        interpreter is destroyed, to prevent dual-Tk() conflicts when
+        the settings dialog creates its own Tk() root shortly after.
         """
         if not self._running:
             return
@@ -199,10 +202,13 @@ class OverlayWindow:
                 logger.debug("Error calling root.quit() on overlay.")
 
         if self._thread is not None and self._thread.is_alive():
-            self._thread.join(timeout=3.0)
+            self._thread.join(timeout=5.0)
             if self._thread.is_alive():
-                logger.warning("Overlay thread did not exit within 3s.")
+                logger.warning("Overlay thread did not exit within 5s.")
 
+        # Ensure Tcl interpreter is fully gone before another Tk() is created
+        self._root = None
+        self._window = None
         self._thread = None
         logger.info("Overlay stopped.")
 

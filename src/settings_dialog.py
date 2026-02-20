@@ -249,12 +249,17 @@ def _configure_dark_style(root, ttk_module, sv_ttk_loaded):
 def open_settings_dialog(
     config: "AppConfig",
     on_save: Callable[[dict[str, Any]], None],
+    on_close: Optional[Callable[[], None]] = None,
 ) -> bool:
     """Open the settings dialog on a dedicated tkinter thread.
 
     Args:
         config: Current application configuration.
         on_save: Callback invoked with dict of changed fields after save.
+        on_close: Optional callback invoked after the dialog is fully
+            destroyed and its Tk root is gone. Use this to restart other
+            tkinter windows (e.g. overlay) that were paused to avoid
+            dual-Tk() conflicts on Windows.
 
     Returns:
         True if dialog was opened, False if already open (singleton).
@@ -305,6 +310,11 @@ def open_settings_dialog(
             logger.exception("Settings dialog error.")
         finally:
             _settings_lock.release()
+            if on_close is not None:
+                try:
+                    on_close()
+                except Exception:
+                    logger.debug("on_close callback error.", exc_info=True)
 
     thread = threading.Thread(
         target=_run_dialog,
@@ -1069,13 +1079,80 @@ class SettingsDialog:
             variable=self._audio_cues_var,
         ).pack(fill=tk.X)
 
-        # v0.8: Overlay checkbox
+        # v0.8: Overlay — disabled (tkinter dual-Tk() conflict on Python 3.14+).
+        # TODO: Re-enable after overlay is rebuilt with Win32 API.
         self._show_overlay_var = tk.BooleanVar()
+
+        # --- Separator ---
+        ttk.Separator(parent, orient=tk.HORIZONTAL).pack(fill=tk.X, pady=(8, 8))
+
+        # --- v0.9: Paste confirmation section ---
+        paste_label = ttk.Label(
+            parent, text="Paste Behaviour", font=("", 10, "bold")
+        )
+        paste_label.pack(fill=tk.X, pady=(0, 6))
+
+        # Confirm before paste checkbox
+        self._paste_confirm_var = tk.BooleanVar()
+        self._paste_confirm_cb = ttk.Checkbutton(
+            parent,
+            text="Confirm before pasting (Enter = paste, Escape = cancel)",
+            variable=self._paste_confirm_var,
+            command=self._on_paste_confirm_toggled,
+        )
+        self._paste_confirm_cb.pack(fill=tk.X)
+
+        # Delay row (only active when confirmation is OFF)
+        delay_row = ttk.Frame(parent)
+        delay_row.pack(fill=tk.X, pady=(4, 2))
+        self._paste_delay_label = ttk.Label(
+            delay_row, text="Delay before paste (seconds):", anchor=tk.W
+        )
+        self._paste_delay_label.pack(side=tk.LEFT)
+        self._paste_delay_var = tk.StringVar(value="0")
+        self._paste_delay_spin = ttk.Spinbox(
+            delay_row,
+            from_=0,
+            to=36000,
+            increment=1,
+            width=6,
+            textvariable=self._paste_delay_var,
+        )
+        self._paste_delay_spin.pack(side=tk.LEFT, padx=(8, 0))
+
+        # Timeout row (only active when confirmation is ON)
+        timeout_row = ttk.Frame(parent)
+        timeout_row.pack(fill=tk.X, pady=(2, 2))
+        self._paste_timeout_label = ttk.Label(
+            timeout_row, text="Confirmation timeout (seconds):", anchor=tk.W
+        )
+        self._paste_timeout_label.pack(side=tk.LEFT)
+        self._paste_timeout_var = tk.StringVar(value="30")
+        self._paste_timeout_spin = ttk.Spinbox(
+            timeout_row,
+            from_=5,
+            to=120,
+            increment=5,
+            width=6,
+            textvariable=self._paste_timeout_var,
+        )
+        self._paste_timeout_spin.pack(side=tk.LEFT, padx=(8, 0))
+
+        # Auto-Enter checkbox
+        self._paste_auto_enter_var = tk.BooleanVar()
         ttk.Checkbutton(
             parent,
-            text="Show floating overlay (Recording/Processing/Speaking indicator)",
-            variable=self._show_overlay_var,
+            text="Press Enter after pasting (execute command)",
+            variable=self._paste_auto_enter_var,
         ).pack(fill=tk.X, pady=(4, 0))
+
+        paste_hint = ttk.Label(
+            parent,
+            text="When confirmation is on, delay is ignored (Enter triggers paste).",
+            foreground="#999999",
+            font=("", 8),
+        )
+        paste_hint.pack(fill=tk.X, pady=(2, 0))
 
     def _populate_from_config(self) -> None:
         """Fill widget values from current config and keyring."""
@@ -1227,6 +1304,13 @@ class SettingsDialog:
 
         # v0.8: Overlay
         self._show_overlay_var.set(config.show_overlay)
+
+        # v0.9: Paste confirmation/delay
+        self._paste_confirm_var.set(config.paste_require_confirmation)
+        self._paste_delay_var.set(str(config.paste_delay_seconds))
+        self._paste_timeout_var.set(str(config.paste_confirmation_timeout))
+        self._paste_auto_enter_var.set(config.paste_auto_enter)
+        self._on_paste_confirm_toggled()
 
         # Show/hide backend sub-frames
         self._update_backend_ui()
@@ -1616,6 +1700,22 @@ class SettingsDialog:
             self._openrouter_key_btn.config(text="Cancel")
             self._openrouter_key_editing = True
 
+    def _on_paste_confirm_toggled(self) -> None:
+        """Enable/disable paste delay vs timeout based on confirmation checkbox."""
+        confirm = self._paste_confirm_var.get()
+        if confirm:
+            # Confirmation mode: timeout is relevant, delay is not
+            self._paste_delay_spin.config(state="disabled")
+            self._paste_delay_label.config(foreground="#999999")
+            self._paste_timeout_spin.config(state="normal")
+            self._paste_timeout_label.config(foreground="")
+        else:
+            # Delay mode: delay is relevant, timeout is not
+            self._paste_delay_spin.config(state="normal")
+            self._paste_delay_label.config(foreground="")
+            self._paste_timeout_spin.config(state="disabled")
+            self._paste_timeout_label.config(foreground="#999999")
+
     def _on_tts_toggled(self) -> None:
         """Enable/disable TTS widgets based on checkbox.
 
@@ -1660,6 +1760,10 @@ class SettingsDialog:
         if enabled and is_local:
             self._update_tts_model_status()
 
+        # Refresh Voice ID entry state (readonly for presets, normal for custom)
+        if enabled and not is_local:
+            self._on_tts_voice_changed()
+
     def _on_tts_voice_changed(self, event=None) -> None:
         """Handle TTS voice dropdown change. Update voice ID field."""
         selected = self._tts_voice_var.get()
@@ -1697,6 +1801,7 @@ class SettingsDialog:
     def _on_tts_backend_changed(self, event=None) -> None:
         """Handle TTS backend dropdown change. Show/hide cloud vs local controls."""
         self._update_tts_backend_ui()
+        self._on_tts_toggled()
         self._update_tts_model_status()
 
     def _update_tts_backend_ui(self) -> None:
@@ -2282,6 +2387,35 @@ class SettingsDialog:
             changed_fields["show_overlay"] = new_show_overlay
             config.show_overlay = new_show_overlay
 
+        # v0.9: Paste confirmation/delay
+        new_paste_confirm = self._paste_confirm_var.get()
+        if new_paste_confirm != config.paste_require_confirmation:
+            changed_fields["paste_require_confirmation"] = new_paste_confirm
+            config.paste_require_confirmation = new_paste_confirm
+
+        try:
+            new_paste_delay = float(self._paste_delay_var.get())
+            new_paste_delay = max(0.0, min(new_paste_delay, 36000.0))
+        except (ValueError, TypeError):
+            new_paste_delay = config.paste_delay_seconds
+        if new_paste_delay != config.paste_delay_seconds:
+            changed_fields["paste_delay_seconds"] = new_paste_delay
+            config.paste_delay_seconds = new_paste_delay
+
+        try:
+            new_paste_timeout = float(self._paste_timeout_var.get())
+            new_paste_timeout = max(5.0, min(new_paste_timeout, 120.0))
+        except (ValueError, TypeError):
+            new_paste_timeout = config.paste_confirmation_timeout
+        if new_paste_timeout != config.paste_confirmation_timeout:
+            changed_fields["paste_confirmation_timeout"] = new_paste_timeout
+            config.paste_confirmation_timeout = new_paste_timeout
+
+        new_paste_auto_enter = self._paste_auto_enter_var.get()
+        if new_paste_auto_enter != config.paste_auto_enter:
+            changed_fields["paste_auto_enter"] = new_paste_auto_enter
+            config.paste_auto_enter = new_paste_auto_enter
+
         # Save non-secret fields to config.toml
         config.save_to_toml()
 
@@ -2291,7 +2425,10 @@ class SettingsDialog:
                 "Settings saved. Changed fields: %s",
                 list(changed_fields.keys()),
             )
-            self._on_save(changed_fields)
+            try:
+                self._on_save(changed_fields)
+            except Exception:
+                logger.exception("Error in on_save callback (settings still saved).")
         else:
             logger.info("Settings saved (no changes detected).")
 

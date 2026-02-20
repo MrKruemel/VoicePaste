@@ -49,6 +49,8 @@ from constants import (
     AppState,
     LOG_DATE_FORMAT,
     LOG_FORMAT,
+    PASTE_COUNTDOWN_BEEP_DURATION_MS,
+    PASTE_COUNTDOWN_BEEP_FREQ,
     PROMPT_SYSTEM_PROMPT,
     TTS_MAX_TEXT_LENGTH,
 )
@@ -299,13 +301,19 @@ class VoicePasteApp:
             tts_ask_hotkey_label=config.tts_ask_hotkey,
         )
 
-        # v0.8: Floating overlay window (dedicated T4 thread)
-        self._overlay: Optional[OverlayWindow] = None
-        if config.show_overlay:
-            self._overlay = OverlayWindow()
+        # v0.8: Floating overlay window — DISABLED.
+        # The overlay uses its own tk.Tk() on a daemon thread (T4).
+        # Python 3.14+ enforces "main thread is not in main loop" which
+        # prevents the settings dialog from creating a second tk.Tk().
+        # TODO: Rebuild overlay using pure Win32 API (ctypes) instead of
+        # tkinter to avoid the dual-Tk() conflict.
+        self._overlay: Optional["OverlayWindow"] = None
 
         self._shutdown_event = threading.Event()
         self._pipeline_thread: threading.Thread | None = None
+        # v0.9: Confirm-before-paste synchronization
+        self._paste_confirm_event = threading.Event()
+        self._paste_cancel_event = threading.Event()
 
     @property
     def state(self) -> AppState:
@@ -610,19 +618,12 @@ class VoicePasteApp:
             self._rebuild_summarizer()
             logger.info("Summarizer rebuilt with updated settings.")
 
-        # v0.8: Hot-reload overlay visibility
+        # v0.8: Overlay hot-reload — DISABLED (overlay uses tkinter which
+        # conflicts with settings dialog's tk.Tk() on Python 3.14+).
+        # TODO: Re-enable after overlay is rebuilt with Win32 API.
         if "show_overlay" in changed_fields:
-            if self.config.show_overlay:
-                if self._overlay is None:
-                    self._overlay = OverlayWindow()
-                if not self._overlay.is_running:
-                    self._overlay.start()
-                logger.info("Overlay enabled via settings.")
-            else:
-                if self._overlay is not None:
-                    self._overlay.stop()
-                    self._overlay = None
-                logger.info("Overlay disabled via settings.")
+            logger.info("Overlay setting changed to %s (overlay currently disabled).",
+                        self.config.show_overlay)
 
         # Notify user via toast
         self._tray_manager.notify(
@@ -706,8 +707,9 @@ class VoicePasteApp:
     def _on_cancel(self) -> None:
         """Handle the Escape cancel hotkey.
 
-        Active during RECORDING state (discards audio) and SPEAKING state
-        (stops TTS playback). Returns to IDLE.
+        Active during RECORDING state (discards audio), SPEAKING state
+        (stops TTS playback), and AWAITING_PASTE state (cancels paste, v0.9).
+        Returns to IDLE.
         """
         current = self.state
 
@@ -717,8 +719,13 @@ class VoicePasteApp:
             # State transition happens in _run_tts_pipeline finally block
             return
 
+        if current == AppState.AWAITING_PASTE:
+            logger.info("Paste cancelled by user (via _on_cancel).")
+            self._paste_cancel_event.set()
+            return
+
         if current != AppState.RECORDING:
-            logger.debug("Cancel pressed outside RECORDING/SPEAKING state, ignored.")
+            logger.debug("Cancel pressed outside RECORDING/SPEAKING/AWAITING_PASTE state, ignored.")
             return
 
         logger.info("Recording cancelled by user.")
@@ -847,6 +854,113 @@ class VoicePasteApp:
         )
         self._pipeline_thread.start()
 
+    def _on_paste_confirm(self) -> None:
+        """Handle Enter key press during AWAITING_PASTE state."""
+        if self.state == AppState.AWAITING_PASTE:
+            logger.info("Paste confirmed by user (Enter).")
+            self._paste_confirm_event.set()
+
+    def _on_paste_cancel(self) -> None:
+        """Handle Escape key press during AWAITING_PASTE state."""
+        if self.state == AppState.AWAITING_PASTE:
+            logger.info("Paste cancelled by user (Escape).")
+            self._paste_cancel_event.set()
+
+    def _wait_before_paste(self, summary: str) -> bool:
+        """Wait for user confirmation or delay before pasting.
+
+        Returns True if the paste should proceed, False if cancelled.
+
+        Args:
+            summary: The text that will be pasted (for preview notification).
+        """
+        config = self.config
+        needs_confirmation = config.paste_require_confirmation
+        delay = config.paste_delay_seconds
+
+        # Fast path: no delay, no confirmation → paste immediately
+        if not needs_confirmation and delay <= 0:
+            return True
+
+        self._set_state(AppState.AWAITING_PASTE)
+
+        # Reset events
+        self._paste_confirm_event.clear()
+        self._paste_cancel_event.clear()
+
+        # Register Enter (confirm) and Escape (cancel) hotkeys
+        import keyboard
+        enter_hook = keyboard.on_press_key("enter", lambda _: self._on_paste_confirm(), suppress=False)
+        self._hotkey_manager.register_cancel(self._on_paste_cancel)
+
+        try:
+            # Show preview notification
+            preview = summary[:150].replace("\n", " ")
+            if len(summary) > 150:
+                preview += "..."
+
+            if needs_confirmation:
+                self._tray_manager.notify(
+                    APP_NAME,
+                    f"Enter = paste, Escape = cancel\n{preview}",
+                )
+                timeout = config.paste_confirmation_timeout
+                logger.info(
+                    "Awaiting paste confirmation (timeout=%.0fs).", timeout
+                )
+
+                # Wait for Enter or Escape or timeout
+                elapsed = 0.0
+                while elapsed < timeout:
+                    if self._paste_confirm_event.is_set():
+                        return True
+                    if self._paste_cancel_event.is_set():
+                        self._tray_manager.notify(APP_NAME, "Paste cancelled.")
+                        self._play_audio_cue(play_cancel_cue)
+                        return False
+                    # Beep each second as countdown feedback
+                    if config.audio_cues_enabled and elapsed > 0 and elapsed % 1.0 < 0.1:
+                        try:
+                            import winsound
+                            winsound.Beep(
+                                PASTE_COUNTDOWN_BEEP_FREQ,
+                                PASTE_COUNTDOWN_BEEP_DURATION_MS,
+                            )
+                        except Exception:
+                            pass
+                    time.sleep(0.1)
+                    elapsed += 0.1
+
+                # Timeout reached
+                logger.info("Paste confirmation timed out after %.0fs.", timeout)
+                self._tray_manager.notify(APP_NAME, "Paste timed out (cancelled).")
+                self._play_audio_cue(play_cancel_cue)
+                return False
+
+            else:
+                # Delay mode (no confirmation needed)
+                self._tray_manager.notify(
+                    APP_NAME,
+                    f"Pasting in {delay:.0f}s... (Escape = cancel)\n{preview}",
+                )
+                logger.info("Paste delayed by %.1fs.", delay)
+
+                elapsed = 0.0
+                while elapsed < delay:
+                    if self._paste_cancel_event.is_set():
+                        self._tray_manager.notify(APP_NAME, "Paste cancelled.")
+                        self._play_audio_cue(play_cancel_cue)
+                        return False
+                    time.sleep(0.1)
+                    elapsed += 0.1
+
+                return True
+
+        finally:
+            # Always clean up hotkey hooks
+            keyboard.unhook(enter_hook)
+            self._hotkey_manager.unregister_cancel()
+
     def _run_pipeline(self, audio_data: bytes) -> None:
         """Execute the STT, summarization, and paste pipeline in a worker thread.
 
@@ -911,12 +1025,23 @@ class VoicePasteApp:
                     self._hotkey_manager.unregister_cancel()
                 return
 
-            # Step 3: Paste (normal flow)
+            # Step 3: Confirm/delay, then paste (normal flow)
+            if not self._wait_before_paste(summary):
+                # User cancelled or timed out — do NOT paste
+                return
+
             self._set_state(AppState.PASTING)
             success = paste_text(summary)
 
             if success:
-                logger.info("Pipeline complete. Text pasted successfully.")
+                # v0.9: Auto-Enter after paste (e.g. execute command in terminal)
+                if self.config.paste_auto_enter:
+                    time.sleep(0.05)
+                    import keyboard
+                    keyboard.send("enter")
+                    logger.info("Pipeline complete. Text pasted + Enter pressed.")
+                else:
+                    logger.info("Pipeline complete. Text pasted successfully.")
             else:
                 logger.warning("Pipeline complete but paste may have failed.")
 

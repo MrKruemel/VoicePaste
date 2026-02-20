@@ -34,6 +34,7 @@ _STATE_COLORS: dict[AppState, tuple[int, int, int]] = {
     AppState.IDLE: (220, 220, 230),      # Light silver-white
     AppState.RECORDING: (230, 50, 50),    # Bright red
     AppState.PROCESSING: (240, 200, 40),  # Bright yellow/amber
+    AppState.AWAITING_PASTE: (100, 220, 180),  # Teal — waiting for confirm (v0.9)
     AppState.PASTING: (50, 200, 80),      # Bright green
     AppState.SPEAKING: (70, 130, 230),    # Blue — audio OUTPUT (v0.6)
 }
@@ -45,6 +46,7 @@ _STATE_TOOLTIP_TEMPLATES: dict[AppState, str] = {
     AppState.IDLE: f"{APP_NAME} - Ready ({{hotkey}})",
     AppState.RECORDING: f"{APP_NAME} - Recording...",
     AppState.PROCESSING: f"{APP_NAME} - Processing...",
+    AppState.AWAITING_PASTE: f"{APP_NAME} - Press Enter to paste (Escape to cancel)",
     AppState.PASTING: f"{APP_NAME} - Pasting...",
     AppState.SPEAKING: f"{APP_NAME} - Speaking... (Escape to stop)",
 }
@@ -54,6 +56,7 @@ _STATE_LABELS: dict[AppState, str] = {
     AppState.IDLE: "Status: Idle",
     AppState.RECORDING: "Status: Recording",
     AppState.PROCESSING: "Status: Processing",
+    AppState.AWAITING_PASTE: "Status: Awaiting Paste",
     AppState.PASTING: "Status: Pasting",
     AppState.SPEAKING: "Status: Speaking",
 }

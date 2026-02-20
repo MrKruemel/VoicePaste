@@ -12,7 +12,10 @@ class AppState(enum.Enum):
         RECORDING -> PROCESSING  (on hotkey press)
         RECORDING -> IDLE  (on Escape cancel, v0.2+)
         PROCESSING -> PASTING  (on STT/summarization complete)
+        PROCESSING -> AWAITING_PASTE  (when confirmation/delay configured, v0.9)
         PROCESSING -> SPEAKING  (on Ask AI + TTS pipeline, v0.6)
+        AWAITING_PASTE -> PASTING  (on Enter or delay elapsed, v0.9)
+        AWAITING_PASTE -> IDLE  (on Escape cancel or timeout, v0.9)
         PASTING -> IDLE  (on paste complete)
         SPEAKING -> IDLE  (on TTS playback complete or Escape, v0.6)
         Any error state -> IDLE  (on error)
@@ -21,13 +24,14 @@ class AppState(enum.Enum):
     IDLE = "idle"
     RECORDING = "recording"
     PROCESSING = "processing"
+    AWAITING_PASTE = "awaiting_paste"
     PASTING = "pasting"
     SPEAKING = "speaking"
 
 
 # Application metadata
 APP_NAME = "Voice Paste"
-APP_VERSION = "0.8.0"
+APP_VERSION = "0.9.0"
 
 # Hotkey configuration
 # Hotkey history:
@@ -82,6 +86,14 @@ API_INITIAL_BACKOFF_SECONDS = 1.0
 
 # Paste configuration
 PASTE_DELAY_MS = 150
+
+# v0.9: Confirm-before-paste configuration
+DEFAULT_PASTE_CONFIRM = False
+DEFAULT_PASTE_DELAY_SECONDS = 0.0
+DEFAULT_PASTE_CONFIRMATION_TIMEOUT = 30.0
+DEFAULT_PASTE_AUTO_ENTER = False
+PASTE_COUNTDOWN_BEEP_FREQ = 880
+PASTE_COUNTDOWN_BEEP_DURATION_MS = 30
 
 # Logging
 LOG_FILENAME = "voice-paste.log"

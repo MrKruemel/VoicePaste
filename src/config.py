@@ -16,6 +16,10 @@ from typing import Optional
 
 from constants import (
     DEFAULT_HOTKEY,
+    DEFAULT_PASTE_AUTO_ENTER,
+    DEFAULT_PASTE_CONFIRM,
+    DEFAULT_PASTE_CONFIRMATION_TIMEOUT,
+    DEFAULT_PASTE_DELAY_SECONDS,
     DEFAULT_PIPER_VOICE,
     DEFAULT_PROMPT_HOTKEY,
     DEFAULT_STT_BACKEND,
@@ -105,6 +109,16 @@ base_url = ""
 # This prompt instructs the LLM how to clean up the transcription.
 custom_prompt = ""
 
+[paste]
+# Confirm before pasting: show a preview and wait for Enter (default: false)
+require_confirmation = false
+# Delay in seconds before auto-pasting (0 = immediate, only when confirmation is off)
+delay_seconds = 0.0
+# Timeout in seconds for the confirmation prompt (default: 30)
+confirmation_timeout_seconds = 30.0
+# Automatically press Enter after pasting (e.g. to run a command in terminal)
+auto_enter = false
+
 [feedback]
 # Play audio cues on recording start/stop (default: true)
 audio_cues = true
@@ -190,6 +204,12 @@ class AppConfig:
 
     # --- v0.8: Overlay ---
     show_overlay: bool = True
+
+    # --- v0.9: Confirm-before-paste ---
+    paste_require_confirmation: bool = DEFAULT_PASTE_CONFIRM
+    paste_delay_seconds: float = DEFAULT_PASTE_DELAY_SECONDS
+    paste_confirmation_timeout: float = DEFAULT_PASTE_CONFIRMATION_TIMEOUT
+    paste_auto_enter: bool = DEFAULT_PASTE_AUTO_ENTER
 
     @property
     def config_path(self) -> Path:
@@ -320,6 +340,17 @@ output_format = "{esc(self.tts_output_format)}"
 # en_US-lessac-medium, en_US-amy-medium. Download via Settings dialog.
 local_voice = "{esc(self.tts_local_voice)}"
 
+[paste]
+# Confirm before pasting: show a preview notification and wait for Enter.
+require_confirmation = {str(self.paste_require_confirmation).lower()}
+# Delay in seconds before auto-pasting (0 = immediate). Only used when
+# require_confirmation is false; otherwise the user presses Enter.
+delay_seconds = {self.paste_delay_seconds}
+# Timeout in seconds for the confirmation prompt (auto-cancels after this).
+confirmation_timeout_seconds = {self.paste_confirmation_timeout}
+# Automatically press Enter after pasting (e.g. to execute a command in a terminal).
+auto_enter = {str(self.paste_auto_enter).lower()}
+
 [feedback]
 audio_cues = {str(self.audio_cues_enabled).lower()}
 show_overlay = {str(self.show_overlay).lower()}
@@ -425,6 +456,7 @@ def load_config() -> Optional[AppConfig]:
     feedback_section = data.get("feedback", {})
     transcription_section = data.get("transcription", {})
     tts_section = data.get("tts", {})
+    paste_section = data.get("paste", {})
 
     toml_api_key = api_section.get("openai_api_key", "").strip()
     hotkey = hotkey_section.get("combination", DEFAULT_HOTKEY)
@@ -603,6 +635,19 @@ def load_config() -> Optional[AppConfig]:
         )
         tts_local_voice = DEFAULT_PIPER_VOICE
 
+    # --- v0.9: Paste confirmation/delay ---
+    paste_require_confirmation = bool(paste_section.get(
+        "require_confirmation", DEFAULT_PASTE_CONFIRM))
+    paste_delay_seconds = float(paste_section.get(
+        "delay_seconds", DEFAULT_PASTE_DELAY_SECONDS))
+    paste_confirmation_timeout = float(paste_section.get(
+        "confirmation_timeout_seconds", DEFAULT_PASTE_CONFIRMATION_TIMEOUT))
+    paste_auto_enter = bool(paste_section.get(
+        "auto_enter", DEFAULT_PASTE_AUTO_ENTER))
+    # Clamp values to sane ranges
+    paste_delay_seconds = max(0.0, min(paste_delay_seconds, 36000.0))
+    paste_confirmation_timeout = max(5.0, min(paste_confirmation_timeout, 120.0))
+
     # --- v0.3: Keyring integration for API keys ---
     openai_api_key = ""
     openrouter_api_key = ""
@@ -675,6 +720,11 @@ def load_config() -> Optional[AppConfig]:
         tts_local_voice=tts_local_voice,
         # v0.8: Overlay
         show_overlay=bool(show_overlay),
+        # v0.9: Paste confirmation/delay
+        paste_require_confirmation=paste_require_confirmation,
+        paste_delay_seconds=paste_delay_seconds,
+        paste_confirmation_timeout=paste_confirmation_timeout,
+        paste_auto_enter=paste_auto_enter,
     )
 
     # REQ-S01: Only log the masked key
