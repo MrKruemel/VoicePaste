@@ -47,15 +47,15 @@ logger = logging.getLogger(__name__)
 
 # Frame size: 100 ms at 16 kHz = 1600 samples
 _FRAME_SIZE = 1600
-# Minimum speech duration to trigger STT (avoid noise spikes)
-_MIN_SPEECH_SECONDS = 0.6
+# Minimum speech duration to trigger STT (avoid noise spikes).
+# Must be long enough to contain the wake phrase (~0.8s for "Hello Cloud").
+_MIN_SPEECH_SECONDS = 0.8
 # Grace period: keep buffering this long after energy drops, to bridge
 # natural pauses between words (e.g. "Hello ... Cloud")
 _SPEECH_END_GRACE_SECONDS = 0.5
 # Default RMS threshold for speech detection (int16 scale).
-# 200 is sensitive enough for normal speech at arm's length from the mic,
-# while still filtering out most ambient noise.
-_DEFAULT_ENERGY_THRESHOLD = 200.0
+# 300 filters ambient noise while catching normal speech at arm's length.
+_DEFAULT_ENERGY_THRESHOLD = 300.0
 
 
 def _normalize_text(text: str) -> str:
@@ -234,17 +234,16 @@ class WakeWordDetector:
             audio_float = audio.astype(np.float32).flatten() / 32768.0
             segments, _ = self._model.transcribe(
                 audio_float,
-                beam_size=3,
+                beam_size=1,
                 language=self._language,
                 vad_filter=False,  # We do our own VAD
                 without_timestamps=True,
-                # Permissive thresholds for short wake word clips:
-                # defaults reject too many valid short utterances.
-                no_speech_threshold=0.9,
-                log_prob_threshold=-2.0,
-                # Bias the model toward recognizing the wake phrase.
-                # This dramatically improves accuracy for specific words.
-                initial_prompt=self._wake_phrase,
+                # Slightly relaxed thresholds (defaults: 0.6 / -1.0).
+                # Too permissive = false positives; too strict = misses.
+                no_speech_threshold=0.75,
+                log_prob_threshold=-1.5,
+                # NOTE: Do NOT use initial_prompt here. It causes the
+                # tiny model to hallucinate the wake phrase on any input.
             )
             text = " ".join(seg.text for seg in segments).strip()
             return text
