@@ -5,16 +5,16 @@
 <h1 align="center">Voice Paste</h1>
 
 <p align="center">
-  A Windows desktop utility that records your speech, transcribes it with AI, optionally summarizes it, and pastes the result at your cursor—all with a hotkey. Runs entirely in the system tray.
+  A cross-platform desktop utility (Windows + Linux) that records your speech, transcribes it with AI, optionally summarizes it, and pastes the result at your cursor—all with a hotkey. Runs entirely in the system tray.
 </p>
 
-**Current version**: 0.9.1
+**Current version**: 1.1.0
 
 ## Features
 
 - **Transcribe with a hotkey**: Press Ctrl+Alt+R to record, press again to transcribe and paste.
 - **Ask questions with Voice Prompt**: Press Ctrl+Alt+A to record a question, get an AI answer, and paste it.
-- **Read text aloud with TTS**: Press Ctrl+Alt+T to read clipboard content via text-to-speech.
+- **Read text aloud with TTS**: Press Ctrl+Alt+T (Windows) or Ctrl+Alt+S (Linux) to read clipboard content via text-to-speech.
 - **Ask AI and hear the answer**: Press Ctrl+Alt+Y to ask a question and hear the answer read aloud.
 - **Hands-Free mode**: Say a wake phrase (default "Hello Cloud") to start recording without touching the keyboard. Recording auto-stops when you pause speaking. Configurable pipeline (Ask+TTS, Transcribe+Paste, Ask+Paste).
 - **HTTP API**: Localhost REST API for external apps and scripts. Control recording, TTS, and status via HTTP. Secured with CORS, rate limiting, 127.0.0.1-only binding.
@@ -26,23 +26,32 @@
 - **Multiple summarization backends**: OpenAI, OpenRouter (Claude, Llama), or local Ollama.
 - **Multiple TTS providers**: ElevenLabs cloud (human-quality voices) or local Piper (offline, free, 14 voices including German, English US, English GB).
 - **Tabbed Settings dialog**: Organized configuration interface with Transcription, Summarization, Text-to-Speech, Hands-Free, and General tabs.
-- **Secure credential storage**: API keys stored in Windows Credential Manager, never in plain text files.
+- **Secure credential storage**: API keys stored in OS credential store (Windows Credential Manager / Linux keyring), never in plain text files.
 - **Silent operation**: Runs in system tray. Never steals focus.
 - **Audio feedback**: Beeps confirm recording start/stop/cancel/error. Disable in settings for silent mode.
 - **Visual feedback**: Tray icon color changes per state (grey=idle, red=recording, yellow=processing, teal=awaiting paste, green=pasting, blue=speaking).
 - **Cancel anytime**: Press Escape during recording to discard and return to idle.
 - **Clipboard safety**: Original clipboard contents restored after pasting.
-- **Toast notifications**: Errors appear as Windows notifications, not modal dialogs.
+- **Toast notifications**: Errors appear as system notifications, not modal dialogs.
 
 ## Requirements
 
+### Windows
 - **Windows 10 or 11**
 - **Python 3.11+** (for running from source)
+
+### Linux (Ubuntu 22.04 / 24.04)
+- **Python 3.11+**
+- **System packages**: `espeak-ng libportaudio2 xclip xdotool python3-tk python3-gi gir1.2-ayatanaappindicator3-0.1`
+- **GNOME tray icon** (optional): `gnome-shell-extension-appindicator`
+- **X11 session** (Wayland support planned for v1.2)
+
+### All Platforms
 - **Microphone**: Connected and working (required only for recording modes)
 - **For cloud transcription**: OpenAI API key (get one at https://platform.openai.com/api-keys)
-- **For local transcription**: Disk space for Whisper model (75MB–3GB depending on size)
+- **For local transcription**: Disk space for Whisper model (75MB–3GB depending on size). CUDA auto-detection avoids segfaults when GPU drivers are incomplete; frozen binaries always use CPU.
 - **For ElevenLabs TTS**: ElevenLabs API key (get one at https://elevenlabs.io)
-- **For Piper local TTS**: Disk space for Piper voice models (~60–120 MB per voice). Requires `espeak-ng` system library (installed automatically via `espeakng-loader` pip package on Windows). No API key needed.
+- **For Piper local TTS**: Disk space for Piper voice models (~60–120 MB per voice). Requires `espeak-ng` (installed via `espeakng-loader` on Windows, system package on Linux). No API key needed.
 - **For local summarization**: Ollama running locally (http://localhost:11434) if using Ollama provider
 - **Internet connection**: Required only for cloud transcription, cloud summarization, and ElevenLabs TTS
 
@@ -52,6 +61,11 @@
 
 ```bash
 pip install -r requirements.txt
+
+# Linux only: install system dependencies
+sudo apt install espeak-ng libportaudio2 xclip xdotool python3-tk
+sudo apt install python3-gi gir1.2-ayatanaappindicator3-0.1
+pip install pynput  # Linux hotkey library (not in requirements.txt)
 ```
 
 ### 2. Create Configuration (Optional)
@@ -59,7 +73,8 @@ pip install -r requirements.txt
 Copy `config.example.toml` to `config.toml` and customize if needed:
 
 ```bash
-copy config.example.toml config.toml
+cp config.example.toml config.toml    # Linux
+copy config.example.toml config.toml  # Windows
 ```
 
 Edit `config.toml` in a text editor (optional — you can do this in the Settings dialog later).
@@ -78,6 +93,7 @@ The Voice Paste icon appears in your system tray (bottom right of taskbar). If y
 
 1. **Check the overflow area**: Click the **^** (arrow) icon in the taskbar to reveal hidden system tray icons.
 2. **Pin the icon** (Windows 11): Right-click the taskbar → **Taskbar settings** → **Other system tray icons** → Turn on **VoicePaste**.
+3. **Linux (GNOME)**: Install `gnome-shell-extension-appindicator` and restart GNOME Shell (Alt+F2, type `r`, Enter) or log out and back in.
 
 ### 5. Set Up Your API Key (First Run)
 
@@ -87,7 +103,7 @@ When you press Ctrl+Alt+R for the first time, the Settings dialog opens (or righ
 2. Paste your API key in the OpenAI field
 3. Click **Save**
 
-Your key is stored securely in Windows Credential Manager (not in config.toml).
+Your key is stored securely in the OS credential store (not in config.toml).
 
 ### 6. Start Recording
 
@@ -180,6 +196,7 @@ All options can be set via the **Settings dialog** (right-click tray → Setting
 | `[tts]` `model_id` | string | `"eleven_flash_v2_5"` | ElevenLabs model ID. Default: `"eleven_flash_v2_5"` (fast, low latency). Only used when `provider = "elevenlabs"`. |
 | `[tts]` `output_format` | string | `"mp3_44100_128"` | ElevenLabs output format. Only used when `provider = "elevenlabs"`. |
 | `[tts]` `local_voice` | string | `"de_DE-thorsten-medium"` | Piper voice model name. See below for available voices. Download models via Settings. Only used when `provider = "piper"`. |
+| `[tts]` `speed` | float | `1.0` | Piper speech speed (length_scale). `0.5` = slow, `1.0` = normal, `2.0` = fast. Range: 0.25–4.0. Only used when `provider = "piper"`. |
 
 ### Feedback & Logging
 
@@ -256,7 +273,7 @@ When using local Piper TTS, the following voices are available. Each voice is ap
 - `en_GB-jenny_dioco-medium` (~64 MB) — Female voice, medium quality.
 - `en_GB-alan-medium` (~64 MB) — Male voice, medium quality.
 
-Voice models are cached in `%LOCALAPPDATA%\VoicePaste\models\tts\` and auto-downloaded on demand in Settings > Text-to-Speech > Download Model.
+Voice models are cached in `%LOCALAPPDATA%\VoicePaste\models\tts\` (Windows) or `~/.cache/VoicePaste/models/tts/` (Linux) and auto-downloaded on demand in Settings > Text-to-Speech > Download Model.
 
 ## Keyboard Shortcuts
 
@@ -264,7 +281,7 @@ Voice models are cached in `%LOCALAPPDATA%\VoicePaste\models\tts\` and auto-down
 |--------|--------|
 | **Ctrl+Alt+R** | Start/stop recording for transcription and paste. |
 | **Ctrl+Alt+A** | Start/stop recording for voice prompt (question → answer). |
-| **Ctrl+Alt+T** | Read clipboard content aloud (TTS). Requires TTS enabled in Settings. |
+| **Ctrl+Alt+T** (Win) / **Ctrl+Alt+S** (Linux) | Read clipboard content aloud (TTS). Requires TTS enabled in Settings. |
 | **Ctrl+Alt+Y** | Ask AI a question and hear the answer (record → summarize → TTS). Requires TTS enabled. |
 | **Escape** | Cancel active recording or TTS playback (discard audio, don't paste). |
 | **Right-click tray** | Show menu (Settings, Quit). |
@@ -275,9 +292,9 @@ Right-click the tray icon and select **Settings** to open the configuration dial
 
 - **Transcription**: Choose cloud (OpenAI Whisper) or local (faster-whisper) backend. Download local models, set device/compute type, enable/disable VAD filter.
 - **Summarization**: Enable/disable text cleanup. Choose provider (OpenAI, OpenRouter, Ollama). Custom prompts.
-- **Text-to-Speech**: Enable/disable TTS. Choose provider (ElevenLabs cloud or Piper local). Download Piper voice models, select voice. Configure TTS caching (deduplication, retention) and export settings (save to files).
+- **Text-to-Speech**: Enable/disable TTS. Choose provider (ElevenLabs cloud or Piper local). Download Piper voice models, select voice. Adjust speech speed. Configure TTS caching (deduplication, retention) and export settings (save to files).
 - **Hands-Free**: Enable/disable wake word detection. Configure wake phrase, matching mode, pipeline, silence timeout, max recording duration.
-- **General**: Toggle audio cues, set log level, manage API credentials (OpenAI, OpenRouter, ElevenLabs) via Windows Credential Manager. Toggle floating overlay display.
+- **General**: Toggle audio cues, set log level, manage API credentials (OpenAI, OpenRouter, ElevenLabs) via OS credential store. Toggle floating overlay display.
 
 Changes save immediately. No restart needed (hot-reload).
 
@@ -334,10 +351,11 @@ If the app is running but the icon is missing, check `voice-paste.log` for tray 
 **Problem**: Your configured hotkey (default Ctrl+Alt+R) does nothing when you press it.
 
 **Solutions**:
-1. **Run as Administrator**: The `keyboard` library requires elevated permissions to register global hotkeys. Run Command Prompt as Administrator and start the tool from there. Without admin privileges, hotkeys may not work in elevated windows (like Administrator PowerShell or UAC prompts).
-2. **Verify the configuration**: Check `[hotkey] combination` in `config.toml` or Settings → Hotkey tab. Restart the tool after changing the hotkey.
-3. **Check for conflicts**: Your hotkey may conflict with other Windows shortcuts or applications. Try a different combination (e.g., `"ctrl+alt+v"` or `"windows+shift+r"`). See Windows Settings > Keyboard > Advanced > App Shortcuts.
-4. **Keyboard library issue**: Some Windows configurations have trouble with the `keyboard` library. Antivirus software may block it. See below.
+1. **Windows: Run as Administrator**: The `keyboard` library requires elevated permissions to register global hotkeys. Run Command Prompt as Administrator and start the tool from there. Without admin privileges, hotkeys may not work in elevated windows (like Administrator PowerShell or UAC prompts).
+2. **Linux: Check X11 session**: Hotkeys use pynput which requires an X11 session. Wayland is not yet supported (planned for v1.2). Run `echo $XDG_SESSION_TYPE` to check.
+3. **Verify the configuration**: Check `[hotkey] combination` in `config.toml` or Settings → Hotkey tab. Restart the tool after changing the hotkey.
+4. **Check for conflicts**: Your hotkey may conflict with other Windows shortcuts or applications. Try a different combination (e.g., `"ctrl+alt+v"` or `"windows+shift+r"`). See Windows Settings > Keyboard > Advanced > App Shortcuts.
+5. **Keyboard library issue**: Some Windows configurations have trouble with the `keyboard` library. Antivirus software may block it. See below.
 
 **Windows Defender / Antivirus Blocking**
 
@@ -414,14 +432,11 @@ For details on VAD handling, see the [Troubleshooting](README.md#troubleshooting
 
 **Problem**: Text appears on clipboard but doesn't paste into a terminal window.
 
-**Cause**: Many terminal emulators (Windows Terminal, ConEmu, PowerShell ISE) use Ctrl+Shift+V for paste instead of Ctrl+V.
+**Cause**: Many terminal emulators use Ctrl+Shift+V for paste instead of Ctrl+V.
 
 **Solutions**:
-1. **Use Ctrl+Shift+V** manually if the tool's Ctrl+V doesn't work.
-2. **Right-click paste** in the terminal (if available).
-3. **Change terminal settings** to use Ctrl+V for paste (usually an option in terminal preferences).
-
-This is a limitation of terminal emulators, not the tool itself.
+1. **Linux**: Voice Paste automatically detects terminal emulators (GNOME Terminal, Konsole, Alacritty, kitty, xterm, etc.) and uses Ctrl+Shift+V. If your terminal is not detected, please report it.
+2. **Windows**: Use Ctrl+Shift+V manually, right-click paste, or change terminal settings to use Ctrl+V.
 
 ### Clipboard Contents Lost
 
@@ -508,6 +523,20 @@ build.bat
 
 **Binary size**: ~50–60 MB (includes Python runtime, dependencies, and audio libraries).
 
+### Linux Build
+
+```bash
+# Install dependencies
+sudo apt install espeak-ng libportaudio2 xclip xdotool python3-tk
+sudo apt install python3-gi gir1.2-ayatanaappindicator3-0.1
+pip install -r requirements.txt pyinstaller pynput
+
+# Build
+./build_linux.sh
+
+# Output: dist/VoicePaste (~80–140 MB portable binary)
+```
+
 **Requirements**:
 - PyInstaller must be able to find your Python installation
 - All dependencies must be installed in the current environment (pip install -r requirements.txt)
@@ -570,7 +599,7 @@ The application has evolved through multiple releases, accumulating features suc
 - Local and cloud transcription backends with configurable quality/speed tradeoffs
 - Multiple LLM providers for text cleanup and Q&A
 - Cloud and local text-to-speech with 14 voice variants
-- Secure credential storage via Windows Credential Manager
+- Secure credential storage via OS credential store
 - Floating overlay UI for non-intrusive status feedback
 - HTTP API for external program integration
 - Hands-Free mode with wake word detection

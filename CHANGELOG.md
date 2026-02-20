@@ -7,7 +7,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-### Planned for v1.0 (Release)
+### Planned
 - Code signing for reduced antivirus false positives
 - Multi-language UI (localization)
 - Bundled language models in single-file .exe
@@ -18,6 +18,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Multi-turn conversation context for Voice Prompt mode
 
 See [BACKLOG.md](docs/BACKLOG.md) for the complete v1.0 roadmap.
+
+---
+
+## [1.1.0] - 2026-02-20
+
+### Added
+- **Linux Platform Support**: Full cross-platform support for Ubuntu 22.04 and 24.04 alongside Windows. Platform abstraction layer (`src/platform_impl/`) handles clipboard, paste simulation, audio feedback, file paths, and single-instance locking per OS.
+- **Terminal Paste Detection (Linux)**: Automatically detects 20+ terminal emulators (GNOME Terminal, Konsole, Alacritty, kitty, xterm, etc.) via X11 WM_CLASS and uses Ctrl+Shift+V instead of Ctrl+V for correct paste behavior.
+- **CUDA Safe Auto-Detection**: New `_resolve_device()` in local_stt.py pre-checks for NVIDIA GPU + cuDNN before allowing CUDA. Prevents CTranslate2 segfaults when CUDA libraries are partially installed. Frozen PyInstaller binaries always use CPU.
+- **TTS Speech Speed Setting**: New `[tts] speed` config field (default: 1.0, range: 0.25–4.0). Maps to Piper's `length_scale` parameter. Configurable via Settings dialog spinbox (0.5–2.0 UI range).
+- **pystray GtkIcon Patch**: Monkey-patches pystray's `_update_fs_icon` to add `.png` suffix on Linux, fixing "Failed to recognize image format" errors with GNOME Shell's AppIndicator extension.
+- **Linux CI Matrix**: GitHub Actions CI now runs on windows-latest, ubuntu-22.04, and ubuntu-24.04 with platform-specific system dependencies.
+
+### Changed
+- **Default TTS Hotkey (Linux)**: Changed from Ctrl+Alt+T to Ctrl+Alt+S on Linux to avoid conflict with GNOME Terminal's default shortcut. Windows remains Ctrl+Alt+T.
+- **xclip Clipboard Delay**: Increased from 50ms to 150ms on Linux to accommodate X11's asynchronous clipboard (xclip forks a background process to serve the selection).
+- **xdotool --clearmodifiers**: `send_key()` now passes `--clearmodifiers` to xdotool to release held modifier keys before sending keystrokes, preventing stuck-modifier issues after hotkey combos.
+- **Settings Dialog (Linux)**: "Open Cache Folder" button uses `xdg-open` instead of `os.startfile` on Linux. TTS speed spinbox added to Text-to-Speech tab.
+- **Build Dependencies**: `build_linux.sh` and CI workflow updated to include `python3-gi` and `gir1.2-ayatanaappindicator3-0.1` for pystray AppIndicator support.
+- **APP_VERSION**: Bumped to 1.1.0.
+
+### Fixed
+- **Terminal paste failures on Linux**: Terminals that only accept Ctrl+Shift+V now receive the correct keystroke automatically.
+- **Tray icon not appearing on GNOME**: pystray wrote temp icon files without `.png` extension; GNOME's GdkPixbuf couldn't determine the image format.
+- **CUDA segfaults in frozen builds**: PyInstaller binaries no longer attempt CUDA initialization, which caused native crashes when CUDA runtime libraries weren't bundled.
+- **Stuck modifier keys after hotkey**: xdotool `--clearmodifiers` flag prevents modifier keys from remaining held after a hotkey-triggered action.
+
+### Security
+- test_security.py: Added `tray.py` to tempfile allowlist (uses tempfile for pystray icon PNG files, not audio data).
 
 ---
 
@@ -287,8 +316,11 @@ Floating overlay with live recording timer. SHA256 model integrity verification.
 ### v0.9 (API, Confirm-Paste & Hands-Free)
 HTTP API server for external control. Confirm-before-paste with AWAITING_PASTE state. Hands-Free wake word detection via faster-whisper tiny. Silence-based auto-stop. 5 security fixes.
 
-### v1.0 (Release)
-Polished, fully documented, tested, and packaged. Ready for public distribution. Code signing, localization, advanced features.
+### v1.1 (Linux Support)
+Cross-platform: Ubuntu 22.04/24.04 alongside Windows. Terminal paste detection, CUDA safe auto-detection, TTS speed control, pystray GNOME fix, platform-specific hotkey defaults. CI matrix across 3 OS targets.
+
+### v1.2+ (Future)
+Wayland support (D-Bus GlobalShortcuts), ydotool auto-setup, code signing, localization, advanced features.
 
 ---
 

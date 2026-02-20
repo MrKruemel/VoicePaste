@@ -1,7 +1,8 @@
 # Voice-to-Summary Paste Tool Configuration
 # Copy this file to config.toml and customize as needed.
 #
-# IMPORTANT: API keys are stored securely in Windows Credential Manager.
+# IMPORTANT: API keys are stored securely in the OS credential store
+# (Windows Credential Manager / Linux keyring via the Settings dialog).
 # Use the Settings dialog (right-click tray icon > Settings) to manage API keys.
 # If you add keys to this file, they will be automatically migrated to Credential Manager on startup.
 #
@@ -20,7 +21,8 @@ combination = "ctrl+alt+r"
 prompt_combination = "ctrl+alt+a"
 
 # TTS hotkeys (v0.6): only active when TTS is enabled in Settings
-# Read clipboard aloud via Text-to-Speech (default: "ctrl+alt+t")
+# Read clipboard aloud via Text-to-Speech
+# Default: "ctrl+alt+t" (Windows), "ctrl+alt+s" (Linux — avoids GNOME Terminal shortcut)
 tts_combination = "ctrl+alt+t"
 # Ask AI a question and hear the answer via TTS (default: "ctrl+alt+y")
 tts_ask_combination = "ctrl+alt+y"
@@ -138,7 +140,8 @@ output_format = "mp3_44100_128"
 
 # --- Local (Piper) settings (v0.7) ---
 # Piper voice model name. Download models via Settings dialog before first use.
-# Models are cached in %LOCALAPPDATA%\VoicePaste\models\tts\.
+# Models are cached in %LOCALAPPDATA%\VoicePaste\models\tts\ (Windows)
+# or ~/.cache/VoicePaste/models/tts/ (Linux).
 # Only used when provider = "piper".
 #
 # German voices (v0.8):
@@ -163,6 +166,12 @@ output_format = "mp3_44100_128"
 #
 # Full list: See PIPER_VOICE_MODELS in src/constants.py.
 local_voice = "de_DE-thorsten-medium"
+
+# Speech speed for Piper local TTS (v1.1)
+# Controls the length_scale parameter: lower = slower, higher = faster.
+# 0.5 = slow (double duration), 1.0 = normal, 2.0 = fast (half duration)
+# Valid range: 0.25 to 4.0. Only used when provider = "piper".
+speed = 1.0
 
 [feedback]
 # Play audio cues on recording start/stop (default: true)
