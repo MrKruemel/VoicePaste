@@ -397,6 +397,7 @@ class PiperLocalTTS:
         self,
         voice_name: str,
         model_dir: Optional[Path] = None,
+        speed: float = 1.0,
     ) -> None:
         """Initialize the Piper local TTS backend.
 
@@ -409,9 +410,12 @@ class PiperLocalTTS:
             model_dir: Explicit path to the model directory containing
                 the .onnx and .onnx.json files. If None, resolves from
                 the standard cache directory.
+            speed: Speech speed multiplier (length_scale). Values < 1.0
+                make speech faster, > 1.0 makes it slower. Default 1.0.
         """
         self._voice_name = voice_name
         self._model_dir = model_dir
+        self._speed = speed
         self._session: Optional[object] = None  # ort.InferenceSession
         self._config: Optional[dict] = None
         self._phoneme_id_map: Optional[dict[str, list[int]]] = None
@@ -423,9 +427,10 @@ class PiperLocalTTS:
         self._phonemizer = EspeakPhonemizer()
 
         logger.info(
-            "PiperLocalTTS initialized: voice=%s, model_dir=%s",
+            "PiperLocalTTS initialized: voice=%s, model_dir=%s, speed=%.2f",
             voice_name,
             model_dir or "(auto/cache)",
+            speed,
         )
 
     @property
@@ -758,7 +763,10 @@ class PiperLocalTTS:
         lengths_array = np.array([ids_array.shape[1]], dtype=np.int64)
 
         noise_scale = self._inference_params.get("noise_scale", 0.667)
-        length_scale = self._inference_params.get("length_scale", 1.0)
+        # Use user speed setting; fall back to model default
+        length_scale = self._speed if self._speed != 1.0 else (
+            self._inference_params.get("length_scale", 1.0)
+        )
         noise_w = self._inference_params.get("noise_w", 0.8)
         scales_array = np.array(
             [noise_scale, length_scale, noise_w], dtype=np.float32

@@ -139,6 +139,7 @@ def create_tts_backend(
     model_id: str = "",
     output_format: str = "",
     local_voice: str = "",
+    speed: float = 1.0,
 ) -> Optional[TTSBackend]:
     """Factory: create a TTS backend from configuration.
 
@@ -168,7 +169,7 @@ def create_tts_backend(
             from constants import DEFAULT_PIPER_VOICE
 
             voice = local_voice or DEFAULT_PIPER_VOICE
-            return PiperLocalTTS(voice_name=voice)
+            return PiperLocalTTS(voice_name=voice, speed=speed)
 
         except ImportError as e:
             logger.warning(

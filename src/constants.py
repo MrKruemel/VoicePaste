@@ -43,8 +43,15 @@ DEFAULT_PROMPT_HOTKEY = "ctrl+alt+a"
 CANCEL_HOTKEY = "escape"
 
 # v0.6: TTS hotkeys
-DEFAULT_TTS_HOTKEY = "ctrl+alt+t"          # T = Talk/TTS — read clipboard aloud
-DEFAULT_TTS_ASK_HOTKEY = "ctrl+alt+y"      # Y = adjacent to T — Ask AI + TTS
+# Note: ctrl+alt+t is the GNOME Terminal shortcut on Ubuntu, so use
+# ctrl+alt+s (Speak) on Linux to avoid conflict.
+import sys as _sys
+if _sys.platform == "win32":
+    DEFAULT_TTS_HOTKEY = "ctrl+alt+t"      # T = Talk/TTS — read clipboard aloud
+    DEFAULT_TTS_ASK_HOTKEY = "ctrl+alt+y"  # Y = adjacent to T — Ask AI + TTS
+else:
+    DEFAULT_TTS_HOTKEY = "ctrl+alt+s"      # S = Speak — avoids GNOME ctrl+alt+t
+    DEFAULT_TTS_ASK_HOTKEY = "ctrl+alt+y"  # Y = Ask AI + TTS
 
 # Audio configuration
 DEFAULT_SAMPLE_RATE = 16000

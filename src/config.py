@@ -236,6 +236,7 @@ class AppConfig:
 
     # --- v0.7: Local TTS (Piper) fields ---
     tts_local_voice: str = DEFAULT_PIPER_VOICE
+    tts_speed: float = 1.0  # Piper length_scale: <1.0 = faster, >1.0 = slower
 
     # --- v0.9: HTTP API ---
     api_enabled: bool = DEFAULT_API_ENABLED
@@ -397,6 +398,8 @@ output_format = "{esc(self.tts_output_format)}"
 # Voice model name. Available: de_DE-thorsten-medium, de_DE-thorsten-high,
 # en_US-lessac-medium, en_US-amy-medium. Download via Settings dialog.
 local_voice = "{esc(self.tts_local_voice)}"
+# Speech speed: 0.5 = double speed, 1.0 = normal, 2.0 = half speed
+speed = {self.tts_speed}
 
 [paste]
 # Confirm before pasting: show a preview notification and wait for Enter.
@@ -725,6 +728,10 @@ def load_config() -> Optional[AppConfig]:
         )
         tts_local_voice = DEFAULT_PIPER_VOICE
 
+    # v1.1: TTS speed (Piper length_scale)
+    tts_speed = float(tts_section.get("speed", 1.0))
+    tts_speed = max(0.25, min(tts_speed, 4.0))  # clamp to sane range
+
     # --- v1.0: TTS Audio Cache ---
     tts_cache_section = data.get("tts_cache", {})
     tts_cache_enabled = bool(tts_cache_section.get("enabled", DEFAULT_TTS_CACHE_ENABLED))
@@ -845,6 +852,7 @@ def load_config() -> Optional[AppConfig]:
         tts_ask_hotkey=tts_ask_hotkey,
         # v0.7: Local TTS (Piper)
         tts_local_voice=tts_local_voice,
+        tts_speed=tts_speed,
         # v0.9: HTTP API
         api_enabled=api_enabled,
         api_port=api_port,

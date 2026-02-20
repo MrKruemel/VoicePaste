@@ -43,7 +43,9 @@ jobs:
             libportaudio2 \
             xclip \
             xdotool \
-            python3-tk
+            python3-tk \
+            python3-gi \
+            gir1.2-ayatanaappindicator3-0.1
 
       - name: Install Python dependencies
         run: |

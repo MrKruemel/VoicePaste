@@ -301,6 +301,7 @@ class VoicePasteApp:
             model_id=config.tts_model_id,
             output_format=config.tts_output_format,
             local_voice=config.tts_local_voice,
+            speed=config.tts_speed,
         )
         if self._tts is not None:
             logger.info("TTS backend ready: %s", config.tts_provider)

@@ -34,6 +34,9 @@ env/
 # Input/reference files (may contain API keys)
 input/
 
+# Claude Code
+.claude/
+
 # OS
 Thumbs.db
 desktop.ini

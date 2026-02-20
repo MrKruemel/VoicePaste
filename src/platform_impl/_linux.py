@@ -92,8 +92,42 @@ def clipboard_restore(backup: str | None) -> None:
         logger.debug("Error restoring clipboard.")
 
 
+def _is_terminal_focused() -> bool:
+    """Check if the currently focused window is a terminal emulator.
+
+    Terminal emulators use Ctrl+Shift+V for paste instead of Ctrl+V.
+    We detect this by checking the WM_CLASS of the active X11 window.
+    """
+    xdotool = shutil.which("xdotool")
+    if not xdotool:
+        return False
+    try:
+        result = subprocess.run(
+            [xdotool, "getactivewindow", "getwindowclassname"],
+            capture_output=True, text=True, timeout=2,
+        )
+        wm_class = result.stdout.strip().lower()
+        terminal_classes = {
+            "gnome-terminal", "gnome-terminal-server",
+            "xterm", "uxterm", "konsole", "xfce4-terminal",
+            "terminator", "tilix", "alacritty", "kitty",
+            "wezterm", "foot", "sakura", "lxterminal",
+            "mate-terminal", "guake", "yakuake", "st",
+        }
+        is_term = wm_class in terminal_classes
+        if is_term:
+            logger.debug("Terminal detected: %s", wm_class)
+        return is_term
+    except Exception:
+        return False
+
+
 def paste_text(text: str) -> bool:
-    """Write text to clipboard and simulate Ctrl+V to paste."""
+    """Write text to clipboard and simulate paste keystroke.
+
+    Detects terminal emulators and uses Ctrl+Shift+V (the standard
+    terminal paste shortcut) instead of Ctrl+V.
+    """
     if not text or not text.strip():
         logger.info("Empty text, nothing to paste.")
         return False
@@ -122,9 +156,15 @@ def paste_text(text: str) -> bool:
         logger.error("Clipboard write timed out.")
         return False
 
-    time.sleep(0.05)
+    # Give xclip time to register the clipboard content.
+    # X11 clipboard works asynchronously (xclip forks a background process
+    # that serves the selection). 150ms is a safe margin.
+    time.sleep(0.15)
 
-    # Simulate Ctrl+V
+    # Detect terminal for correct paste shortcut
+    is_terminal = _is_terminal_focused()
+
+    # Simulate paste keystroke
     try:
         if session == "wayland":
             ydotool = shutil.which("ydotool")
@@ -153,9 +193,13 @@ def paste_text(text: str) -> bool:
             if not xdotool:
                 logger.error("xdotool not found. Install xdotool.")
                 return False
-            subprocess.run([xdotool, "key", "ctrl+v"], timeout=2)
+            paste_key = "ctrl+shift+v" if is_terminal else "ctrl+v"
+            subprocess.run([xdotool, "key", paste_key], timeout=2)
             time.sleep(PASTE_DELAY_MS / 1000.0)
-            logger.info("Paste complete (xdotool/X11).")
+            logger.info(
+                "Paste complete (xdotool/X11, key=%s, terminal=%s).",
+                paste_key, is_terminal,
+            )
             return True
     except subprocess.TimeoutExpired:
         logger.error("Keystroke simulation timed out.")
@@ -287,7 +331,11 @@ _XDOTOOL_KEY_MAP = {
 
 
 def send_key(key: str) -> None:
-    """Send a keystroke via xdotool (X11) or ydotool (Wayland)."""
+    """Send a keystroke via xdotool (X11) or ydotool (Wayland).
+
+    Uses --clearmodifiers to release any held modifier keys (e.g. after
+    a hotkey combo) before sending the keystroke.
+    """
     session = _detect_session_type()
     if session == "wayland":
         ydotool = shutil.which("ydotool")
@@ -308,7 +356,9 @@ def send_key(key: str) -> None:
         if xdotool:
             # Map key names and pass through combos like "ctrl+v"
             mapped = _XDOTOOL_KEY_MAP.get(key.lower(), key)
-            subprocess.run([xdotool, "key", mapped], timeout=2)
+            subprocess.run(
+                [xdotool, "key", "--clearmodifiers", mapped], timeout=2,
+            )
 
 
 def register_key_press(key: str, callback, suppress: bool = False):

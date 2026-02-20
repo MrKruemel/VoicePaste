@@ -14,6 +14,8 @@ v0.4: Extracted icon drawing to shared icon_drawing module.
 
 import logging
 import os
+import sys
+import tempfile
 import threading
 from typing import Callable, Optional
 
@@ -23,6 +25,32 @@ from constants import APP_NAME, APP_VERSION, AppState
 from icon_drawing import create_icon_image
 
 logger = logging.getLogger(__name__)
+
+# ---------------------------------------------------------------------------
+# Workaround: pystray's GTK/AppIndicator backend writes icon temp files
+# without a .png extension (tempfile.mktemp()).  GNOME Shell's appindicator
+# extension uses GdkPixbuf to load the file, which needs the extension to
+# determine the image format.  Without it: "Failed to recognize image format"
+# → icon disappears → event loop dies.
+#
+# Monkey-patch _update_fs_icon to add '.png' suffix on Linux.
+# ---------------------------------------------------------------------------
+if sys.platform != "win32":
+    try:
+        from pystray._util.gtk import GtkIcon as _GtkIcon
+
+        _orig_update_fs_icon = _GtkIcon._update_fs_icon
+
+        def _patched_update_fs_icon(self):
+            self._icon_path = tempfile.mktemp(suffix=".png")
+            with open(self._icon_path, "wb") as f:
+                self.icon.save(f, "PNG")
+            self._icon_valid = True
+
+        _GtkIcon._update_fs_icon = _patched_update_fs_icon
+        logger.debug("Patched pystray GtkIcon._update_fs_icon for .png suffix.")
+    except Exception:
+        pass  # Not on GTK backend — no patch needed
 
 # Icon dimensions -- 32x32 is the standard Windows system tray icon size.
 ICON_SIZE = 32

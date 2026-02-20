@@ -14,7 +14,8 @@
 #   - pip install -r requirements.txt pyinstaller
 #   - System packages:
 #       sudo apt install espeak-ng libportaudio2 xclip xdotool python3-tk
-#       sudo apt install gnome-shell-extension-appindicator  # tray icon
+#       sudo apt install python3-gi gir1.2-ayatanaappindicator3-0.1  # tray menu
+#       sudo apt install gnome-shell-extension-appindicator  # tray icon (GNOME)
 #
 # Output:
 #   dist/VoicePaste         (~80-140 MB portable binary)
@@ -166,6 +167,7 @@ echo "    4. chmod +x VoicePaste && ./VoicePaste"
 echo ""
 echo "  System dependencies:"
 echo "    sudo apt install espeak-ng libportaudio2 xclip xdotool python3-tk"
-echo "    sudo apt install gnome-shell-extension-appindicator"
+echo "    sudo apt install python3-gi gir1.2-ayatanaappindicator3-0.1"
+echo "    sudo apt install gnome-shell-extension-appindicator  # GNOME only"
 echo "======================================================================"
 echo ""

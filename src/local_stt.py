@@ -103,6 +103,69 @@ def _configure_onnxruntime_for_frozen() -> None:
         )
 
 
+def _resolve_device() -> str:
+    """Resolve 'auto' device to 'cuda' or 'cpu' safely.
+
+    CTranslate2's own auto-detection can cause a native crash (segfault)
+    when CUDA libraries are partially installed (e.g. the NVIDIA driver is
+    present but cuDNN is not).  We pre-check that both an NVIDIA GPU *and*
+    a usable cuDNN library are present before allowing CUDA.
+
+    In a frozen PyInstaller executable, CUDA is always disabled because:
+    - The bundled onnxruntime has no CUDA providers (Silero VAD would fail)
+    - CUDA runtime libraries (libcudart, libcublas) aren't in the bundle
+    - CTranslate2 may segfault when it can't find CUDA runtime at inference
+
+    Returns:
+        'cuda' if NVIDIA GPU + cuDNN are available (non-frozen), 'cpu' otherwise.
+    """
+    # In a frozen PyInstaller bundle, always force CPU.
+    # CUDA runtime libs aren't bundled and onnxruntime is CPU-only.
+    if _is_frozen():
+        logger.info(
+            "Frozen executable detected — forcing device='cpu'. "
+            "Run from source for CUDA GPU acceleration."
+        )
+        return "cpu"
+
+    import ctypes
+    import ctypes.util
+
+    # Step 1: check for NVIDIA GPU
+    if sys.platform == "win32":
+        import shutil
+        has_gpu = shutil.which("nvidia-smi") is not None
+    else:
+        has_gpu = Path("/dev/nvidia0").exists()
+
+    if not has_gpu:
+        logger.info("No NVIDIA GPU detected — using device='cpu'.")
+        return "cpu"
+
+    # Step 2: check for cuDNN (required by CTranslate2 for CUDA inference).
+    # Without cuDNN, CTranslate2 segfaults during model load.
+    cudnn_found = ctypes.util.find_library("cudnn") is not None
+    if not cudnn_found:
+        # Try common sonames directly
+        for soname in ("libcudnn.so.9", "libcudnn.so.8", "libcudnn.so"):
+            try:
+                ctypes.cdll.LoadLibrary(soname)
+                cudnn_found = True
+                break
+            except OSError:
+                continue
+
+    if not cudnn_found:
+        logger.info(
+            "NVIDIA GPU found but cuDNN is not installed — using device='cpu'. "
+            "Install cuDNN for GPU acceleration."
+        )
+        return "cpu"
+
+    logger.info("NVIDIA GPU + cuDNN detected — using device='cuda'.")
+    return "cuda"
+
+
 def is_faster_whisper_available() -> bool:
     """Check if the faster-whisper package is installed and importable.
 
@@ -370,11 +433,19 @@ class LocalWhisperSTT:
                     str(self._model_path) if self._model_path else self._model_size
                 )
 
+                # Resolve "auto" device safely: CTranslate2's auto-detection
+                # can cause a native crash (segfault) when CUDA libs are
+                # partially installed (e.g. libcudnn missing).  Pre-check
+                # whether CUDA is actually usable and fall back to CPU.
+                device = self._device
+                if device == "auto":
+                    device = _resolve_device()
+
                 logger.info(
                     "Loading Whisper model: source=%s, device=%s, "
                     "compute_type=%s, model_path=%s...",
                     model_source,
-                    self._device,
+                    device,
                     self._compute_type,
                     self._model_path or "(auto/cache)",
                 )
@@ -382,7 +453,7 @@ class LocalWhisperSTT:
 
                 self._model = WhisperModel(
                     model_source,
-                    device=self._device,
+                    device=device,
                     compute_type=self._compute_type,
                     download_root=None,
                 )

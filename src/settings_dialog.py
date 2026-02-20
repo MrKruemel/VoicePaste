@@ -990,6 +990,19 @@ class SettingsDialog:
         )
         self._tts_progress_label.pack(side=tk.LEFT)
 
+        # TTS Speed row
+        tts_speed_row = ttk.Frame(self._tts_local_frame)
+        tts_speed_row.pack(fill=tk.X, pady=(4, 4))
+        ttk.Label(tts_speed_row, text="Speed:", width=10, anchor=tk.W).pack(side=tk.LEFT)
+        self._tts_speed_var = tk.StringVar(value="1.0")
+        ttk.Spinbox(
+            tts_speed_row, from_=0.5, to=2.0, increment=0.1, width=6,
+            textvariable=self._tts_speed_var,
+        ).pack(side=tk.LEFT, padx=(4, 0))
+        ttk.Label(tts_speed_row, text="(0.5 = slow, 1.0 = normal, 2.0 = fast)").pack(
+            side=tk.LEFT, padx=(4, 0)
+        )
+
         # Piper privacy hint
         tts_local_hint = ttk.Label(
             self._tts_local_frame,
@@ -1567,6 +1580,9 @@ class SettingsDialog:
             self._tts_piper_voice_var.set(
                 PIPER_VOICE_MODELS[first_key]["label"]
             )
+
+        # TTS speed
+        self._tts_speed_var.set(str(config.tts_speed))
 
         # Update Piper model download status
         self._update_tts_model_status()
@@ -2240,16 +2256,17 @@ class SettingsDialog:
             )
 
     def _on_tts_cache_open_folder(self) -> None:
-        """Open the TTS cache folder in Windows Explorer.
-
-        Creates the directory if it does not exist, then opens it using
-        os.startfile (Windows-only).
-        """
+        """Open the TTS cache folder in the system file manager."""
         try:
             cache_dir = self._get_tts_cache_dir()
             cache_dir.mkdir(parents=True, exist_ok=True)
             import os
-            os.startfile(str(cache_dir))
+            import sys
+            if sys.platform == "win32":
+                os.startfile(str(cache_dir))
+            else:
+                import subprocess
+                subprocess.Popen(["xdg-open", str(cache_dir)])
         except Exception as e:
             logger.warning("Failed to open TTS cache folder: %s", e)
 
@@ -2810,6 +2827,16 @@ class SettingsDialog:
         if new_tts_local_voice and new_tts_local_voice != config.tts_local_voice:
             changed_fields["tts_local_voice"] = new_tts_local_voice
             config.tts_local_voice = new_tts_local_voice
+
+        # TTS speed
+        try:
+            new_tts_speed = float(self._tts_speed_var.get())
+            new_tts_speed = max(0.5, min(new_tts_speed, 2.0))
+        except (ValueError, TypeError):
+            new_tts_speed = config.tts_speed
+        if new_tts_speed != config.tts_speed:
+            changed_fields["tts_speed"] = new_tts_speed
+            config.tts_speed = new_tts_speed
 
         # TTS Cache settings
         new_cache_enabled = self._tts_cache_enabled_var.get()
