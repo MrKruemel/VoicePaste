@@ -36,6 +36,9 @@ from typing import Any, Callable, Optional
 # Strict CORS origin pattern: only http://localhost or http://localhost:PORT
 _ALLOWED_ORIGIN_RE = re.compile(r"^http://localhost(:\d+)?$")
 
+# Valid cache entry ID: exactly 16 lowercase hex characters (SHA256[:16])
+_VALID_ENTRY_ID_RE = re.compile(r"^[0-9a-f]{16}$")
+
 logger = logging.getLogger(__name__)
 
 # Rate limiting
@@ -115,6 +118,13 @@ class VoicePasteAPIHandler(BaseHTTPRequestHandler):
             self._send_json(200, result)
         elif self.path.startswith("/tts/history/"):
             entry_id = self.path.split("/")[-1]
+            if not _VALID_ENTRY_ID_RE.match(entry_id):
+                self._send_json(400, {
+                    "status": "error",
+                    "error_code": "INVALID_PARAMS",
+                    "message": "Invalid entry ID format",
+                })
+                return
             result = self.server.dispatch({
                 "action": "tts_history_get", "id": entry_id,
             })
@@ -175,6 +185,13 @@ class VoicePasteAPIHandler(BaseHTTPRequestHandler):
         # v1.0: TTS cache replay route (POST /tts/replay/{id})
         if action is None and self.path.startswith("/tts/replay/"):
             entry_id = self.path.split("/")[-1]
+            if not _VALID_ENTRY_ID_RE.match(entry_id):
+                self._send_json(400, {
+                    "status": "error",
+                    "error_code": "INVALID_PARAMS",
+                    "message": "Invalid entry ID format",
+                })
+                return
             body["action"] = "tts_replay"
             body["id"] = entry_id
             action = "tts_replay"
@@ -223,6 +240,13 @@ class VoicePasteAPIHandler(BaseHTTPRequestHandler):
             self._send_json(200, result)
         elif self.path.startswith("/tts/history/"):
             entry_id = self.path.split("/")[-1]
+            if not _VALID_ENTRY_ID_RE.match(entry_id):
+                self._send_json(400, {
+                    "status": "error",
+                    "error_code": "INVALID_PARAMS",
+                    "message": "Invalid entry ID format",
+                })
+                return
             result = self.server.dispatch({
                 "action": "tts_history_delete", "id": entry_id,
             })

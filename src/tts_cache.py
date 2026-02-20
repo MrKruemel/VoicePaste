@@ -13,6 +13,7 @@ import hashlib
 import json
 import logging
 import os
+import re
 import threading
 import time
 from dataclasses import dataclass
@@ -21,6 +22,9 @@ from pathlib import Path
 from typing import Any, Optional
 
 logger = logging.getLogger(__name__)
+
+# Valid entry_id: exactly 16 lowercase hex characters (output of SHA256[:16])
+_VALID_ENTRY_ID_RE = re.compile(r"^[0-9a-f]{16}$")
 
 # ---------------------------------------------------------------------------
 # Data types
@@ -310,14 +314,23 @@ class TTSAudioCache:
         )
         return entry_id
 
+    @staticmethod
+    def _is_valid_entry_id(entry_id: str) -> bool:
+        """Validate that entry_id is a safe 16-char hex string."""
+        return bool(_VALID_ENTRY_ID_RE.match(entry_id))
+
     def replay(self, entry_id: str) -> Optional[bytes]:
         """Load cached audio bytes by entry ID for replay.
 
         Updates last_played_at and play_count.
 
         Returns:
-            Audio bytes, or None if entry not found.
+            Audio bytes, or None if entry not found or entry_id invalid.
         """
+        if not self._is_valid_entry_id(entry_id):
+            logger.warning("TTS cache: invalid entry_id rejected: %r", entry_id[:40])
+            return None
+
         with self._lock:
             entry = self._index["entries"].get(entry_id)
             if entry is None:
@@ -351,6 +364,9 @@ class TTSAudioCache:
 
     def get_entry(self, entry_id: str) -> Optional[dict[str, Any]]:
         """Get metadata for a single cache entry."""
+        if not self._is_valid_entry_id(entry_id):
+            return None
+
         with self._lock:
             entry = self._index["entries"].get(entry_id)
             if entry is None:
@@ -379,8 +395,12 @@ class TTSAudioCache:
     def delete(self, entry_id: str) -> bool:
         """Delete a single cache entry (file + index).
 
-        Returns True if the entry existed.
+        Returns True if the entry existed, False if not found or invalid ID.
         """
+        if not self._is_valid_entry_id(entry_id):
+            logger.warning("TTS cache: invalid entry_id rejected: %r", entry_id[:40])
+            return False
+
         with self._lock:
             entry = self._index["entries"].pop(entry_id, None)
             if entry is None:
