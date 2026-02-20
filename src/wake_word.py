@@ -52,8 +52,10 @@ _MIN_SPEECH_SECONDS = 0.6
 # Grace period: keep buffering this long after energy drops, to bridge
 # natural pauses between words (e.g. "Hello ... Cloud")
 _SPEECH_END_GRACE_SECONDS = 0.5
-# Default RMS threshold for speech detection (int16 scale)
-_DEFAULT_ENERGY_THRESHOLD = 300.0
+# Default RMS threshold for speech detection (int16 scale).
+# 200 is sensitive enough for normal speech at arm's length from the mic,
+# while still filtering out most ambient noise.
+_DEFAULT_ENERGY_THRESHOLD = 200.0
 
 
 def _normalize_text(text: str) -> str:
@@ -223,7 +225,7 @@ class WakeWordDetector:
             audio_float = audio.astype(np.float32).flatten() / 32768.0
             segments, _ = self._model.transcribe(
                 audio_float,
-                beam_size=1,
+                beam_size=3,
                 language=self._language,
                 vad_filter=False,  # We do our own VAD
                 without_timestamps=True,
@@ -231,6 +233,9 @@ class WakeWordDetector:
                 # defaults reject too many valid short utterances.
                 no_speech_threshold=0.9,
                 log_prob_threshold=-2.0,
+                # Bias the model toward recognizing the wake phrase.
+                # This dramatically improves accuracy for specific words.
+                initial_prompt=self._wake_phrase,
             )
             text = " ".join(seg.text for seg in segments).strip()
             return text
