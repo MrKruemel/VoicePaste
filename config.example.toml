@@ -26,10 +26,23 @@ tts_combination = "ctrl+alt+t"
 tts_ask_combination = "ctrl+alt+y"
 # Note: These hotkeys only work when TTS is enabled. Disable TTS to free up these hotkeys.
 
+# Hands-Free hotkey (v0.9): say wake phrase to start recording, silence auto-stops (default: disabled)
+# Set to a hotkey like "ctrl+alt+o" to enable, or leave empty to disable.
+# Requires microphone and local STT (faster-whisper). Can work with any STT + summarization pipeline.
+# handsfree_combination = ""
+
 [api]
-# Legacy API key location (migrated to Credential Manager automatically in v0.3+)
-# Leave this commented out — keys are now managed in Settings dialog > Credentials.
-# openai_api_key = ""
+# HTTP API Server (v0.9+)
+# Allows external programs (scripts, curl, browser extensions, Claude Code) to control Voice Paste via HTTP.
+# The server binds to 127.0.0.1 only (no network exposure, localhost-only).
+# API is disabled by default for security. Enable in Settings dialog or set to true here.
+# WARNING: Only enable if you trust local applications on your machine.
+enabled = false
+
+# HTTP API port (default: 18923)
+# The server will listen on http://127.0.0.1:18923.
+# Only change this if port 18923 is already in use on your machine.
+port = 18923
 
 [transcription]
 # STT backend: "cloud" (OpenAI Whisper API) or "local" (faster-whisper, offline, v0.4+)
@@ -169,6 +182,64 @@ audio_cues = true
 # - Green dot + "Pasted" confirmation when pasting
 # Set to false to disable overlay and use only tray icon for feedback.
 show_overlay = true
+
+[paste]
+# Delayed Paste (v0.9+)
+# Delay before pasting in seconds (default: 0 = paste immediately, same as v0.8 and earlier)
+# During the delay, you can press Escape to cancel or Enter to paste immediately.
+# Useful to ensure your cursor is in the right place before text is pasted.
+# Valid range: 0.0 to 30.0 seconds.
+delay_seconds = 0.0
+
+# Require Enter key confirmation before pasting (v0.9+, default: false)
+# When true, the app waits for you to press Enter after processing completes.
+# Press Escape to cancel. If you don't press Enter or Escape, the paste is cancelled after 30 seconds.
+# Useful as an extra safety check to prevent accidental pasting into the wrong window.
+require_confirmation = false
+
+# Confirmation timeout in seconds (v0.9+, default: 30.0)
+# If require_confirmation is true, how long to wait for the Enter key before cancelling the paste.
+# Valid range: 5.0 to 120.0 seconds.
+confirmation_timeout_seconds = 30.0
+
+[handsfree]
+# Hands-Free Mode (v0.9+)
+# Activate voice recording by saying a wake phrase (default: "Hello Cloud")
+# instead of using a hotkey. Recording auto-stops when you pause speaking.
+# Requires local STT (faster-whisper tiny model).
+# WARNING: Wake word detection runs continuously in the background, consuming CPU.
+# Only enable if you actively use hands-free mode.
+
+# Enable hands-free mode (default: false)
+enabled = false
+
+# Wake phrase to trigger recording (default: "Hello Cloud")
+# Say this phrase to start recording. Can be any short phrase.
+# Examples: "Hey Voice Paste", "Start recording", "Transcribe"
+wake_phrase = "Hello Cloud"
+
+# Wake phrase matching mode (default: "contains")
+# - "contains": Wake phrase can be anywhere in the spoken text (most forgiving)
+# - "startswith": Recording must start with the wake phrase
+# - "fuzzy": Approximate match using fuzzy string matching (tolerates typos)
+match_mode = "contains"
+
+# Recording pipeline for hands-free mode (default: "ask_tts")
+# - "transcribe_paste": Record speech -> Transcribe -> Summarize -> Paste (normal recording mode)
+# - "ask_tts": Record speech -> Send to LLM as question -> Speak answer via TTS
+# - "ask_paste": Record speech -> Send to LLM as question -> Paste answer
+pipeline = "ask_tts"
+
+# Silence detection timeout in seconds (default: 3.0)
+# After speech is detected, recording stops when silence exceeds this duration.
+# Longer values capture extended pauses within a single utterance.
+# Valid range: 1.0 to 10.0 seconds.
+silence_timeout_seconds = 3.0
+
+# Maximum recording duration in seconds (default: 60)
+# Recording auto-stops after this duration to prevent runaway recordings.
+# Valid range: 10 to 300 seconds.
+max_duration_seconds = 60
 
 [logging]
 # Log level: "DEBUG", "INFO", "WARNING", or "ERROR" (default: "INFO")

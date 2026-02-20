@@ -8,7 +8,7 @@
   A Windows desktop utility that records your speech, transcribes it with AI, optionally summarizes it, and pastes the result at your cursor—all with a hotkey. Runs entirely in the system tray.
 </p>
 
-**Current version**: 0.8.0 (Floating Overlay & Expanded Voice List)
+**Current version**: 0.9.0 (API Server, Confirm-Paste & Hands-Free Mode)
 
 ## Features
 
@@ -16,15 +16,18 @@
 - **Ask questions with Voice Prompt**: Press Ctrl+Alt+A to record a question, get an AI answer, and paste it.
 - **Read text aloud with TTS**: Press Ctrl+Alt+T to read clipboard content via text-to-speech (v0.6+).
 - **Ask AI and hear the answer**: Press Ctrl+Alt+Y to ask a question and hear the answer read aloud (v0.6+).
+- **Hands-Free mode** (v0.9+): Say a wake phrase (default "Hello Cloud") to start recording without touching the keyboard. Recording auto-stops when you pause speaking. Configurable pipeline (Ask+TTS, Transcribe+Paste, Ask+Paste).
+- **HTTP API** (v0.9+): Localhost REST API for external apps and scripts. Control recording, TTS, and status via HTTP. Secured with CORS, rate limiting, 127.0.0.1-only binding.
+- **Confirm-before-paste** (v0.9+): Optional delay or Enter keypress before pasting. Prevents accidental pasting into wrong window.
 - **Floating overlay UI** (v0.8+): Non-intrusive status display in bottom-right corner. Shows recording timer, processing animation, speaking feedback, and paste confirmation. Disable in Settings.
 - **Choose your transcription source**: Cloud (OpenAI Whisper API) or offline (local faster-whisper with Silero VAD).
 - **Multiple summarization backends**: OpenAI, OpenRouter (Claude, Llama), or local Ollama.
 - **Multiple TTS providers**: ElevenLabs cloud (human-quality voices) or local Piper (offline, free, 14 languages & voices including German, English US, English GB).
-- **Tabbed Settings dialog**: Organized configuration interface with Transcription, Summarization, Text-to-Speech, and General tabs (v0.7+).
+- **Tabbed Settings dialog**: Organized configuration interface with Transcription, Summarization, Text-to-Speech, Hands-Free, and General tabs.
 - **Secure credential storage**: API keys stored in Windows Credential Manager, never in plain text files.
 - **Silent operation**: Runs in system tray. Never steals focus.
 - **Audio feedback**: Beeps confirm recording start/stop/cancel/error. Disable in settings for silent mode.
-- **Visual feedback**: Tray icon color changes per state (grey=idle, red=recording, yellow=processing, green=pasting, blue=speaking).
+- **Visual feedback**: Tray icon color changes per state (grey=idle, red=recording, yellow=processing, teal=awaiting paste, green=pasting, blue=speaking).
 - **Cancel anytime**: Press Escape during recording to discard and return to idle.
 - **Clipboard safety**: Original clipboard contents restored after pasting.
 - **Toast notifications**: Errors appear as Windows notifications, not modal dialogs.

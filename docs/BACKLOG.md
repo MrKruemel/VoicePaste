@@ -1,6 +1,63 @@
 # Voice-to-Summary Paste Tool -- Product Backlog
 
-## Release Plan
+## Completed Releases (v0.1–v0.9)
+
+### v0.1 -- MVP (2025-02-13) ✓
+- Global hotkey recording toggle
+- Cloud STT via OpenAI Whisper
+- Raw transcript paste
+- System tray UI with quit
+
+### v0.2 -- Core Experience (2025-02-13) ✓
+- Cloud summarization (LLM cleanup)
+- Tray icon state feedback (idle, recording, processing)
+- Audio cues (start, stop, cancel, error)
+- Clipboard backup/restore
+- Escape to cancel recording
+
+### v0.3 -- Settings & Flexibility (2026-02-13) ✓
+- Settings dialog (tabbed UI)
+- Multiple summarization providers (OpenAI, OpenRouter, Ollama)
+- Windows Credential Manager for API keys
+- Custom summarization prompts
+
+### v0.4 -- Offline & Performance (2026-02-13) ✓
+- Local STT via faster-whisper + Silero VAD
+- STT model manager (download/cache from Hugging Face)
+- Configurable device (CPU, CUDA) and quantization
+
+### v0.5 -- Voice Prompts & UI Polish (2026-02-13) ✓
+- Voice Prompt mode (Q&A hotkey, Ctrl+Alt+A)
+- Dynamic tray icon rendering (PIL-based)
+- Build consolidation
+
+### v0.6 -- ElevenLabs TTS & Hotkeys (2026-02-18) ✓
+- Cloud TTS via ElevenLabs
+- TTS hotkeys (Ctrl+Alt+T read clipboard, Ctrl+Alt+Y ask+TTS)
+- Audio playback via miniaudio
+- TTS status feedback
+
+### v0.7 -- Local TTS via Piper (2026-02-19) ✓
+- Offline TTS via Piper ONNX + espeak-ng
+- 5 German voices (Thorsten variants, MLS)
+- Direct HTTPS downloads from Hugging Face (no hf_hub_download)
+- Tabbed settings dialog (ttk.Notebook) with dark theme
+
+### v0.8 -- Floating Overlay & Integrity (2026-02-19) ✓
+- Floating overlay UI (non-intrusive status, bottom-right corner)
+- Expanded Piper voice list (14 voices across German, EN-US, EN-GB)
+- SHA256 integrity verification for downloaded models
+- Enhanced startup notifications
+
+### v0.9 -- HTTP API, Confirm-Paste & Hands-Free (2026-02-20) ✓
+- HTTP API Server (localhost-only REST API on port 18923)
+- Confirm-before-paste (AWAITING_PASTE state, delay, Enter confirmation)
+- Hands-Free mode (wake word detection, silence auto-stop, configurable pipeline)
+- Security fixes: CORS origin validation, privacy logging, buffer zeroing, timing-safe hash comparison
+
+---
+
+## Historical Release Plan (Outline)
 
 ### v0.1 -- MVP (Walking Skeleton)
 **Goal**: Prove the end-to-end pipeline works: hotkey -> record -> transcribe -> paste.

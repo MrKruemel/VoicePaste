@@ -5,7 +5,7 @@
 **Date**: 2026-02-14
 **Status**: Accepted
 **Author**: Solution Architect
-**Current Version**: 0.7.0
+**Current Version**: 0.9.0
 
 ---
 
@@ -27,7 +27,7 @@ The tool must ship as a **single-file .exe** via PyInstaller, support multiple t
 
 ## 2. Architecture Overview
 
-### Component Diagram (v0.7)
+### Component Diagram (v0.9)
 
 ```
 +------------------------------------------------------------------+
@@ -121,7 +121,7 @@ The tool must ship as a **single-file .exe** via PyInstaller, support multiple t
 +--------------------------------------------------------------------+
 ```
 
-### State Machine (v0.7)
+### State Machine (v0.9)
 
 ```
                     +-------+
@@ -141,6 +141,14 @@ The tool must ship as a **single-file .exe** via PyInstaller, support multiple t
                     | PROCESSING |    |
                     +---+--------+    |
                         |             |
+                   (If paste delay/   |
+                    confirmation)    |
+                        |             |
+                    +---v--------+    |
+                    |AWAITING_   |--Escape->(CANCELLED)
+                    |PASTE  (v0.9)|   |
+                    +---+--------+    |
+                        |             |
                     +---+---+         |
                     |       |         |
               (No TTS)  (With TTS)    |
@@ -154,10 +162,11 @@ The tool must ship as a **single-file .exe** via PyInstaller, support multiple t
                        IDLE
 ```
 
-**States (v0.7):**
+**States (v0.9):**
 - **IDLE**: Waiting for hotkey. Tray icon is grey.
-- **RECORDING**: Capturing audio from microphone. Tray icon is red. Active for normal mode (Ctrl+Alt+R), voice prompt (Ctrl+Alt+A), or TTS ask (Ctrl+Alt+Y).
+- **RECORDING**: Capturing audio from microphone. Tray icon is red. Active for normal mode (Ctrl+Alt+R), voice prompt (Ctrl+Alt+A), TTS ask (Ctrl+Alt+Y), or hands-free wake word (v0.9+).
 - **PROCESSING**: Audio sent to STT; transcript sent to summarizer, prompt handler, or TTS synthesis. Tray icon is yellow.
+- **AWAITING_PASTE** (v0.9+): Post-processing pause before paste. Activated if `paste_delay_seconds > 0` or `paste_require_confirmation = true`. Tray icon is teal. Press Enter to paste immediately or Escape to cancel.
 - **PASTING**: Text placed on clipboard and Ctrl+V simulated. Tray icon is green. Returns to IDLE immediately after paste.
 - **SPEAKING** (v0.6+): TTS audio playback in progress. Tray icon is blue. Triggered by Ctrl+Alt+T (read clipboard) or Ctrl+Alt+Y (ask AI + TTS). Returns to IDLE on completion or Escape.
 - **CANCELLED**: Recording discarded (via Escape). Returns to IDLE with notification.

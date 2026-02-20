@@ -21,6 +21,45 @@ See [BACKLOG.md](docs/BACKLOG.md) for the complete v1.0 roadmap.
 
 ---
 
+## [0.9.0] - 2026-02-20
+
+### Added
+- **Confirm-Before-Paste (v0.9)**: New AWAITING_PASTE state. After processing, a brief delay or Enter keypress is required before pasting. Press Escape to cancel. Prevents accidental pasting into wrong window.
+- **Delayed Paste with Auto-Enter (v0.9)**: Configurable paste delay (0-10s) and optional auto-Enter after paste. Settings: `[paste] confirm_before_paste`, `paste_delay_seconds`, `auto_enter_after_paste`.
+- **HTTP API Server (v0.9)**: Localhost-only REST API for external program control. Endpoints: GET /health, GET /status, POST /tts, POST /stop, POST /record/start, POST /record/stop, POST /cancel. Binds to 127.0.0.1 only (hardcoded). Rate-limited to 5 req/s. CORS restricted to http://localhost origins.
+- **API Server Module (api_server.py, v0.9)**: Threaded HTTP server using Python stdlib http.server. Each request handled in a daemon thread. Strict CORS origin validation via regex.
+- **Hands-Free Mode (v0.9)**: Wake word detection using faster-whisper tiny model as a keyword spotter. Say the configured wake phrase (default "Hello Cloud") to start recording. Recording auto-stops when silence is detected. Fully configurable: wake phrase, match mode, pipeline, silence timeout, max duration.
+- **Wake Word Detector (wake_word.py, v0.9)**: Energy-based VAD (RMS on 100ms frames) triggers short STT bursts only during speech. ~0% CPU when idle. Manages its own tiny model instance. Privacy-safe: all processing local, no audio logged or written to disk, buffers zeroed after use.
+- **Silence-Based Auto-Stop (v0.9)**: AudioRecorder now supports optional silence detection. After speech is detected, recording auto-stops when silence exceeds configurable timeout (default 3.0s). Used by Hands-Free mode for natural conversation flow.
+- **Hands-Free Settings Tab (v0.9)**: New tab in Settings dialog with: enable checkbox + privacy warning, wake phrase text field, match mode dropdown (contains/startswith/fuzzy), pipeline selector (Ask+TTS/Transcribe+Paste/Ask+Paste), silence timeout spinner (1-10s), max recording spinner (10-300s).
+- **Tray Menu Hands-Free Toggle (v0.9)**: "Hands-Free: ON/OFF" toggle in system tray context menu for quick enable/disable without opening Settings.
+- **Wake Word Confirmation Cue (v0.9)**: Rising triple chirp (660-880-1100 Hz) plays when wake phrase is detected, confirming recording is about to start.
+- **API Skill Reference (docs/API-SKILL-REFERENCE.md, v0.9)**: Documentation for AI agents and scripts to interact with Voice Paste via the HTTP API.
+
+### Changed
+- **APP_VERSION**: Bumped to 0.9.0.
+- **State Machine (v0.9)**: New AWAITING_PASTE state with teal icon color. Transitions: PROCESSING -> AWAITING_PASTE -> PASTING (Enter) or IDLE (Escape/timeout).
+- **AudioRecorder (v0.9)**: Added `on_silence_stop`, `silence_timeout_seconds`, `silence_threshold_rms`, `max_duration_override` parameters. Silence callback dispatched off PortAudio thread for thread safety.
+- **Threading Model (v0.9)**: Wake word detector runs on its own daemon thread. Pauses audio processing when app is not IDLE (avoids concurrent audio stream conflicts).
+
+### Fixed
+- **Wake Word False Positives (v0.9)**: Removed initial_prompt parameter that caused tiny model to hallucinate wake phrase on any input. Tuned thresholds (no_speech=0.75, log_prob=-1.5, energy=300 RMS, min_speech=0.8s).
+- **CORS Origin Validation (SEC-050, v0.9)**: Fixed `startswith("http://localhost")` matching `http://localhost.evil.com`. Now uses strict regex `^http://localhost(:\d+)?$`.
+- **Privacy: Wake Word Transcripts (SEC-048, v0.9)**: Transcripts from ambient speech are no longer logged. Only character count is recorded for debugging.
+- **Audio Buffer Scrubbing (SEC-053, v0.9)**: Wake word audio buffers are explicitly zeroed before clearing (REQ-S10 compliance).
+- **PortAudio Thread Safety (v0.9)**: Silence auto-stop callback dispatched to a separate thread to avoid blocking PortAudio callback.
+- **Hot-Reload State Guard (v0.9)**: Hands-Free settings hot-reload only triggers when app is IDLE, preventing state conflicts during recording/processing.
+- **Timing-Safe Hash Comparison (v0.9)**: Model integrity verification uses `hmac.compare_digest()` for constant-time comparison.
+
+### Security
+- SEC-048: Stop logging wake word transcripts (ambient speech privacy).
+- SEC-050: Strict CORS origin regex for API server.
+- SEC-052: Downgrade wake phrase logging from INFO to DEBUG.
+- SEC-053: Zero wake word audio buffers before clearing.
+- SEC-054: Stop echoing request paths in API error responses.
+
+---
+
 ## [0.8.0] - 2026-02-19
 
 ### Added
@@ -235,6 +274,18 @@ Local transcription option via faster-whisper. Model downloads, VAD filter, comp
 
 ### v0.5 (Voice Prompts & UI Polish)
 Voice Prompt mode for interactive Q&A. Dynamic icon generation. Enhanced settings. Build consolidation.
+
+### v0.6 (Text-to-Speech)
+ElevenLabs cloud TTS with hotkeys (Ctrl+Alt+T, Ctrl+Alt+Y). Audio playback via miniaudio. SPEAKING state.
+
+### v0.7 (Local TTS)
+Offline TTS via Piper ONNX. 14 voices across German/English. Tabbed Settings dialog. Direct HTTPS model streaming.
+
+### v0.8 (Overlay UI & Integrity)
+Floating overlay with live recording timer. SHA256 model integrity verification. Expanded voice list.
+
+### v0.9 (API, Confirm-Paste & Hands-Free)
+HTTP API server for external control. Confirm-before-paste with AWAITING_PASTE state. Hands-Free wake word detection via faster-whisper tiny. Silence-based auto-stop. 5 security fixes.
 
 ### v1.0 (Release)
 Polished, fully documented, tested, and packaged. Ready for public distribution. Code signing, localization, advanced features.
