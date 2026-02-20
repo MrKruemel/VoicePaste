@@ -8,21 +8,23 @@
   A Windows desktop utility that records your speech, transcribes it with AI, optionally summarizes it, and pastes the result at your cursor—all with a hotkey. Runs entirely in the system tray.
 </p>
 
-**Current version**: 0.9.0 (API Server, Confirm-Paste & Hands-Free Mode)
+**Current version**: 0.9.1
 
 ## Features
 
 - **Transcribe with a hotkey**: Press Ctrl+Alt+R to record, press again to transcribe and paste.
 - **Ask questions with Voice Prompt**: Press Ctrl+Alt+A to record a question, get an AI answer, and paste it.
-- **Read text aloud with TTS**: Press Ctrl+Alt+T to read clipboard content via text-to-speech (v0.6+).
-- **Ask AI and hear the answer**: Press Ctrl+Alt+Y to ask a question and hear the answer read aloud (v0.6+).
-- **Hands-Free mode** (v0.9+): Say a wake phrase (default "Hello Cloud") to start recording without touching the keyboard. Recording auto-stops when you pause speaking. Configurable pipeline (Ask+TTS, Transcribe+Paste, Ask+Paste).
-- **HTTP API** (v0.9+): Localhost REST API for external apps and scripts. Control recording, TTS, and status via HTTP. Secured with CORS, rate limiting, 127.0.0.1-only binding.
-- **Confirm-before-paste** (v0.9+): Optional delay or Enter keypress before pasting. Prevents accidental pasting into wrong window.
-- **Floating overlay UI** (v0.8+): Non-intrusive status display in bottom-right corner. Shows recording timer, processing animation, speaking feedback, and paste confirmation. Disable in Settings.
+- **Read text aloud with TTS**: Press Ctrl+Alt+T to read clipboard content via text-to-speech.
+- **Ask AI and hear the answer**: Press Ctrl+Alt+Y to ask a question and hear the answer read aloud.
+- **Hands-Free mode**: Say a wake phrase (default "Hello Cloud") to start recording without touching the keyboard. Recording auto-stops when you pause speaking. Configurable pipeline (Ask+TTS, Transcribe+Paste, Ask+Paste).
+- **HTTP API**: Localhost REST API for external apps and scripts. Control recording, TTS, and status via HTTP. Secured with CORS, rate limiting, 127.0.0.1-only binding.
+- **Confirm-before-paste**: Optional delay or Enter keypress before pasting. Prevents accidental pasting into wrong window.
+- **Floating overlay UI**: Non-intrusive status display in bottom-right corner. Shows recording timer, processing animation, speaking feedback, and paste confirmation. Disable in Settings.
+- **TTS audio caching**: Automatically deduplicates synthesized speech. Replay cached audio from tray menu. Configurable cache size and retention.
+- **TTS audio export**: Save synthesized speech to files with readable filenames. Choose export directory in Settings.
 - **Choose your transcription source**: Cloud (OpenAI Whisper API) or offline (local faster-whisper with Silero VAD).
 - **Multiple summarization backends**: OpenAI, OpenRouter (Claude, Llama), or local Ollama.
-- **Multiple TTS providers**: ElevenLabs cloud (human-quality voices) or local Piper (offline, free, 14 languages & voices including German, English US, English GB).
+- **Multiple TTS providers**: ElevenLabs cloud (human-quality voices) or local Piper (offline, free, 14 voices including German, English US, English GB).
 - **Tabbed Settings dialog**: Organized configuration interface with Transcription, Summarization, Text-to-Speech, Hands-Free, and General tabs.
 - **Secure credential storage**: API keys stored in Windows Credential Manager, never in plain text files.
 - **Silent operation**: Runs in system tray. Never steals focus.
@@ -39,8 +41,8 @@
 - **Microphone**: Connected and working (required only for recording modes)
 - **For cloud transcription**: OpenAI API key (get one at https://platform.openai.com/api-keys)
 - **For local transcription**: Disk space for Whisper model (75MB–3GB depending on size)
-- **For ElevenLabs TTS** (v0.6+): ElevenLabs API key (get one at https://elevenlabs.io)
-- **For Piper local TTS** (v0.7+): Disk space for Piper voice models (~60–120 MB per voice). No API key needed.
+- **For ElevenLabs TTS**: ElevenLabs API key (get one at https://elevenlabs.io)
+- **For Piper local TTS**: Disk space for Piper voice models (~60–120 MB per voice). Requires `espeak-ng` system library (installed automatically via `espeakng-loader` pip package on Windows). No API key needed.
 - **For local summarization**: Ollama running locally (http://localhost:11434) if using Ollama provider
 - **Internet connection**: Required only for cloud transcription, cloud summarization, and ElevenLabs TTS
 
@@ -168,7 +170,7 @@ All options can be set via the **Settings dialog** (right-click tray → Setting
 | `[summarization]` `base_url` | string | (empty) | Custom API endpoint (for proxies, self-hosted, or OpenRouter). Leave empty to use provider default. |
 | `[summarization]` `custom_prompt` | string | (empty) | Custom system prompt for LLM. Leave empty to use the default cleanup prompt. |
 
-### Text-to-Speech (v0.6+)
+### Text-to-Speech
 
 | Key | Type | Default | Description |
 |-----|------|---------|-------------|
@@ -177,14 +179,14 @@ All options can be set via the **Settings dialog** (right-click tray → Setting
 | `[tts]` `voice_id` | string | `"pFZP5JQG7iQjIQuC4Bku"` | ElevenLabs voice ID (Lily by default). Browse voices at https://elevenlabs.io/voice-library. Only used when `provider = "elevenlabs"`. |
 | `[tts]` `model_id` | string | `"eleven_flash_v2_5"` | ElevenLabs model ID. Default: `"eleven_flash_v2_5"` (fast, low latency). Only used when `provider = "elevenlabs"`. |
 | `[tts]` `output_format` | string | `"mp3_44100_128"` | ElevenLabs output format. Only used when `provider = "elevenlabs"`. |
-| `[tts]` `local_voice` | string | `"de_DE-thorsten-medium"` | Piper voice model name (v0.7+). See below for available voices. Download models via Settings. Only used when `provider = "piper"`. |
+| `[tts]` `local_voice` | string | `"de_DE-thorsten-medium"` | Piper voice model name. See below for available voices. Download models via Settings. Only used when `provider = "piper"`. |
 
 ### Feedback & Logging
 
 | Key | Type | Default | Description |
 |-----|------|---------|-------------|
 | `[feedback]` `audio_cues` | boolean | `true` | Play audio beeps on recording start/stop/cancel/error and TTS completion. Set `false` for silent operation. |
-| `[feedback]` `show_overlay` | boolean | `true` | Show floating overlay UI in bottom-right corner with state feedback (v0.8+). Set `false` to disable overlay. |
+| `[feedback]` `show_overlay` | boolean | `true` | Show floating overlay UI in bottom-right corner with state feedback. Set `false` to disable overlay. |
 | `[logging]` `level` | string | `"INFO"` | Log level: `"DEBUG"`, `"INFO"`, `"WARNING"`, or `"ERROR"`. |
 
 ## Choosing a Transcription Backend
@@ -230,7 +232,7 @@ All options can be set via the **Settings dialog** (right-click tray → Setting
 5. Click **Download Model** (one-time, ~2–5 minutes)
 6. Click **Save**
 
-## Available Piper TTS Voices (v0.7+)
+## Available Piper TTS Voices
 
 When using local Piper TTS, the following voices are available. Each voice is approximately 60–120 MB and is downloaded on demand.
 
@@ -262,23 +264,39 @@ Voice models are cached in `%LOCALAPPDATA%\VoicePaste\models\tts\` and auto-down
 |--------|--------|
 | **Ctrl+Alt+R** | Start/stop recording for transcription and paste. |
 | **Ctrl+Alt+A** | Start/stop recording for voice prompt (question → answer). |
-| **Ctrl+Alt+T** | Read clipboard content aloud (TTS). Requires TTS enabled in Settings. (v0.6+) |
-| **Ctrl+Alt+Y** | Ask AI a question and hear the answer (record → summarize → TTS). Requires TTS enabled. (v0.6+) |
+| **Ctrl+Alt+T** | Read clipboard content aloud (TTS). Requires TTS enabled in Settings. |
+| **Ctrl+Alt+Y** | Ask AI a question and hear the answer (record → summarize → TTS). Requires TTS enabled. |
 | **Escape** | Cancel active recording or TTS playback (discard audio, don't paste). |
 | **Right-click tray** | Show menu (Settings, Quit). |
 
 ## Settings Dialog
 
-Right-click the tray icon and select **Settings** to open the configuration dialog (v0.7+: tabbed interface). Tabs:
+Right-click the tray icon and select **Settings** to open the configuration dialog. Tabs:
 
 - **Transcription**: Choose cloud (OpenAI Whisper) or local (faster-whisper) backend. Download local models, set device/compute type, enable/disable VAD filter.
 - **Summarization**: Enable/disable text cleanup. Choose provider (OpenAI, OpenRouter, Ollama). Custom prompts.
-- **Text-to-Speech** (v0.6+): Enable/disable TTS. Choose provider (ElevenLabs cloud or Piper local). Download Piper voice models, select voice.
-- **General** (v0.7+): Toggle audio cues, set log level, manage API credentials (OpenAI, OpenRouter, ElevenLabs) via Windows Credential Manager. Toggle floating overlay display (v0.8+).
+- **Text-to-Speech**: Enable/disable TTS. Choose provider (ElevenLabs cloud or Piper local). Download Piper voice models, select voice. Configure TTS caching (deduplication, retention) and export settings (save to files).
+- **Hands-Free**: Enable/disable wake word detection. Configure wake phrase, matching mode, pipeline, silence timeout, max recording duration.
+- **General**: Toggle audio cues, set log level, manage API credentials (OpenAI, OpenRouter, ElevenLabs) via Windows Credential Manager. Toggle floating overlay display.
 
 Changes save immediately. No restart needed (hot-reload).
 
-### Floating Overlay Display (v0.8+)
+### TTS Audio Caching & Export
+
+When TTS is enabled, the application can cache synthesized speech and save it to files.
+
+**Audio Caching**: Automatically deduplicates repeated text. When you synthesize the same text again, the cached audio plays immediately without re-synthesizing, saving API calls and latency.
+
+- **Access cached audio**: Right-click the tray icon > **Recent TTS Audio** to see and replay up to 10 most recent synthesized clips.
+- **Configure cache**: Settings > Text-to-Speech > Cache settings. You can set maximum cache size (default 200 MB), retention period (default 30 days), and maximum number of entries (default 500).
+
+**Audio Export**: Save synthesized speech to files with readable, timestamped filenames.
+
+- **Export TTS**: Settings > Text-to-Speech > Export settings. Choose an export folder. When you synthesize speech, click "Export" in the notification (if shown) or right-click tray > **Export Recent** to save to the chosen folder.
+- **File format**: Files use format `YYYYMMDD_HHMMSS_[text_preview].wav` for local Piper TTS or `.mp3` for ElevenLabs cloud TTS.
+- **Disable export**: Leave the export folder empty in Settings to disable this feature.
+
+### Floating Overlay Display
 
 The floating overlay is a non-intrusive status display in the bottom-right corner of your screen. It shows:
 
@@ -390,7 +408,7 @@ Check `voice-paste.log` for "Empty recording" messages.
 2. **Use cloud transcription**: Switch to cloud mode (Settings > Transcription > Backend = Cloud)
 3. **Report the issue**: If disabling VAD doesn't help, see Build Troubleshooting below
 
-See [constants.py](src/constants.py) for VAD handling details.
+For details on VAD handling, see the [Troubleshooting](README.md#troubleshooting) section and build configuration.
 
 ### Paste Not Working in Terminal
 
@@ -409,9 +427,9 @@ This is a limitation of terminal emulators, not the tool itself.
 
 **Problem**: Your clipboard contents disappeared after using the tool.
 
-**Cause**: v0.1 did not preserve the clipboard. v0.2+ automatically backs it up and restores it.
+**Cause**: The current version automatically backs up and restores clipboard contents. If this issue occurs, it may indicate a bug.
 
-**Solution**: Upgrade to v0.2 or later. If you're already on v0.2+ and this happens, report it as a bug with your `voice-paste.log`.
+**Solution**: If your clipboard was lost, use Ctrl+Z in most applications to undo the paste and recover your clipboard. Report the issue with your `voice-paste.log` for investigation.
 
 **Workaround**: Use Ctrl+Z in most applications to undo the paste and recover your clipboard if you made a mistake.
 
@@ -544,21 +562,17 @@ For issues, questions, or feedback:
 4. Ensure your API key is valid and has available credits
 5. Check the [GitHub repository](https://github.com/) for known issues and updates
 
-## Version History
+## Release History
 
-See [CHANGELOG.md](CHANGELOG.md) for release notes and what changed between versions.
+See [CHANGELOG.md](CHANGELOG.md) for detailed release notes and what changed between versions.
 
-**Current version**: 0.8.0 (Floating Overlay & Expanded Voice List)
-- Floating overlay UI with state feedback (recording timer, processing animation, paste confirmation)
-- Expanded Piper voice list: 14 voices across German, English US, English GB (from 5 German voices)
-- SHA256 integrity verification for model downloads (security hardening)
-- Startup notification shows TTS hotkeys when enabled
-
-**Previous versions**:
-- 0.7.0: Local TTS via Piper (offline, free), direct HTTPS model downloads, tabbed Settings dialog
-- 0.6.0: ElevenLabs cloud TTS, TTS hotkeys, audio playback
-- 0.5.0: Voice Prompt mode, dynamic icon drawing, build consolidation
-- 0.4.0: Local STT via faster-whisper, model manager, VAD filter
-- 0.3.0: Settings dialog, Windows Credential Manager, multiple providers
-- 0.2.0: GPT-4o-mini summarization, audio cues, visual feedback, clipboard safety
-- 0.1.0: Basic hotkey-driven transcription and paste
+The application has evolved through multiple releases, accumulating features such as:
+- Local and cloud transcription backends with configurable quality/speed tradeoffs
+- Multiple LLM providers for text cleanup and Q&A
+- Cloud and local text-to-speech with 14 voice variants
+- Secure credential storage via Windows Credential Manager
+- Floating overlay UI for non-intrusive status feedback
+- HTTP API for external program integration
+- Hands-Free mode with wake word detection
+- TTS audio caching with deduplication and replay
+- TTS audio export to files
