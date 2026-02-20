@@ -75,6 +75,13 @@ def _fuzzy_match(phrase_tokens: list[str], transcript_tokens: list[str]) -> bool
     return (matches / len(phrase_tokens)) >= 0.7
 
 
+def _clear_buffer(buf: list[np.ndarray]) -> None:
+    """Zero and clear audio buffer (REQ-S10: scrub audio from memory)."""
+    for frame in buf:
+        frame.fill(0)
+    buf.clear()
+
+
 class WakeWordDetector:
     """Continuous wake word detection using faster-whisper tiny model.
 
@@ -184,11 +191,8 @@ class WakeWordDetector:
         )
         self._thread.start()
         self._running = True
-        logger.info(
-            "Wake word detector started. Phrase: '%s', mode: %s",
-            self._wake_phrase,
-            self._match_mode,
-        )
+        logger.info("Wake word detector started (mode=%s).", self._match_mode)
+        logger.debug("Wake phrase: '%s'", self._wake_phrase)
         return True
 
     def stop(self) -> None:
@@ -308,7 +312,7 @@ class WakeWordDetector:
                         stream.read(_FRAME_SIZE)
                     except Exception:
                         pass
-                    speech_buffer.clear()
+                    _clear_buffer(speech_buffer)
                     in_speech = False
                     speech_start_time = None
                     silence_since = None
@@ -347,7 +351,7 @@ class WakeWordDetector:
                         if speech_duration >= _MIN_SPEECH_SECONDS:
                             self._check_buffer(speech_buffer)
                         # Reset
-                        speech_buffer.clear()
+                        _clear_buffer(speech_buffer)
                         in_speech = False
                         speech_start_time = None
                         silence_since = None
@@ -357,7 +361,7 @@ class WakeWordDetector:
                     buffer_duration = len(speech_buffer) * _FRAME_SIZE / DEFAULT_SAMPLE_RATE
                     if buffer_duration >= self._buffer_duration:
                         self._check_buffer(speech_buffer)
-                        speech_buffer.clear()
+                        _clear_buffer(speech_buffer)
                         in_speech = False
                         speech_start_time = None
                         silence_since = None
@@ -384,12 +388,11 @@ class WakeWordDetector:
         transcript = self._transcribe_buffer(audio)
 
         if transcript:
-            logger.debug("Wake word candidate: '%s'", transcript)
+            # REQ-S24: Do NOT log transcript content (privacy).
+            logger.debug("Wake word candidate: %d chars", len(transcript))
 
         if self._matches_wake_phrase(transcript):
-            logger.info(
-                "Wake word DETECTED in transcript: '%s'", transcript
-            )
+            logger.info("Wake word DETECTED (match_mode=%s)", self._match_mode)
             if self._on_detected:
                 try:
                     self._on_detected()

@@ -25,10 +25,14 @@ v0.9: Initial implementation.
 
 import json
 import logging
+import re
 import threading
 import time
 from http.server import HTTPServer, BaseHTTPRequestHandler
 from typing import Any, Callable, Optional
+
+# Strict CORS origin pattern: only http://localhost or http://localhost:PORT
+_ALLOWED_ORIGIN_RE = re.compile(r"^http://localhost(:\d+)?$")
 
 logger = logging.getLogger(__name__)
 
@@ -73,7 +77,7 @@ class VoicePasteAPIHandler(BaseHTTPRequestHandler):
         self.send_header("Content-Length", str(len(body)))
         # CORS: only allow localhost origins
         origin = self.headers.get("Origin", "")
-        if origin.startswith("http://localhost"):
+        if _ALLOWED_ORIGIN_RE.match(origin):
             self.send_header("Access-Control-Allow-Origin", origin)
         self.end_headers()
         self.wfile.write(body)
@@ -108,7 +112,7 @@ class VoicePasteAPIHandler(BaseHTTPRequestHandler):
             self._send_json(404, {
                 "status": "error",
                 "error_code": "NOT_FOUND",
-                "message": f"Unknown endpoint: {self.path}",
+                "message": "Unknown endpoint",
             })
 
     def do_POST(self) -> None:
@@ -155,7 +159,7 @@ class VoicePasteAPIHandler(BaseHTTPRequestHandler):
             self._send_json(404, {
                 "status": "error",
                 "error_code": "NOT_FOUND",
-                "message": f"Unknown endpoint: {self.path}",
+                "message": "Unknown endpoint",
             })
             return
 
@@ -184,7 +188,7 @@ class VoicePasteAPIHandler(BaseHTTPRequestHandler):
         """Handle CORS preflight requests."""
         self.send_response(204)
         origin = self.headers.get("Origin", "")
-        if origin.startswith("http://localhost"):
+        if _ALLOWED_ORIGIN_RE.match(origin):
             self.send_header("Access-Control-Allow-Origin", origin)
             self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
             self.send_header("Access-Control-Allow-Headers", "Content-Type")

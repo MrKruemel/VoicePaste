@@ -321,7 +321,6 @@ class VoicePasteApp:
         # v0.9: Hands-Free Mode
         self._wake_detector = None
         self._handsfree_active: bool = False
-        self._handsfree_recording: bool = False
         # v0.9: HTTP API server
         self._api_server = None
         self._api_thread = None
@@ -692,7 +691,8 @@ class VoicePasteApp:
         success = self._wake_detector.start()
         if success:
             self._handsfree_active = True
-            logger.info("Hands-Free mode started. Wake phrase: '%s'", self.config.wake_phrase)
+            logger.info("Hands-Free mode started.")
+            logger.debug("Wake phrase: '%s'", self.config.wake_phrase)
             self._tray_manager.notify(
                 APP_NAME,
                 f"Hands-Free mode ON\nSay \"{self.config.wake_phrase}\" to start recording.",
@@ -744,14 +744,13 @@ class VoicePasteApp:
         # Map config pipeline names to internal _active_mode names
         _pipeline_to_mode = {"ask_tts": "tts_ask", "summary": "summary", "prompt": "prompt"}
         self._active_mode = _pipeline_to_mode.get(self.config.handsfree_pipeline, "tts_ask")
-        self._handsfree_recording = True
+        # Start recording for hands-free pipeline
         self._start_recording_handsfree()
 
     def _start_recording_handsfree(self) -> None:
         """Start recording for Hands-Free mode with silence-based auto-stop."""
         if self._stt is None:
             self._show_error("No STT backend available for Hands-Free recording.")
-            self._handsfree_recording = False
             return
 
         # Create a new AudioRecorder with silence auto-stop
@@ -774,7 +773,6 @@ class VoicePasteApp:
         else:
             logger.error("Failed to start Hands-Free recording.")
             self._show_error("No microphone detected.")
-            self._handsfree_recording = False
 
     def _on_silence_auto_stop(self) -> None:
         """Handle auto-stop triggered by silence detection."""
@@ -1412,7 +1410,6 @@ class VoicePasteApp:
             # Brief delay to ensure paste has completed before restoring
             time.sleep(0.1)
             clipboard_restore(clip_backup)
-            self._handsfree_recording = False
             # Restore default recorder (without silence detection)
             self._recorder = AudioRecorder(on_auto_stop=self._on_auto_stop)
             self._set_state(AppState.IDLE)
