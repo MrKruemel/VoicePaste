@@ -42,9 +42,9 @@ class TestAudioCueFunctions:
 
 
 class TestAudioCueExecution:
-    """Test that audio cues execute without errors (mocked winsound)."""
+    """Test that audio cues execute without errors (mocked play_beep)."""
 
-    @patch("notifications.winsound.Beep")
+    @patch("notifications.play_beep")
     def test_start_cue_plays_rising_tones(self, mock_beep):
         """Recording start cue should play a rising two-tone."""
         play_recording_start_cue()
@@ -58,7 +58,7 @@ class TestAudioCueExecution:
         # First call frequency should be lower than second
         assert calls[0].args[0] < calls[1].args[0]
 
-    @patch("notifications.winsound.Beep")
+    @patch("notifications.play_beep")
     def test_stop_cue_plays_falling_tones(self, mock_beep):
         """Recording stop cue should play a falling two-tone."""
         play_recording_stop_cue()
@@ -70,7 +70,7 @@ class TestAudioCueExecution:
         # First call frequency should be higher than second (falling)
         assert calls[0].args[0] > calls[1].args[0]
 
-    @patch("notifications.winsound.Beep")
+    @patch("notifications.play_beep")
     def test_cancel_cue_plays_two_low_beeps(self, mock_beep):
         """Cancel cue should play two low-frequency beeps."""
         play_cancel_cue()
@@ -82,7 +82,7 @@ class TestAudioCueExecution:
         calls = mock_beep.call_args_list
         assert calls[0].args[0] == calls[1].args[0]
 
-    @patch("notifications.winsound.Beep")
+    @patch("notifications.play_beep")
     def test_error_cue_plays_single_buzz(self, mock_beep):
         """Error cue should play a single low buzz."""
         play_error_cue()
@@ -95,10 +95,10 @@ class TestAudioCueExecution:
 class TestAudioCueThreading:
     """Test that audio cues run in background threads."""
 
-    @patch("notifications.winsound.Beep")
+    @patch("notifications.play_beep")
     def test_cue_runs_in_daemon_thread(self, mock_beep):
         """Audio cues should not block the calling thread."""
-        # Make Beep slow to verify non-blocking
+        # Make play_beep slow to verify non-blocking
         import time
 
         def slow_beep(freq, duration):
@@ -110,12 +110,12 @@ class TestAudioCueThreading:
         play_recording_start_cue()
         elapsed = time.monotonic() - start_time
 
-        # Should return almost immediately (< 100ms) since Beep runs in thread
+        # Should return almost immediately (< 100ms) since beep runs in thread
         assert elapsed < 0.1
 
-    @patch("notifications.winsound.Beep")
+    @patch("notifications.play_beep")
     def test_cue_does_not_crash_on_beep_failure(self, mock_beep):
-        """Audio cue should handle winsound.Beep failures gracefully."""
+        """Audio cue should handle play_beep failures gracefully."""
         mock_beep.side_effect = RuntimeError("No speaker")
 
         # Should not raise

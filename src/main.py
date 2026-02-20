@@ -23,8 +23,6 @@ Architecture:
     Thread 3:      Settings dialog (tkinter, spawned on demand, v0.3)
 """
 
-import ctypes
-import ctypes.wintypes
 import logging
 import logging.handlers
 import os
@@ -32,7 +30,6 @@ import sys
 import threading
 import time
 import traceback
-from typing import Optional
 
 # Ensure src directory is on the path for imports
 if getattr(sys, "frozen", False):
@@ -58,7 +55,19 @@ from config import AppConfig, load_config
 from audio import AudioRecorder
 from stt import CloudWhisperSTT, STTError, create_stt_backend
 from summarizer import CloudLLMSummarizer, PassthroughSummarizer, SummarizerError
-from paste import clipboard_backup, clipboard_restore, paste_text
+from platform_impl import (
+    acquire_single_instance_lock,
+    clipboard_backup,
+    clipboard_restore,
+    enable_debug_console,
+    paste_text,
+    play_beep,
+    register_key_press,
+    release_single_instance_lock,
+    send_key,
+    show_fatal_error,
+    unregister_key_hook,
+)
 from hotkey import HotkeyManager
 from tray import TrayManager
 from tts import TTSError, create_tts_backend
@@ -76,119 +85,9 @@ from api_server import start_api_server, stop_api_server
 
 logger = logging.getLogger(APP_NAME)
 
-# Windows MessageBox constants
-_MB_OK = 0x00000000
-_MB_ICONERROR = 0x00000010
-_MB_ICONWARNING = 0x00000030
-_MB_TOPMOST = 0x00040000
-
-
-def _show_fatal_error(message: str, title: str = APP_NAME) -> None:
-    """Show a fatal error message box using the Windows API.
-
-    This is used for errors that occur before the tray icon is available,
-    or when the application must exit immediately. Essential for
-    --noconsole builds where there is no console to display errors.
-
-    The message box is topmost so it appears above other windows.
-
-    Args:
-        message: Error message body.
-        title: Message box title (defaults to APP_NAME).
-    """
-    try:
-        ctypes.windll.user32.MessageBoxW(
-            0,
-            message,
-            title,
-            _MB_OK | _MB_ICONERROR | _MB_TOPMOST,
-        )
-    except Exception:
-        # Last resort: if even MessageBox fails, there is nothing we can do.
-        pass
-
-
-def _enable_debug_console() -> None:
-    """Allocate a console window for a windowed (--noconsole) application.
-
-    When VoicePaste.exe is built in release mode (no console), passing
-    --debug on the command line will call this function to attach a
-    console window so that log output is visible in real time.
-
-    Uses kernel32.AllocConsole() which creates a new console window.
-    After allocation, sys.stdout and sys.stderr are redirected to the
-    new console so that print() and logging StreamHandler work.
-    """
-    try:
-        ctypes.windll.kernel32.AllocConsole()
-        # Reopen stdout/stderr to point to the new console
-        sys.stdout = open("CONOUT$", "w", encoding="utf-8")
-        sys.stderr = open("CONOUT$", "w", encoding="utf-8")
-    except Exception:
-        # If AllocConsole fails (e.g., console already attached), ignore.
-        pass
-
-# REQ-S27: Single-instance mutex via Windows kernel32
-_MUTEX_NAME = "Global\\VoicePasteToolMutex"
-_ERROR_ALREADY_EXISTS = 183
-
-
-def _acquire_single_instance_mutex() -> Optional[ctypes.wintypes.HANDLE]:
-    """Attempt to acquire a Windows named mutex for single-instance enforcement.
-
-    REQ-S27: Prevents multiple instances of the application from running
-    simultaneously. Uses kernel32 CreateMutexW to create a system-wide
-    named mutex.
-
-    Returns:
-        The mutex handle if successfully acquired, None if another instance
-        is already running or if mutex creation fails.
-    """
-    kernel32 = ctypes.windll.kernel32
-
-    handle = kernel32.CreateMutexW(
-        None,   # default security attributes
-        True,   # initial owner
-        _MUTEX_NAME,
-    )
-
-    if handle == 0 or handle is None:
-        logger.error(
-            "Failed to create mutex '%s'. GetLastError=%d",
-            _MUTEX_NAME,
-            kernel32.GetLastError(),
-        )
-        return None
-
-    last_error = kernel32.GetLastError()
-    if last_error == _ERROR_ALREADY_EXISTS:
-        logger.error(
-            "Another instance of %s is already running (mutex '%s' exists).",
-            APP_NAME,
-            _MUTEX_NAME,
-        )
-        # Close our duplicate handle since we are not the owner
-        kernel32.CloseHandle(handle)
-        return None
-
-    logger.info("Single-instance mutex acquired: '%s'.", _MUTEX_NAME)
-    return handle
-
-
-def _release_single_instance_mutex(handle: ctypes.wintypes.HANDLE) -> None:
-    """Release and close the single-instance mutex.
-
-    Args:
-        handle: The mutex handle returned by _acquire_single_instance_mutex.
-    """
-    kernel32 = ctypes.windll.kernel32
-
-    try:
-        kernel32.ReleaseMutex(handle)
-        kernel32.CloseHandle(handle)
-        logger.info("Single-instance mutex released.")
-    except Exception:
-        logger.exception("Error releasing single-instance mutex.")
+# Platform functions imported from platform_impl:
+#   show_fatal_error, enable_debug_console,
+#   acquire_single_instance_lock, release_single_instance_lock
 
 
 def setup_logging(config: AppConfig, force_debug: bool = False) -> None:
@@ -1458,8 +1357,7 @@ class VoicePasteApp:
         self._paste_cancel_event.clear()
 
         # Register Enter (confirm) and Escape (cancel) hotkeys
-        import keyboard
-        enter_hook = keyboard.on_press_key("enter", lambda _: self._on_paste_confirm(), suppress=False)
+        enter_hook = register_key_press("enter", lambda _: self._on_paste_confirm(), suppress=False)
         self._hotkey_manager.register_cancel(self._on_paste_cancel)
 
         try:
@@ -1490,8 +1388,7 @@ class VoicePasteApp:
                     # Beep each second as countdown feedback
                     if config.audio_cues_enabled and elapsed > 0 and elapsed % 1.0 < 0.1:
                         try:
-                            import winsound
-                            winsound.Beep(
+                            play_beep(
                                 PASTE_COUNTDOWN_BEEP_FREQ,
                                 PASTE_COUNTDOWN_BEEP_DURATION_MS,
                             )
@@ -1527,7 +1424,7 @@ class VoicePasteApp:
 
         finally:
             # Always clean up hotkey hooks
-            keyboard.unhook(enter_hook)
+            unregister_key_hook(enter_hook)
             self._hotkey_manager.unregister_cancel()
 
     def _run_pipeline(self, audio_data: bytes) -> None:
@@ -1620,8 +1517,7 @@ class VoicePasteApp:
                 # v0.9: Auto-Enter after paste (e.g. execute command in terminal)
                 if self.config.paste_auto_enter:
                     time.sleep(0.05)
-                    import keyboard
-                    keyboard.send("enter")
+                    send_key("enter")
                     logger.info("Pipeline complete. Text pasted + Enter pressed.")
                 else:
                     logger.info("Pipeline complete. Text pasted successfully.")
@@ -1882,7 +1778,7 @@ def main() -> None:
     verbose_mode = "--verbose" in sys.argv
 
     if "--debug" in sys.argv or verbose_mode:
-        _enable_debug_console()
+        enable_debug_console()
 
     # ----------------------------------------------------------------
     # Step 1: Bootstrap logging (console + minimal format)
@@ -1935,7 +1831,7 @@ def main() -> None:
     # ----------------------------------------------------------------
     # Step 2: Single-instance mutex (REQ-S27)
     # ----------------------------------------------------------------
-    mutex_handle = _acquire_single_instance_mutex()
+    mutex_handle = acquire_single_instance_lock()
     if mutex_handle is None:
         msg = (
             f"{APP_NAME} is already running.\n\n"
@@ -1945,7 +1841,7 @@ def main() -> None:
             f"and end the 'VoicePaste' process, then try again."
         )
         logger.error("Cannot start: another instance is already running.")
-        _show_fatal_error(msg)
+        show_fatal_error(msg)
         sys.exit(1)
 
     try:
@@ -1987,7 +1883,7 @@ def main() -> None:
     except RuntimeError as exc:
         # VoicePasteApp.run() raises RuntimeError for hotkey failures
         logger.error("Startup error: %s", exc)
-        _show_fatal_error(str(exc))
+        show_fatal_error(str(exc))
         sys.exit(1)
 
     except Exception:
@@ -2002,7 +1898,7 @@ def main() -> None:
         except NameError:
             log_hint = "voice-paste.log (next to VoicePaste.exe)"
 
-        _show_fatal_error(
+        show_fatal_error(
             f"{APP_NAME} encountered an unexpected error and must close.\n\n"
             f"Please check the log file for details:\n"
             f"  {log_hint}\n\n"
@@ -2013,7 +1909,7 @@ def main() -> None:
     finally:
         # Always release the mutex on shutdown
         if mutex_handle is not None:
-            _release_single_instance_mutex(mutex_handle)
+            release_single_instance_lock(mutex_handle)
 
 
 if __name__ == "__main__":
