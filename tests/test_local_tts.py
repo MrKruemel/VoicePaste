@@ -515,7 +515,7 @@ class TestTtsModelManager:
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         """is_tts_model_available returns False for non-existent voice."""
-        monkeypatch.setenv("LOCALAPPDATA", str(tmp_path))
+        monkeypatch.setattr("platform_impl.get_cache_dir", lambda: tmp_path / "VoicePaste")
 
         from tts_model_manager import is_tts_model_available
 
@@ -525,7 +525,7 @@ class TestTtsModelManager:
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         """delete_tts_model returns True for non-existent voice."""
-        monkeypatch.setenv("LOCALAPPDATA", str(tmp_path))
+        monkeypatch.setattr("platform_impl.get_cache_dir", lambda: tmp_path / "VoicePaste")
 
         from tts_model_manager import delete_tts_model
 
