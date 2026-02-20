@@ -120,14 +120,13 @@ class AudioRecorder:
                     self._silence_start = now
                 elif (now - self._silence_start) >= self._silence_timeout:
                     self._silence_fired = True
-                    logger.info(
-                        "Silence timeout reached (%.1fs). Auto-stopping.",
-                        self._silence_timeout,
-                    )
-                    try:
-                        self._on_silence_stop()
-                    except Exception:
-                        logger.exception("Error in on_silence_stop callback.")
+                    # Dispatch off the PortAudio callback thread to avoid
+                    # blocking on state transitions, tray updates, logging.
+                    threading.Thread(
+                        target=self._fire_silence_stop,
+                        daemon=True,
+                        name="silence-dispatch",
+                    ).start()
 
     def start(self) -> bool:
         """Start recording audio from the default microphone.
@@ -249,6 +248,17 @@ class AudioRecorder:
                 return None
             finally:
                 self._clear_frames()
+
+    def _fire_silence_stop(self) -> None:
+        """Fire the silence stop callback off the audio thread."""
+        logger.info(
+            "Silence timeout reached (%.1fs). Auto-stopping.",
+            self._silence_timeout,
+        )
+        try:
+            self._on_silence_stop()
+        except Exception:
+            logger.exception("Error in on_silence_stop callback.")
 
     def _clear_frames(self) -> None:
         """Clear audio frame buffers from memory.

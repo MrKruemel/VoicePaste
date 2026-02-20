@@ -686,6 +686,7 @@ class VoicePasteApp:
             cooldown_seconds=self.config.handsfree_cooldown_seconds,
             match_mode=self.config.wake_phrase_match_mode,
             language="en",  # Wake phrases are typically English
+            should_listen=lambda: self.state == AppState.IDLE,
         )
 
         success = self._wake_detector.start()
@@ -898,7 +899,8 @@ class VoicePasteApp:
         if changed_fields.keys() & handsfree_keys:
             if self._handsfree_active:
                 self._stop_handsfree()
-            if self.config.handsfree_enabled:
+            # Only restart if IDLE — avoid stream conflicts during recording
+            if self.config.handsfree_enabled and self.state == AppState.IDLE:
                 self._start_handsfree()
 
         # v0.9: API server hot-reload

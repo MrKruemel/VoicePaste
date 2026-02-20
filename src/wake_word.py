@@ -97,6 +97,7 @@ class WakeWordDetector:
         cooldown_seconds: float = DEFAULT_HANDSFREE_COOLDOWN_SECONDS,
         match_mode: str = DEFAULT_WAKE_PHRASE_MATCH_MODE,
         language: Optional[str] = None,
+        should_listen: Optional[Callable[[], bool]] = None,
     ) -> None:
         self._wake_phrase = wake_phrase
         self._wake_phrase_normalized = _normalize_text(wake_phrase)
@@ -108,6 +109,10 @@ class WakeWordDetector:
         self._match_mode = match_mode
         # Language hint for STT (e.g. "en", "de"). None = auto-detect.
         self._language = language
+        # Callback to check if detector should actively process audio.
+        # When False, the listen loop discards frames (saves CPU, avoids
+        # concurrent audio stream conflicts during recording/processing).
+        self._should_listen = should_listen
 
         self._model = None
         self._model_lock = threading.Lock()
@@ -295,6 +300,20 @@ class WakeWordDetector:
 
         try:
             while not self._stop_event.is_set():
+                # If the app is busy (recording/processing/speaking), skip
+                # audio processing to save CPU and avoid stream conflicts.
+                if self._should_listen and not self._should_listen():
+                    # Drain the stream to prevent buffer overflow, discard data
+                    try:
+                        stream.read(_FRAME_SIZE)
+                    except Exception:
+                        pass
+                    speech_buffer.clear()
+                    in_speech = False
+                    speech_start_time = None
+                    silence_since = None
+                    continue
+
                 try:
                     frame, overflowed = stream.read(_FRAME_SIZE)
                 except Exception:
