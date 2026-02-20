@@ -87,6 +87,10 @@ API_INITIAL_BACKOFF_SECONDS = 1.0
 # Paste configuration
 PASTE_DELAY_MS = 150
 
+# v0.9: HTTP API configuration
+DEFAULT_API_ENABLED = False
+DEFAULT_API_PORT = 18923
+
 # v0.9: Confirm-before-paste configuration
 DEFAULT_PASTE_CONFIRM = False
 DEFAULT_PASTE_DELAY_SECONDS = 0.0

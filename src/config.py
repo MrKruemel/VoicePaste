@@ -16,6 +16,8 @@ from typing import Optional
 
 from constants import (
     DEFAULT_HOTKEY,
+    DEFAULT_API_ENABLED,
+    DEFAULT_API_PORT,
     DEFAULT_PASTE_AUTO_ENTER,
     DEFAULT_PASTE_CONFIRM,
     DEFAULT_PASTE_CONFIRMATION_TIMEOUT,
@@ -69,6 +71,9 @@ CONFIG_TEMPLATE = """\
 [api]
 # Legacy API key location (migrated to Credential Manager automatically)
 # openai_api_key = ""
+# HTTP API: allow external programs to control Voice Paste via localhost.
+api_enabled = false
+api_port = 18923
 
 [hotkey]
 # Global hotkey to start/stop recording (default: "ctrl+alt+r")
@@ -205,6 +210,10 @@ class AppConfig:
     # --- v0.8: Overlay ---
     show_overlay: bool = True
 
+    # --- v0.9: HTTP API ---
+    api_enabled: bool = DEFAULT_API_ENABLED
+    api_port: int = DEFAULT_API_PORT
+
     # --- v0.9: Confirm-before-paste ---
     paste_require_confirmation: bool = DEFAULT_PASTE_CONFIRM
     paste_delay_seconds: float = DEFAULT_PASTE_DELAY_SECONDS
@@ -299,6 +308,9 @@ class AppConfig:
 [api]
 # API keys are stored in Windows Credential Manager.
 # Use the Settings dialog (right-click tray icon > Settings) to manage keys.
+# HTTP API: allow external programs to control Voice Paste via localhost.
+api_enabled = {str(self.api_enabled).lower()}
+api_port = {self.api_port}
 
 [hotkey]
 combination = "{esc(self.hotkey)}"
@@ -457,6 +469,13 @@ def load_config() -> Optional[AppConfig]:
     transcription_section = data.get("transcription", {})
     tts_section = data.get("tts", {})
     paste_section = data.get("paste", {})
+
+    # v0.9: HTTP API settings
+    api_enabled = bool(api_section.get("api_enabled", DEFAULT_API_ENABLED))
+    api_port = int(api_section.get("api_port", DEFAULT_API_PORT))
+    if not (1024 <= api_port <= 65535):
+        logger.warning("Invalid API port %d, using default %d.", api_port, DEFAULT_API_PORT)
+        api_port = DEFAULT_API_PORT
 
     toml_api_key = api_section.get("openai_api_key", "").strip()
     hotkey = hotkey_section.get("combination", DEFAULT_HOTKEY)
@@ -720,6 +739,9 @@ def load_config() -> Optional[AppConfig]:
         tts_local_voice=tts_local_voice,
         # v0.8: Overlay
         show_overlay=bool(show_overlay),
+        # v0.9: HTTP API
+        api_enabled=api_enabled,
+        api_port=api_port,
         # v0.9: Paste confirmation/delay
         paste_require_confirmation=paste_require_confirmation,
         paste_delay_seconds=paste_delay_seconds,

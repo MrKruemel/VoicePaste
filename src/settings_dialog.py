@@ -1154,6 +1154,45 @@ class SettingsDialog:
         )
         paste_hint.pack(fill=tk.X, pady=(2, 0))
 
+        # --- Separator ---
+        ttk.Separator(parent, orient=tk.HORIZONTAL).pack(fill=tk.X, pady=(8, 8))
+
+        # --- v0.9: HTTP API section ---
+        api_label = ttk.Label(
+            parent, text="HTTP API", font=("", 10, "bold")
+        )
+        api_label.pack(fill=tk.X, pady=(0, 6))
+
+        self._api_enabled_var = tk.BooleanVar()
+        ttk.Checkbutton(
+            parent,
+            text="Enable local HTTP API",
+            variable=self._api_enabled_var,
+        ).pack(fill=tk.X)
+
+        api_port_row = ttk.Frame(parent)
+        api_port_row.pack(fill=tk.X, pady=(4, 2))
+        ttk.Label(api_port_row, text="Port:", anchor=tk.W).pack(side=tk.LEFT)
+        self._api_port_var = tk.StringVar(value="18923")
+        self._api_port_spin = ttk.Spinbox(
+            api_port_row,
+            from_=1024,
+            to=65535,
+            increment=1,
+            width=7,
+            textvariable=self._api_port_var,
+        )
+        self._api_port_spin.pack(side=tk.LEFT, padx=(8, 0))
+
+        api_hint = ttk.Label(
+            parent,
+            text="Allows external programs to control Voice Paste.\n"
+                 "Binds to 127.0.0.1 only (no network exposure).",
+            foreground="#999999",
+            font=("", 8),
+        )
+        api_hint.pack(fill=tk.X, pady=(2, 0))
+
     def _populate_from_config(self) -> None:
         """Fill widget values from current config and keyring."""
         config = self._config
@@ -1311,6 +1350,10 @@ class SettingsDialog:
         self._paste_timeout_var.set(str(config.paste_confirmation_timeout))
         self._paste_auto_enter_var.set(config.paste_auto_enter)
         self._on_paste_confirm_toggled()
+
+        # v0.9: API
+        self._api_enabled_var.set(config.api_enabled)
+        self._api_port_var.set(str(config.api_port))
 
         # Show/hide backend sub-frames
         self._update_backend_ui()
@@ -2415,6 +2458,22 @@ class SettingsDialog:
         if new_paste_auto_enter != config.paste_auto_enter:
             changed_fields["paste_auto_enter"] = new_paste_auto_enter
             config.paste_auto_enter = new_paste_auto_enter
+
+        # v0.9: API
+        new_api_enabled = self._api_enabled_var.get()
+        if new_api_enabled != config.api_enabled:
+            changed_fields["api_enabled"] = new_api_enabled
+            config.api_enabled = new_api_enabled
+
+        try:
+            new_api_port = int(self._api_port_var.get())
+            if not (1024 <= new_api_port <= 65535):
+                new_api_port = config.api_port
+        except (ValueError, TypeError):
+            new_api_port = config.api_port
+        if new_api_port != config.api_port:
+            changed_fields["api_port"] = new_api_port
+            config.api_port = new_api_port
 
         # Save non-secret fields to config.toml
         config.save_to_toml()

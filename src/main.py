@@ -70,6 +70,7 @@ from notifications import (
     play_recording_stop_cue,
 )
 from overlay import OverlayWindow
+from api_server import start_api_server, stop_api_server
 
 logger = logging.getLogger(APP_NAME)
 
@@ -314,6 +315,9 @@ class VoicePasteApp:
         # v0.9: Confirm-before-paste synchronization
         self._paste_confirm_event = threading.Event()
         self._paste_cancel_event = threading.Event()
+        # v0.9: HTTP API server
+        self._api_server = None
+        self._api_thread = None
 
     @property
     def state(self) -> AppState:
@@ -513,6 +517,140 @@ class VoicePasteApp:
             self._hotkey_manager.unregister_cancel()
             self._set_state(AppState.IDLE)
 
+    # --- v0.9: HTTP API ---
+
+    def _api_dispatch(self, command: dict) -> dict:
+        """Handle an API command and return a JSON-serializable response.
+
+        Args:
+            command: Dict with "action" key and optional parameters.
+
+        Returns:
+            Response dict with "status" key.
+        """
+        action = command.get("action", "")
+
+        if action == "status":
+            return {
+                "status": "ok",
+                "data": {
+                    "state": self.state.value,
+                    "tts_enabled": self.config.tts_enabled,
+                    "api_version": "1",
+                    "app_version": APP_VERSION,
+                },
+            }
+
+        if action == "tts":
+            text = command.get("text", "")
+            if not text or not text.strip():
+                return {
+                    "status": "error",
+                    "error_code": "INVALID_PARAMS",
+                    "message": "text is required and must be non-empty",
+                }
+            text = text.strip()
+            if len(text) > TTS_MAX_TEXT_LENGTH:
+                return {
+                    "status": "error",
+                    "error_code": "TEXT_TOO_LONG",
+                    "message": f"Text exceeds {TTS_MAX_TEXT_LENGTH} character limit",
+                }
+            if not self._tts:
+                return {
+                    "status": "error",
+                    "error_code": "TTS_NOT_CONFIGURED",
+                    "message": "TTS is not enabled or configured",
+                }
+            if self.state != AppState.IDLE:
+                return {
+                    "status": "busy",
+                    "state": self.state.value,
+                    "message": "Another operation is in progress",
+                }
+            # Fire-and-forget: start TTS in worker thread
+            self._set_state(AppState.PROCESSING)
+            thread = threading.Thread(
+                target=self._run_tts_pipeline,
+                args=(text,),
+                daemon=True,
+                name="api-tts-worker",
+            )
+            thread.start()
+            return {"status": "ok"}
+
+        if action == "stop_tts":
+            if self.state == AppState.SPEAKING:
+                self._audio_player.stop()
+            return {"status": "ok"}
+
+        if action == "record_start":
+            if self.state != AppState.IDLE:
+                return {
+                    "status": "busy",
+                    "state": self.state.value,
+                    "message": "Another operation is in progress",
+                }
+            mode = command.get("mode", "summary")
+            if mode not in ("summary", "prompt"):
+                mode = "summary"
+            self._active_mode = mode
+            self._start_recording()
+            return {"status": "ok"}
+
+        if action == "record_stop":
+            if self.state != AppState.RECORDING:
+                return {
+                    "status": "busy",
+                    "state": self.state.value,
+                    "message": "Not currently recording",
+                }
+            self._stop_recording_and_process()
+            return {"status": "ok"}
+
+        if action == "cancel":
+            current = self.state
+            if current == AppState.RECORDING:
+                self._on_cancel()
+            elif current == AppState.SPEAKING:
+                self._audio_player.stop()
+            elif current == AppState.AWAITING_PASTE:
+                self._paste_cancel_event.set()
+            return {"status": "ok"}
+
+        return {
+            "status": "error",
+            "error_code": "INVALID_PARAMS",
+            "message": f"Unknown action: {action}",
+        }
+
+    def _start_api_server(self) -> None:
+        """Start the HTTP API server if enabled."""
+        if not self.config.api_enabled:
+            return
+        try:
+            self._api_server, self._api_thread = start_api_server(
+                port=self.config.api_port,
+                dispatch=self._api_dispatch,
+            )
+            self._tray_manager.notify(
+                APP_NAME,
+                f"HTTP API started on http://127.0.0.1:{self.config.api_port}",
+            )
+        except OSError as e:
+            logger.error("Failed to start API server: %s", e)
+            self._tray_manager.notify(
+                APP_NAME,
+                f"API server failed to start (port {self.config.api_port} in use?)",
+            )
+
+    def _stop_api_server(self) -> None:
+        """Stop the HTTP API server if running."""
+        if self._api_server is not None:
+            stop_api_server(self._api_server)
+            self._api_server = None
+            self._api_thread = None
+
     def _open_settings(self) -> None:
         """Open the settings dialog. Called from tray menu (pystray thread)."""
         from settings_dialog import open_settings_dialog
@@ -617,6 +755,12 @@ class VoicePasteApp:
         if changed_fields.keys() & summarizer_keys:
             self._rebuild_summarizer()
             logger.info("Summarizer rebuilt with updated settings.")
+
+        # v0.9: API server hot-reload
+        api_keys = {"api_enabled", "api_port"}
+        if changed_fields.keys() & api_keys:
+            self._stop_api_server()
+            self._start_api_server()
 
         # v0.8: Overlay hot-reload — DISABLED (overlay uses tkinter which
         # conflicts with settings dialog's tk.Tk() on Python 3.14+).
@@ -1151,6 +1295,9 @@ class VoicePasteApp:
             except Exception as e:
                 logger.warning("Error unloading local TTS model: %s", e)
 
+        # v0.9: Stop API server
+        self._stop_api_server()
+
         # v0.8: Stop overlay before unregistering hotkeys
         if self._overlay is not None:
             self._overlay.stop()
@@ -1238,6 +1385,9 @@ class VoicePasteApp:
             self.config.tts_hotkey if self.config.tts_enabled else "(disabled)",
             self.config.tts_ask_hotkey if self.config.tts_enabled else "(disabled)",
         )
+
+        # v0.9: Start HTTP API server
+        self._start_api_server()
 
         # v0.8: Start overlay window (T4 thread)
         if self._overlay is not None:
