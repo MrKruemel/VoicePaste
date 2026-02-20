@@ -44,6 +44,10 @@ class AudioRecorder:
         channels: int = DEFAULT_CHANNELS,
         dtype: str = DEFAULT_DTYPE,
         on_auto_stop: Optional[callable] = None,
+        on_silence_stop: Optional[callable] = None,
+        silence_timeout_seconds: float = 3.0,
+        silence_threshold_rms: float = 300.0,
+        max_duration_override: Optional[int] = None,
     ) -> None:
         """Initialize the audio recorder.
 
@@ -55,6 +59,15 @@ class AudioRecorder:
                 auto-stopped due to max duration. Called from the timer
                 thread with no arguments. The callback is responsible
                 for triggering the processing pipeline.
+            on_silence_stop: Optional callback invoked when silence is
+                detected for longer than silence_timeout_seconds after
+                speech was detected. Used by Hands-Free mode.
+            silence_timeout_seconds: Seconds of silence before auto-stop
+                (only used when on_silence_stop is set).
+            silence_threshold_rms: RMS energy threshold for speech detection
+                (int16 scale, ~300 works for typical environments).
+            max_duration_override: Override MAX_RECORDING_DURATION_SECONDS
+                (e.g. 120s for hands-free mode).
         """
         self.sample_rate = sample_rate
         self.channels = channels
@@ -67,6 +80,14 @@ class AudioRecorder:
         self._max_duration_timer: Optional[threading.Timer] = None
         self._auto_stopped: bool = False
         self._on_auto_stop = on_auto_stop
+        # Silence detection (Hands-Free mode)
+        self._on_silence_stop = on_silence_stop
+        self._silence_timeout = silence_timeout_seconds
+        self._silence_threshold_rms = silence_threshold_rms
+        self._speech_detected: bool = False
+        self._silence_start: Optional[float] = None
+        self._silence_fired: bool = False
+        self._max_duration_override = max_duration_override
 
     def _audio_callback(
         self,
@@ -86,6 +107,27 @@ class AudioRecorder:
         if status:
             logger.warning("Audio callback status: %s", status)
         self._frames.append(indata.copy())
+
+        # Silence detection (only when callback is registered)
+        if self._on_silence_stop is not None and not self._silence_fired:
+            rms = np.sqrt(np.mean(indata.astype(np.float32) ** 2))
+            if rms > self._silence_threshold_rms:
+                self._speech_detected = True
+                self._silence_start = None
+            elif self._speech_detected:
+                now = time.monotonic()
+                if self._silence_start is None:
+                    self._silence_start = now
+                elif (now - self._silence_start) >= self._silence_timeout:
+                    self._silence_fired = True
+                    logger.info(
+                        "Silence timeout reached (%.1fs). Auto-stopping.",
+                        self._silence_timeout,
+                    )
+                    try:
+                        self._on_silence_stop()
+                    except Exception:
+                        logger.exception("Error in on_silence_stop callback.")
 
     def start(self) -> bool:
         """Start recording audio from the default microphone.
@@ -122,10 +164,15 @@ class AudioRecorder:
                 self._recording = True
                 self._auto_stopped = False
                 self._record_start_time = time.monotonic()
+                # Reset silence detection state
+                self._speech_detected = False
+                self._silence_start = None
+                self._silence_fired = False
 
                 # Start max-duration timer to auto-stop recording
+                max_dur = self._max_duration_override or MAX_RECORDING_DURATION_SECONDS
                 self._max_duration_timer = threading.Timer(
-                    MAX_RECORDING_DURATION_SECONDS,
+                    max_dur,
                     self._on_max_duration_reached,
                 )
                 self._max_duration_timer.daemon = True
@@ -133,7 +180,7 @@ class AudioRecorder:
 
                 logger.info(
                     "Recording started. Max duration: %d seconds.",
-                    MAX_RECORDING_DURATION_SECONDS,
+                    max_dur,
                 )
                 return True
             except sd.PortAudioError as e:

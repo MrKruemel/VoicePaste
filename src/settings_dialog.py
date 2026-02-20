@@ -433,11 +433,13 @@ class SettingsDialog:
         summarization_tab = ttk.Frame(self._notebook, padding=(10, 8))
         tts_tab = ttk.Frame(self._notebook, padding=(10, 8))
         general_tab = ttk.Frame(self._notebook, padding=(10, 8))
+        handsfree_tab = ttk.Frame(self._notebook, padding=(10, 8))
 
         self._notebook.add(transcription_tab, text="Transcription")
         self._notebook.add(summarization_tab, text="Summarization")
         self._notebook.add(tts_tab, text="Text-to-Speech")
         self._notebook.add(general_tab, text="General")
+        self._notebook.add(handsfree_tab, text="Hands-Free")
 
         # ---------------------------------------------------------------
         # Tab 1: Transcription
@@ -458,6 +460,7 @@ class SettingsDialog:
         # Tab 4: General
         # ---------------------------------------------------------------
         self._build_general_tab(general_tab)
+        self._build_handsfree_tab(handsfree_tab)
 
         # === Error label (below notebook, hidden by default) ===
         self._error_label = ttk.Label(
@@ -1193,6 +1196,126 @@ class SettingsDialog:
         )
         api_hint.pack(fill=tk.X, pady=(2, 0))
 
+    def _build_handsfree_tab(self, parent: "ttk.Frame") -> None:
+        """Build the Hands-Free tab UI."""
+        tk = self._tk
+        ttk = self._ttk
+
+        # Enable toggle
+        self._handsfree_enabled_var = tk.BooleanVar()
+        ttk.Checkbutton(
+            parent,
+            text="Enable Hands-Free Mode",
+            variable=self._handsfree_enabled_var,
+        ).pack(fill=tk.X, pady=(0, 4))
+
+        # Privacy warning
+        ttk.Label(
+            parent,
+            text="PRIVACY: Microphone is always active while enabled.\n"
+                 "Wake word detection is 100% local (no audio sent to cloud).",
+            foreground="#FF9966",
+            wraplength=480,
+            font=("", 8),
+        ).pack(fill=tk.X, pady=(0, 8))
+
+        ttk.Separator(parent, orient=tk.HORIZONTAL).pack(fill=tk.X, pady=(0, 8))
+
+        # Wake phrase
+        phrase_row = ttk.Frame(parent)
+        phrase_row.pack(fill=tk.X, pady=(0, 4))
+        ttk.Label(phrase_row, text="Wake phrase:", width=16, anchor=tk.W).pack(side=tk.LEFT)
+        self._wake_phrase_var = tk.StringVar()
+        ttk.Entry(phrase_row, textvariable=self._wake_phrase_var, width=30).pack(
+            side=tk.LEFT, padx=(4, 0)
+        )
+
+        # Match mode
+        match_row = ttk.Frame(parent)
+        match_row.pack(fill=tk.X, pady=(0, 4))
+        ttk.Label(match_row, text="Match mode:", width=16, anchor=tk.W).pack(side=tk.LEFT)
+        self._match_mode_var = tk.StringVar()
+        ttk.Combobox(
+            match_row,
+            textvariable=self._match_mode_var,
+            values=["contains (forgiving)", "startswith (strict)", "fuzzy (token overlap)"],
+            state="readonly",
+            width=28,
+        ).pack(side=tk.LEFT, padx=(4, 0))
+
+        ttk.Separator(parent, orient=tk.HORIZONTAL).pack(fill=tk.X, pady=(8, 8))
+
+        # Pipeline selector
+        pipeline_row = ttk.Frame(parent)
+        pipeline_row.pack(fill=tk.X, pady=(0, 4))
+        ttk.Label(pipeline_row, text="After wake word:", width=16, anchor=tk.W).pack(side=tk.LEFT)
+        self._handsfree_pipeline_var = tk.StringVar()
+        ttk.Combobox(
+            pipeline_row,
+            textvariable=self._handsfree_pipeline_var,
+            values=[
+                "Ask AI + TTS (ask_tts)",
+                "Transcribe + Paste (summary)",
+                "Ask AI + Paste (prompt)",
+            ],
+            state="readonly",
+            width=28,
+        ).pack(side=tk.LEFT, padx=(4, 0))
+
+        # Silence timeout
+        silence_row = ttk.Frame(parent)
+        silence_row.pack(fill=tk.X, pady=(4, 4))
+        ttk.Label(silence_row, text="Silence timeout:", width=16, anchor=tk.W).pack(side=tk.LEFT)
+        self._silence_timeout_var = tk.StringVar(value="3.0")
+        ttk.Spinbox(
+            silence_row, from_=1.0, to=10.0, increment=0.5, width=6,
+            textvariable=self._silence_timeout_var,
+        ).pack(side=tk.LEFT, padx=(4, 0))
+        ttk.Label(silence_row, text="seconds").pack(side=tk.LEFT, padx=(4, 0))
+
+        ttk.Label(
+            parent,
+            text="How long to wait after you stop speaking before auto-stopping.\n"
+                 "Increase for slow/thoughtful speech with pauses.",
+            foreground="#999999",
+            font=("", 8),
+        ).pack(fill=tk.X, pady=(0, 8))
+
+        # Max recording duration
+        max_row = ttk.Frame(parent)
+        max_row.pack(fill=tk.X, pady=(0, 4))
+        ttk.Label(max_row, text="Max recording:", width=16, anchor=tk.W).pack(side=tk.LEFT)
+        self._hf_max_recording_var = tk.StringVar(value="120")
+        ttk.Spinbox(
+            max_row, from_=10, to=300, increment=10, width=6,
+            textvariable=self._hf_max_recording_var,
+        ).pack(side=tk.LEFT, padx=(4, 0))
+        ttk.Label(max_row, text="seconds").pack(side=tk.LEFT, padx=(4, 0))
+
+        # Cooldown
+        cooldown_row = ttk.Frame(parent)
+        cooldown_row.pack(fill=tk.X, pady=(4, 4))
+        ttk.Label(cooldown_row, text="Cooldown:", width=16, anchor=tk.W).pack(side=tk.LEFT)
+        self._hf_cooldown_var = tk.StringVar(value="3.0")
+        ttk.Spinbox(
+            cooldown_row, from_=1.0, to=10.0, increment=0.5, width=6,
+            textvariable=self._hf_cooldown_var,
+        ).pack(side=tk.LEFT, padx=(4, 0))
+        ttk.Label(cooldown_row, text="seconds").pack(side=tk.LEFT, padx=(4, 0))
+
+        ttk.Separator(parent, orient=tk.HORIZONTAL).pack(fill=tk.X, pady=(8, 8))
+        ttk.Label(
+            parent,
+            text="Requirements:\n"
+                 "- faster-whisper must be installed (Local STT build)\n"
+                 "- The 'tiny' Whisper model will be loaded for detection\n"
+                 "  (~75 MB RAM, minimal CPU when no speech detected)",
+            foreground="#999999",
+            wraplength=480,
+            font=("", 8),
+            justify=tk.LEFT,
+        ).pack(fill=tk.X)
+
     def _populate_from_config(self) -> None:
         """Fill widget values from current config and keyring."""
         config = self._config
@@ -1354,6 +1477,29 @@ class SettingsDialog:
         # v0.9: API
         self._api_enabled_var.set(config.api_enabled)
         self._api_port_var.set(str(config.api_port))
+
+        # v0.9: Hands-Free
+        self._handsfree_enabled_var.set(config.handsfree_enabled)
+        self._wake_phrase_var.set(config.wake_phrase)
+        _match_display = {
+            "contains": "contains (forgiving)",
+            "startswith": "startswith (strict)",
+            "fuzzy": "fuzzy (token overlap)",
+        }
+        self._match_mode_var.set(
+            _match_display.get(config.wake_phrase_match_mode, "contains (forgiving)")
+        )
+        _pipeline_display = {
+            "ask_tts": "Ask AI + TTS (ask_tts)",
+            "summary": "Transcribe + Paste (summary)",
+            "prompt": "Ask AI + Paste (prompt)",
+        }
+        self._handsfree_pipeline_var.set(
+            _pipeline_display.get(config.handsfree_pipeline, "Ask AI + TTS (ask_tts)")
+        )
+        self._silence_timeout_var.set(str(config.silence_timeout_seconds))
+        self._hf_max_recording_var.set(str(config.handsfree_max_recording_seconds))
+        self._hf_cooldown_var.set(str(config.handsfree_cooldown_seconds))
 
         # Show/hide backend sub-frames
         self._update_backend_ui()
@@ -2474,6 +2620,67 @@ class SettingsDialog:
         if new_api_port != config.api_port:
             changed_fields["api_port"] = new_api_port
             config.api_port = new_api_port
+
+        # v0.9: Hands-Free
+        new_hf_enabled = self._handsfree_enabled_var.get()
+        if new_hf_enabled != config.handsfree_enabled:
+            changed_fields["handsfree_enabled"] = new_hf_enabled
+            config.handsfree_enabled = new_hf_enabled
+
+        new_wake_phrase = self._wake_phrase_var.get().strip()
+        if not new_wake_phrase:
+            from constants import DEFAULT_WAKE_PHRASE
+            new_wake_phrase = DEFAULT_WAKE_PHRASE
+        if new_wake_phrase != config.wake_phrase:
+            changed_fields["wake_phrase"] = new_wake_phrase
+            config.wake_phrase = new_wake_phrase
+
+        _match_save_map = {
+            "contains (forgiving)": "contains",
+            "startswith (strict)": "startswith",
+            "fuzzy (token overlap)": "fuzzy",
+        }
+        new_match_mode = _match_save_map.get(self._match_mode_var.get(), "contains")
+        if new_match_mode != config.wake_phrase_match_mode:
+            changed_fields["wake_phrase_match_mode"] = new_match_mode
+            config.wake_phrase_match_mode = new_match_mode
+
+        _pipeline_save_map = {
+            "Ask AI + TTS (ask_tts)": "ask_tts",
+            "Transcribe + Paste (summary)": "summary",
+            "Ask AI + Paste (prompt)": "prompt",
+        }
+        new_pipeline = _pipeline_save_map.get(self._handsfree_pipeline_var.get(), "ask_tts")
+        if new_pipeline != config.handsfree_pipeline:
+            changed_fields["handsfree_pipeline"] = new_pipeline
+            config.handsfree_pipeline = new_pipeline
+
+        try:
+            new_silence_timeout = float(self._silence_timeout_var.get())
+            new_silence_timeout = max(1.0, min(new_silence_timeout, 10.0))
+        except (ValueError, TypeError):
+            new_silence_timeout = config.silence_timeout_seconds
+        if new_silence_timeout != config.silence_timeout_seconds:
+            changed_fields["silence_timeout_seconds"] = new_silence_timeout
+            config.silence_timeout_seconds = new_silence_timeout
+
+        try:
+            new_hf_max = int(float(self._hf_max_recording_var.get()))
+            new_hf_max = max(10, min(new_hf_max, 300))
+        except (ValueError, TypeError):
+            new_hf_max = config.handsfree_max_recording_seconds
+        if new_hf_max != config.handsfree_max_recording_seconds:
+            changed_fields["handsfree_max_recording_seconds"] = new_hf_max
+            config.handsfree_max_recording_seconds = new_hf_max
+
+        try:
+            new_cooldown = float(self._hf_cooldown_var.get())
+            new_cooldown = max(1.0, min(new_cooldown, 10.0))
+        except (ValueError, TypeError):
+            new_cooldown = config.handsfree_cooldown_seconds
+        if new_cooldown != config.handsfree_cooldown_seconds:
+            changed_fields["handsfree_cooldown_seconds"] = new_cooldown
+            config.handsfree_cooldown_seconds = new_cooldown
 
         # Save non-secret fields to config.toml
         config.save_to_toml()

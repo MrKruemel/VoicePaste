@@ -92,6 +92,8 @@ class TrayManager:
         tts_enabled: bool = False,
         tts_hotkey_label: str = "Ctrl+Alt+T",
         tts_ask_hotkey_label: str = "Ctrl+Alt+Y",
+        on_handsfree_toggle: Optional[Callable[[], None]] = None,
+        get_handsfree_active: Optional[Callable[[], bool]] = None,
     ) -> None:
         """Initialize the tray manager.
 
@@ -106,6 +108,8 @@ class TrayManager:
                 TTS hotkeys are included in the startup notification.
             tts_hotkey_label: Human-readable hotkey string for TTS clipboard mode.
             tts_ask_hotkey_label: Human-readable hotkey string for TTS ask mode.
+            on_handsfree_toggle: Callback for the Hands-Free toggle (v0.9).
+            get_handsfree_active: Callable returning current Hands-Free state.
         """
         self._on_quit = on_quit
         self._on_settings = on_settings
@@ -115,6 +119,8 @@ class TrayManager:
         self._tts_enabled = tts_enabled
         self._tts_hotkey_label = tts_hotkey_label
         self._tts_ask_hotkey_label = tts_ask_hotkey_label
+        self._on_handsfree_toggle = on_handsfree_toggle
+        self._get_handsfree_active = get_handsfree_active
         self._icon: Optional[pystray.Icon] = None
         self._running = False
         self._current_state = AppState.IDLE
@@ -203,6 +209,16 @@ class TrayManager:
                 self._handle_settings,
                 enabled=lambda _: self._is_settings_enabled(),
             ),
+            # v0.9: Hands-Free toggle
+            pystray.MenuItem(
+                lambda _: (
+                    "Hands-Free: ON"
+                    if self._get_handsfree_active and self._get_handsfree_active()
+                    else "Hands-Free: OFF"
+                ),
+                self._handle_handsfree_toggle,
+                enabled=lambda _: self._is_settings_enabled(),
+            ),
             pystray.Menu.SEPARATOR,
             pystray.MenuItem("Quit", self._handle_quit),
         )
@@ -219,6 +235,14 @@ class TrayManager:
             item: The menu item that was clicked.
         """
         logger.debug("Tray icon default action triggered (no-op).")
+
+    def _handle_handsfree_toggle(
+        self, icon: pystray.Icon, item: pystray.MenuItem
+    ) -> None:
+        """Handle the Hands-Free toggle menu action (v0.9)."""
+        logger.info("Hands-Free toggle requested from tray menu.")
+        if self._on_handsfree_toggle:
+            self._on_handsfree_toggle()
 
     def _handle_quit(self, icon: pystray.Icon, item: pystray.MenuItem) -> None:
         """Handle the Quit menu action.

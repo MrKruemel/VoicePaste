@@ -19,6 +19,8 @@ from constants import (
     AUDIO_CUE_START_FREQS,
     AUDIO_CUE_STOP_FREQS,
     AUDIO_CUE_TONE_DURATION_MS,
+    AUDIO_CUE_WAKEWORD_DURATION_MS,
+    AUDIO_CUE_WAKEWORD_FREQS,
 )
 
 logger = logging.getLogger(__name__)
@@ -71,6 +73,11 @@ def play_cancel_cue() -> None:
 def play_error_cue() -> None:
     """Play the error audio cue (single low buzz)."""
     _play_beep_sequence((AUDIO_CUE_ERROR_FREQ,), 300)
+
+
+def play_wakeword_cue() -> None:
+    """Play the wake word detection confirmation cue (rising triple chirp)."""
+    _play_beep_sequence(AUDIO_CUE_WAKEWORD_FREQS, AUDIO_CUE_WAKEWORD_DURATION_MS)
 
 
 def show_toast(title: str, message: str) -> None:

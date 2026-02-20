@@ -99,6 +99,21 @@ DEFAULT_PASTE_AUTO_ENTER = False
 PASTE_COUNTDOWN_BEEP_FREQ = 880
 PASTE_COUNTDOWN_BEEP_DURATION_MS = 30
 
+# v0.9: Hands-Free Mode configuration
+DEFAULT_HANDSFREE_ENABLED = False
+DEFAULT_WAKE_PHRASE = "Hello Cloud"
+DEFAULT_WAKE_PHRASE_MATCH_MODE = "contains"  # "contains", "startswith", "fuzzy"
+DEFAULT_SILENCE_TIMEOUT_SECONDS = 3.0
+DEFAULT_HANDSFREE_MAX_RECORDING_SECONDS = 120
+DEFAULT_HANDSFREE_PIPELINE = "ask_tts"  # "ask_tts", "summary", "prompt"
+DEFAULT_HANDSFREE_COOLDOWN_SECONDS = 3.0
+DEFAULT_HANDSFREE_BUFFER_SECONDS = 2.5
+HANDSFREE_PIPELINES = ("ask_tts", "summary", "prompt")
+
+# Wake word confirmation tone: rising triple chirp
+AUDIO_CUE_WAKEWORD_FREQS = (660, 880, 1100)
+AUDIO_CUE_WAKEWORD_DURATION_MS = 60
+
 # Logging
 LOG_FILENAME = "voice-paste.log"
 LOG_FORMAT = "%(asctime)s [%(levelname)s] %(name)s: %(message)s"

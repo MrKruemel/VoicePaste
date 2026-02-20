@@ -68,6 +68,7 @@ from notifications import (
     play_error_cue,
     play_recording_start_cue,
     play_recording_stop_cue,
+    play_wakeword_cue,
 )
 from overlay import OverlayWindow
 from api_server import start_api_server, stop_api_server
@@ -300,6 +301,8 @@ class VoicePasteApp:
             tts_enabled=config.tts_enabled,
             tts_hotkey_label=config.tts_hotkey,
             tts_ask_hotkey_label=config.tts_ask_hotkey,
+            on_handsfree_toggle=self._toggle_handsfree,
+            get_handsfree_active=lambda: self._handsfree_active,
         )
 
         # v0.8: Floating overlay window — DISABLED.
@@ -315,6 +318,10 @@ class VoicePasteApp:
         # v0.9: Confirm-before-paste synchronization
         self._paste_confirm_event = threading.Event()
         self._paste_cancel_event = threading.Event()
+        # v0.9: Hands-Free Mode
+        self._wake_detector = None
+        self._handsfree_active: bool = False
+        self._handsfree_recording: bool = False
         # v0.9: HTTP API server
         self._api_server = None
         self._api_thread = None
@@ -651,6 +658,131 @@ class VoicePasteApp:
             self._api_server = None
             self._api_thread = None
 
+    # --- v0.9: Hands-Free Mode ---
+
+    def _start_handsfree(self) -> None:
+        """Start the wake word detector for Hands-Free mode."""
+        if self._handsfree_active:
+            logger.info("Hands-Free already active.")
+            return
+
+        try:
+            from local_stt import is_faster_whisper_available
+            if not is_faster_whisper_available():
+                self._show_error(
+                    "Hands-Free Mode requires faster-whisper.\n"
+                    "Install it or use the Local STT build."
+                )
+                return
+        except ImportError:
+            self._show_error("Hands-Free Mode requires the faster-whisper library.")
+            return
+
+        from wake_word import WakeWordDetector
+
+        self._wake_detector = WakeWordDetector(
+            wake_phrase=self.config.wake_phrase,
+            on_detected=self._on_wake_word_detected,
+            cooldown_seconds=self.config.handsfree_cooldown_seconds,
+            match_mode=self.config.wake_phrase_match_mode,
+        )
+
+        success = self._wake_detector.start()
+        if success:
+            self._handsfree_active = True
+            logger.info("Hands-Free mode started. Wake phrase: '%s'", self.config.wake_phrase)
+            self._tray_manager.notify(
+                APP_NAME,
+                f"Hands-Free mode ON\nSay \"{self.config.wake_phrase}\" to start recording.",
+            )
+            self._tray_manager.update_state(self.state)
+        else:
+            self._show_error("Failed to start Hands-Free mode.\nCheck the log file for details.")
+
+    def _stop_handsfree(self) -> None:
+        """Stop the wake word detector."""
+        if not self._handsfree_active:
+            return
+        if self._wake_detector is not None:
+            self._wake_detector.stop()
+            self._wake_detector.unload_model()
+            self._wake_detector = None
+        self._handsfree_active = False
+        logger.info("Hands-Free mode stopped.")
+        self._tray_manager.notify(APP_NAME, "Hands-Free mode OFF")
+        self._tray_manager.update_state(self.state)
+
+    def _toggle_handsfree(self) -> None:
+        """Toggle Hands-Free mode on/off. Called from tray menu."""
+        if self._handsfree_active:
+            self._stop_handsfree()
+            self.config.handsfree_enabled = False
+        else:
+            self.config.handsfree_enabled = True
+            self._start_handsfree()
+        self.config.save_to_toml()
+
+    def _on_wake_word_detected(self) -> None:
+        """Handle wake word detection. Called from the wake word detector thread."""
+        current = self.state
+        if current != AppState.IDLE:
+            logger.info("Wake word detected but state is %s. Ignored.", current.value)
+            return
+
+        logger.info(
+            "Wake word detected! Starting Hands-Free recording (pipeline=%s).",
+            self.config.handsfree_pipeline,
+        )
+
+        # Play confirmation tone
+        self._play_audio_cue(play_wakeword_cue)
+        time.sleep(0.15)  # Brief pause so tone is audible before recording
+
+        # Set pipeline mode and start recording with silence auto-stop
+        # Map config pipeline names to internal _active_mode names
+        _pipeline_to_mode = {"ask_tts": "tts_ask", "summary": "summary", "prompt": "prompt"}
+        self._active_mode = _pipeline_to_mode.get(self.config.handsfree_pipeline, "tts_ask")
+        self._handsfree_recording = True
+        self._start_recording_handsfree()
+
+    def _start_recording_handsfree(self) -> None:
+        """Start recording for Hands-Free mode with silence-based auto-stop."""
+        if self._stt is None:
+            self._show_error("No STT backend available for Hands-Free recording.")
+            self._handsfree_recording = False
+            return
+
+        # Create a new AudioRecorder with silence auto-stop
+        self._recorder = AudioRecorder(
+            on_auto_stop=self._on_auto_stop,
+            on_silence_stop=self._on_silence_auto_stop,
+            silence_timeout_seconds=self.config.silence_timeout_seconds,
+            max_duration_override=self.config.handsfree_max_recording_seconds,
+        )
+
+        success = self._recorder.start()
+        if success:
+            self._set_state(AppState.RECORDING)
+            # Register Escape to cancel
+            self._hotkey_manager.register_cancel(self._on_cancel)
+            logger.info(
+                "Hands-Free recording started. Auto-stop on %.1fs silence.",
+                self.config.silence_timeout_seconds,
+            )
+        else:
+            logger.error("Failed to start Hands-Free recording.")
+            self._show_error("No microphone detected.")
+            self._handsfree_recording = False
+
+    def _on_silence_auto_stop(self) -> None:
+        """Handle auto-stop triggered by silence detection."""
+        current = self.state
+        if current != AppState.RECORDING:
+            return
+        logger.info("Silence auto-stop triggered (Hands-Free mode).")
+        self._tray_manager.notify(APP_NAME, "Silence detected — processing...")
+        self._stop_recording_and_process()
+
     def _open_settings(self) -> None:
         """Open the settings dialog. Called from tray menu (pystray thread)."""
         from settings_dialog import open_settings_dialog
@@ -755,6 +887,18 @@ class VoicePasteApp:
         if changed_fields.keys() & summarizer_keys:
             self._rebuild_summarizer()
             logger.info("Summarizer rebuilt with updated settings.")
+
+        # v0.9: Hands-Free hot-reload
+        handsfree_keys = {
+            "handsfree_enabled", "wake_phrase", "silence_timeout_seconds",
+            "handsfree_pipeline", "wake_phrase_match_mode",
+            "handsfree_cooldown_seconds", "handsfree_max_recording_seconds",
+        }
+        if changed_fields.keys() & handsfree_keys:
+            if self._handsfree_active:
+                self._stop_handsfree()
+            if self.config.handsfree_enabled:
+                self._start_handsfree()
 
         # v0.9: API server hot-reload
         api_keys = {"api_enabled", "api_port"}
@@ -882,6 +1026,7 @@ class VoicePasteApp:
 
         # Play cancel cue and return to idle
         self._play_audio_cue(play_cancel_cue)
+        self._handsfree_recording = False
         self._set_state(AppState.IDLE)
 
     def _on_auto_stop(self) -> None:
@@ -1264,6 +1409,9 @@ class VoicePasteApp:
             # Brief delay to ensure paste has completed before restoring
             time.sleep(0.1)
             clipboard_restore(clip_backup)
+            self._handsfree_recording = False
+            # Restore default recorder (without silence detection)
+            self._recorder = AudioRecorder(on_auto_stop=self._on_auto_stop)
             self._set_state(AppState.IDLE)
 
     def _shutdown(self) -> None:
@@ -1294,6 +1442,10 @@ class VoicePasteApp:
                 logger.info("Local TTS model unloaded.")
             except Exception as e:
                 logger.warning("Error unloading local TTS model: %s", e)
+
+        # v0.9: Stop Hands-Free mode
+        if self._handsfree_active:
+            self._stop_handsfree()
 
         # v0.9: Stop API server
         self._stop_api_server()
@@ -1388,6 +1540,10 @@ class VoicePasteApp:
 
         # v0.9: Start HTTP API server
         self._start_api_server()
+
+        # v0.9: Start Hands-Free mode if enabled
+        if self.config.handsfree_enabled:
+            self._start_handsfree()
 
         # v0.8: Start overlay window (T4 thread)
         if self._overlay is not None:

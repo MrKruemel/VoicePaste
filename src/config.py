@@ -15,6 +15,10 @@ from pathlib import Path
 from typing import Optional
 
 from constants import (
+    DEFAULT_HANDSFREE_COOLDOWN_SECONDS,
+    DEFAULT_HANDSFREE_ENABLED,
+    DEFAULT_HANDSFREE_MAX_RECORDING_SECONDS,
+    DEFAULT_HANDSFREE_PIPELINE,
     DEFAULT_HOTKEY,
     DEFAULT_API_ENABLED,
     DEFAULT_API_PORT,
@@ -24,6 +28,7 @@ from constants import (
     DEFAULT_PASTE_DELAY_SECONDS,
     DEFAULT_PIPER_VOICE,
     DEFAULT_PROMPT_HOTKEY,
+    DEFAULT_SILENCE_TIMEOUT_SECONDS,
     DEFAULT_STT_BACKEND,
     DEFAULT_SUMMARIZATION_PROVIDER,
     DEFAULT_TTS_ASK_HOTKEY,
@@ -32,6 +37,9 @@ from constants import (
     DEFAULT_TTS_OUTPUT_FORMAT,
     DEFAULT_TTS_PROVIDER,
     DEFAULT_TTS_VOICE_ID,
+    DEFAULT_WAKE_PHRASE,
+    DEFAULT_WAKE_PHRASE_MATCH_MODE,
+    HANDSFREE_PIPELINES,
     KEYRING_ELEVENLABS_KEY,
     KEYRING_OPENAI_KEY,
     KEYRING_OPENROUTER_KEY,
@@ -220,6 +228,15 @@ class AppConfig:
     paste_confirmation_timeout: float = DEFAULT_PASTE_CONFIRMATION_TIMEOUT
     paste_auto_enter: bool = DEFAULT_PASTE_AUTO_ENTER
 
+    # --- v0.9: Hands-Free Mode ---
+    handsfree_enabled: bool = DEFAULT_HANDSFREE_ENABLED
+    wake_phrase: str = DEFAULT_WAKE_PHRASE
+    wake_phrase_match_mode: str = DEFAULT_WAKE_PHRASE_MATCH_MODE
+    silence_timeout_seconds: float = DEFAULT_SILENCE_TIMEOUT_SECONDS
+    handsfree_max_recording_seconds: int = DEFAULT_HANDSFREE_MAX_RECORDING_SECONDS
+    handsfree_pipeline: str = DEFAULT_HANDSFREE_PIPELINE
+    handsfree_cooldown_seconds: float = DEFAULT_HANDSFREE_COOLDOWN_SECONDS
+
     @property
     def config_path(self) -> Path:
         """Path to the config.toml file."""
@@ -362,6 +379,23 @@ delay_seconds = {self.paste_delay_seconds}
 confirmation_timeout_seconds = {self.paste_confirmation_timeout}
 # Automatically press Enter after pasting (e.g. to execute a command in a terminal).
 auto_enter = {str(self.paste_auto_enter).lower()}
+
+[handsfree]
+# Hands-Free Mode: continuous wake word detection via STT keyword spotting.
+# PRIVACY: Microphone is always active while enabled. Detection is 100% local.
+enabled = {str(self.handsfree_enabled).lower()}
+# Wake phrase to listen for (any text, detected via local Whisper tiny model)
+wake_phrase = "{esc(self.wake_phrase)}"
+# Match mode: "contains" (forgiving), "startswith" (strict), "fuzzy" (token overlap)
+match_mode = "{esc(self.wake_phrase_match_mode)}"
+# Seconds of silence before auto-stopping recording (1.0 - 10.0)
+silence_timeout = {self.silence_timeout_seconds}
+# Maximum recording duration in seconds (hands-free mode)
+max_recording_seconds = {self.handsfree_max_recording_seconds}
+# Pipeline: "ask_tts" (ask AI + speak), "summary" (transcribe + paste), "prompt" (ask AI + paste)
+pipeline = "{esc(self.handsfree_pipeline)}"
+# Cooldown in seconds after wake word detection (prevents re-trigger)
+cooldown_seconds = {self.handsfree_cooldown_seconds}
 
 [feedback]
 audio_cues = {str(self.audio_cues_enabled).lower()}
@@ -654,6 +688,28 @@ def load_config() -> Optional[AppConfig]:
         )
         tts_local_voice = DEFAULT_PIPER_VOICE
 
+    # --- v0.9: Hands-Free Mode ---
+    handsfree_section = data.get("handsfree", {})
+    handsfree_enabled = bool(handsfree_section.get("enabled", DEFAULT_HANDSFREE_ENABLED))
+    wake_phrase = str(handsfree_section.get("wake_phrase", DEFAULT_WAKE_PHRASE)).strip()
+    if not wake_phrase:
+        wake_phrase = DEFAULT_WAKE_PHRASE
+    wake_phrase_match_mode = handsfree_section.get("match_mode", DEFAULT_WAKE_PHRASE_MATCH_MODE)
+    if wake_phrase_match_mode not in ("contains", "startswith", "fuzzy"):
+        wake_phrase_match_mode = DEFAULT_WAKE_PHRASE_MATCH_MODE
+    silence_timeout_seconds = float(handsfree_section.get(
+        "silence_timeout", DEFAULT_SILENCE_TIMEOUT_SECONDS))
+    silence_timeout_seconds = max(1.0, min(silence_timeout_seconds, 10.0))
+    handsfree_max_recording_seconds = int(handsfree_section.get(
+        "max_recording_seconds", DEFAULT_HANDSFREE_MAX_RECORDING_SECONDS))
+    handsfree_max_recording_seconds = max(10, min(handsfree_max_recording_seconds, 300))
+    handsfree_pipeline = handsfree_section.get("pipeline", DEFAULT_HANDSFREE_PIPELINE)
+    if handsfree_pipeline not in HANDSFREE_PIPELINES:
+        handsfree_pipeline = DEFAULT_HANDSFREE_PIPELINE
+    handsfree_cooldown_seconds = float(handsfree_section.get(
+        "cooldown_seconds", DEFAULT_HANDSFREE_COOLDOWN_SECONDS))
+    handsfree_cooldown_seconds = max(1.0, min(handsfree_cooldown_seconds, 10.0))
+
     # --- v0.9: Paste confirmation/delay ---
     paste_require_confirmation = bool(paste_section.get(
         "require_confirmation", DEFAULT_PASTE_CONFIRM))
@@ -747,6 +803,14 @@ def load_config() -> Optional[AppConfig]:
         paste_delay_seconds=paste_delay_seconds,
         paste_confirmation_timeout=paste_confirmation_timeout,
         paste_auto_enter=paste_auto_enter,
+        # v0.9: Hands-Free Mode
+        handsfree_enabled=handsfree_enabled,
+        wake_phrase=wake_phrase,
+        wake_phrase_match_mode=wake_phrase_match_mode,
+        silence_timeout_seconds=silence_timeout_seconds,
+        handsfree_max_recording_seconds=handsfree_max_recording_seconds,
+        handsfree_pipeline=handsfree_pipeline,
+        handsfree_cooldown_seconds=handsfree_cooldown_seconds,
     )
 
     # REQ-S01: Only log the masked key
