@@ -1817,8 +1817,8 @@ def main() -> None:
             logger.warning("Could not determine keyboard library version: %s", e)
     else:
         try:
-            import pynput as _pynput_diag
-            logger.info("pynput library version: %s", _pynput_diag.__version__)
+            import importlib.metadata as _meta
+            logger.info("pynput library version: %s", _meta.version("pynput"))
         except Exception as e:
             logger.warning("Could not determine pynput library version: %s", e)
 
