@@ -96,17 +96,36 @@ def _is_terminal_focused() -> bool:
     """Check if the currently focused window is a terminal emulator.
 
     Terminal emulators use Ctrl+Shift+V for paste instead of Ctrl+V.
-    We detect this by checking the WM_CLASS of the active X11 window.
+    We detect this by checking the WM_CLASS of the active X11 window
+    via xprop (xdotool's getwindowclassname is not available in all versions).
     """
     xdotool = shutil.which("xdotool")
-    if not xdotool:
+    xprop = shutil.which("xprop")
+    if not xdotool or not xprop:
         return False
     try:
-        result = subprocess.run(
-            [xdotool, "getactivewindow", "getwindowclassname"],
+        # Get active window ID
+        win_result = subprocess.run(
+            [xdotool, "getactivewindow"],
             capture_output=True, text=True, timeout=2,
         )
-        wm_class = result.stdout.strip().lower()
+        win_id = win_result.stdout.strip()
+        if not win_id:
+            return False
+
+        # Query WM_CLASS via xprop (works on all xdotool versions)
+        prop_result = subprocess.run(
+            [xprop, "-id", win_id, "WM_CLASS"],
+            capture_output=True, text=True, timeout=2,
+        )
+        # xprop output: WM_CLASS(STRING) = "instance", "class"
+        # Extract both instance and class names
+        wm_classes = set()
+        for part in prop_result.stdout.split('"'):
+            stripped = part.strip().lower()
+            if stripped and stripped not in (',', '=', '') and 'wm_class' not in stripped:
+                wm_classes.add(stripped)
+
         terminal_classes = {
             "gnome-terminal", "gnome-terminal-server",
             "xterm", "uxterm", "konsole", "xfce4-terminal",
@@ -114,10 +133,11 @@ def _is_terminal_focused() -> bool:
             "wezterm", "foot", "sakura", "lxterminal",
             "mate-terminal", "guake", "yakuake", "st",
         }
-        is_term = wm_class in terminal_classes
-        if is_term:
-            logger.debug("Terminal detected: %s", wm_class)
-        return is_term
+        matched = wm_classes & terminal_classes
+        if matched:
+            logger.debug("Terminal detected: %s", matched)
+            return True
+        return False
     except Exception:
         return False
 
