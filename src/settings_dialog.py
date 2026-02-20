@@ -258,7 +258,7 @@ def open_settings_dialog(
         on_save: Callback invoked with dict of changed fields after save.
         on_close: Optional callback invoked after the dialog is fully
             destroyed and its Tk root is gone. Use this to restart other
-            tkinter windows (e.g. overlay) that were paused to avoid
+            tkinter windows that were paused to avoid
             dual-Tk() conflicts on Windows.
 
     Returns:
@@ -1203,10 +1203,6 @@ class SettingsDialog:
             variable=self._audio_cues_var,
         ).pack(fill=tk.X)
 
-        # v0.8: Overlay — disabled (tkinter dual-Tk() conflict on Python 3.14+).
-        # TODO: Re-enable after overlay is rebuilt with Win32 API.
-        self._show_overlay_var = tk.BooleanVar()
-
         # --- Separator ---
         ttk.Separator(parent, orient=tk.HORIZONTAL).pack(fill=tk.X, pady=(8, 8))
 
@@ -1595,9 +1591,6 @@ class SettingsDialog:
 
         # Audio cues
         self._audio_cues_var.set(config.audio_cues_enabled)
-
-        # v0.8: Overlay
-        self._show_overlay_var.set(config.show_overlay)
 
         # v0.9: Paste confirmation/delay
         self._paste_confirm_var.set(config.paste_require_confirmation)
@@ -2867,12 +2860,6 @@ class SettingsDialog:
         if new_audio_cues != config.audio_cues_enabled:
             changed_fields["audio_cues_enabled"] = new_audio_cues
             config.audio_cues_enabled = new_audio_cues
-
-        # v0.8: Overlay
-        new_show_overlay = self._show_overlay_var.get()
-        if new_show_overlay != config.show_overlay:
-            changed_fields["show_overlay"] = new_show_overlay
-            config.show_overlay = new_show_overlay
 
         # v0.9: Paste confirmation/delay
         new_paste_confirm = self._paste_confirm_var.get()

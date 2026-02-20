@@ -72,7 +72,6 @@ from notifications import (
     play_recording_stop_cue,
     play_wakeword_cue,
 )
-from overlay import OverlayWindow
 from api_server import start_api_server, stop_api_server
 
 logger = logging.getLogger(APP_NAME)
@@ -316,14 +315,6 @@ class VoicePasteApp:
             on_tts_cache_clear=lambda: self._tts_cache.clear(),
         )
 
-        # v0.8: Floating overlay window — DISABLED.
-        # The overlay uses its own tk.Tk() on a daemon thread (T4).
-        # Python 3.14+ enforces "main thread is not in main loop" which
-        # prevents the settings dialog from creating a second tk.Tk().
-        # TODO: Rebuild overlay using pure Win32 API (ctypes) instead of
-        # tkinter to avoid the dual-Tk() conflict.
-        self._overlay: Optional["OverlayWindow"] = None
-
         self._shutdown_event = threading.Event()
         self._pipeline_thread: threading.Thread | None = None
         # v0.9: Confirm-before-paste synchronization
@@ -358,10 +349,6 @@ class VoicePasteApp:
 
         # Update tray icon to match state
         self._tray_manager.update_state(new_state)
-
-        # v0.8: Update overlay (thread-safe, no-op if overlay is None or not running)
-        if self._overlay is not None:
-            self._overlay.update_state(new_state)
 
     def _rebuild_summarizer(self) -> None:
         """(Re)create the summarizer based on current config.
@@ -1206,13 +1193,6 @@ class VoicePasteApp:
             self._stop_api_server()
             self._start_api_server()
 
-        # v0.8: Overlay hot-reload — DISABLED (overlay uses tkinter which
-        # conflicts with settings dialog's tk.Tk() on Python 3.14+).
-        # TODO: Re-enable after overlay is rebuilt with Win32 API.
-        if "show_overlay" in changed_fields:
-            logger.info("Overlay setting changed to %s (overlay currently disabled).",
-                        self.config.show_overlay)
-
         # Notify user via toast
         self._tray_manager.notify(
             APP_NAME, "Settings saved and applied."
@@ -1763,10 +1743,6 @@ class VoicePasteApp:
         # v0.9: Stop API server
         self._stop_api_server()
 
-        # v0.8: Stop overlay before unregistering hotkeys
-        if self._overlay is not None:
-            self._overlay.stop()
-
         # Unregister hotkeys
         self._hotkey_manager.unregister()
 
@@ -1865,11 +1841,6 @@ class VoicePasteApp:
         # v0.9: Start Hands-Free mode if enabled
         if self.config.handsfree_enabled:
             self._start_handsfree()
-
-        # v0.8: Start overlay window (T4 thread)
-        if self._overlay is not None:
-            self._overlay.start()
-            logger.info("Overlay window started.")
 
         # Run tray on main thread (blocks until stop)
         try:
