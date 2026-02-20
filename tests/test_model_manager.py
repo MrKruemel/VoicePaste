@@ -195,7 +195,8 @@ class TestDownloadModel:
     """Test model download (mocked)."""
 
     @patch("model_manager.snapshot_download", create=True)
-    def test_successful_download(self, mock_download, tmp_path, monkeypatch):
+    @patch("model_manager._verify_stt_integrity", return_value=True)
+    def test_successful_download(self, mock_verify, mock_download, tmp_path, monkeypatch):
         """Successful download returns True."""
         monkeypatch.setenv("LOCALAPPDATA", str(tmp_path))
 

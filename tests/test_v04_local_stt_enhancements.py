@@ -262,7 +262,8 @@ class TestCancelledError:
 class TestDownloadModelProgressIntegration:
     """Test that download_model() wires progress and cancellation correctly."""
 
-    def test_progress_callback_receives_updates(self, tmp_path, monkeypatch):
+    @patch("model_manager._verify_stt_integrity", return_value=True)
+    def test_progress_callback_receives_updates(self, mock_verify, tmp_path, monkeypatch):
         """Progress callback should be called during download."""
         monkeypatch.setenv("LOCALAPPDATA", str(tmp_path))
         progress_calls = []

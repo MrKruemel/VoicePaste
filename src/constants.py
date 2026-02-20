@@ -256,7 +256,10 @@ PIPER_VOICE_MODELS: dict[str, dict[str, Any]] = {
                  "de/de_DE/thorsten/medium/de_DE-thorsten-medium.onnx.json",
         "download_mb": "63",
         "sample_rate": "22050",
-        "sha256": {},  # Populate after first download from log output
+        "sha256": {
+            "de_DE-thorsten-medium.onnx": "7e64762d8e5118bb578f2eea6207e1a35a8e0c30595010b666f983fc87bb7819",
+            "de_DE-thorsten-medium.onnx.json": "974adee790533adb273a1ac88f49027d2a1b8f0f2cf4905954a4791e79264e85",
+        },
     },
     "de_DE-thorsten-high": {
         "label": "Thorsten (DE, high quality, larger)",
@@ -265,7 +268,10 @@ PIPER_VOICE_MODELS: dict[str, dict[str, Any]] = {
                  "de/de_DE/thorsten/high/de_DE-thorsten-high.onnx.json",
         "download_mb": "114",
         "sample_rate": "22050",
-        "sha256": {},
+        "sha256": {
+            "de_DE-thorsten-high.onnx": "9df1c43c61149ef9b39e618e2b861fbe41e1fcea9390b2dac62e8761573ea4f1",
+            "de_DE-thorsten-high.onnx.json": "6de734444e4c3f9e33b7ebe2746dbc19b71e85f613e79c65acf623200b99a76a",
+        },
     },
     "de_DE-thorsten_emotional-medium": {
         "label": "Thorsten Emotional (DE, medium, multi-emotion)",
@@ -274,7 +280,10 @@ PIPER_VOICE_MODELS: dict[str, dict[str, Any]] = {
                  "de/de_DE/thorsten_emotional/medium/de_DE-thorsten_emotional-medium.onnx.json",
         "download_mb": "77",
         "sample_rate": "22050",
-        "sha256": {},
+        "sha256": {
+            "de_DE-thorsten_emotional-medium.onnx": "c1764e652266cd6dcebf1b95c61973df5970a5f5272e94b655ff1ddf9a99d1ff",
+            "de_DE-thorsten_emotional-medium.onnx.json": "92895b9e99f7cfc13f4a9879da615c3d6e0baa4d660e26d7b685abdd27a6d1d3",
+        },
     },
     "de_DE-mls-medium": {
         "label": "MLS (DE, medium quality)",
@@ -283,7 +292,10 @@ PIPER_VOICE_MODELS: dict[str, dict[str, Any]] = {
                  "de/de_DE/mls/medium/de_DE-mls-medium.onnx.json",
         "download_mb": "95",
         "sample_rate": "22050",
-        "sha256": {},
+        "sha256": {
+            "de_DE-mls-medium.onnx": "69cd1d2aa5a35839a518966fcc4924b5f93e5f8c948ed0752b1a616ad53f65bf",
+            "de_DE-mls-medium.onnx.json": "b0af1c89ddfdc72d32e015729b0e89b99eec13c2c8caa1db7488d98e9e570b40",
+        },
     },
     # --- English (US) voices ---
     "en_US-ryan-high": {
@@ -293,7 +305,10 @@ PIPER_VOICE_MODELS: dict[str, dict[str, Any]] = {
                  "en/en_US/ryan/high/en_US-ryan-high.onnx.json",
         "download_mb": "114",
         "sample_rate": "22050",
-        "sha256": {},
+        "sha256": {
+            "en_US-ryan-high.onnx": "b3990d7606e183ec8dbfba70a4607074f162de1a0c412e0180d1ff60bb154eca",
+            "en_US-ryan-high.onnx.json": "c6d3b98f08315cb4bebf0d49d50fc4ff491b503c64b940cd3d5ca28543b48011",
+        },
     },
     "en_US-ryan-medium": {
         "label": "Ryan (EN-US, medium quality, male)",
@@ -302,7 +317,10 @@ PIPER_VOICE_MODELS: dict[str, dict[str, Any]] = {
                  "en/en_US/ryan/medium/en_US-ryan-medium.onnx.json",
         "download_mb": "64",
         "sample_rate": "22050",
-        "sha256": {},
+        "sha256": {
+            "en_US-ryan-medium.onnx": "abf4c274862564ed647ba0d2c47f8ee7c9b717d27bdad9219100eb310db4047a",
+            "en_US-ryan-medium.onnx.json": "44034c056cb15681b2ad494307c7f3f2e4499d1253c700c711fa0a4607ffe78d",
+        },
     },
     "en_US-lessac-high": {
         "label": "Lessac (EN-US, high quality, male)",
@@ -311,7 +329,10 @@ PIPER_VOICE_MODELS: dict[str, dict[str, Any]] = {
                  "en/en_US/lessac/high/en_US-lessac-high.onnx.json",
         "download_mb": "114",
         "sample_rate": "22050",
-        "sha256": {},
+        "sha256": {
+            "en_US-lessac-high.onnx": "4cabf7c3a638017137f34a1516522032d4fe3f38228a843cc9b764ddcbcd9e09",
+            "en_US-lessac-high.onnx.json": "db42b97d9859f257bc1561b8ed980e7fb2398402050a74ddd6cbec931a92412f",
+        },
     },
     "en_US-lessac-medium": {
         "label": "Lessac (EN-US, medium quality, male)",
@@ -320,7 +341,10 @@ PIPER_VOICE_MODELS: dict[str, dict[str, Any]] = {
                  "en/en_US/lessac/medium/en_US-lessac-medium.onnx.json",
         "download_mb": "64",
         "sample_rate": "22050",
-        "sha256": {},
+        "sha256": {
+            "en_US-lessac-medium.onnx": "5efe09e69902187827af646e1a6e9d269dee769f9877d17b16b1b46eeaaf019f",
+            "en_US-lessac-medium.onnx.json": "efe19c417bed055f2d69908248c6ba650fa135bc868b0e6abb3da181dab690a0",
+        },
     },
     "en_US-amy-medium": {
         "label": "Amy (EN-US, medium quality, female)",
@@ -329,7 +353,10 @@ PIPER_VOICE_MODELS: dict[str, dict[str, Any]] = {
                  "en/en_US/amy/medium/en_US-amy-medium.onnx.json",
         "download_mb": "64",
         "sample_rate": "22050",
-        "sha256": {},
+        "sha256": {
+            "en_US-amy-medium.onnx": "b3a6e47b57b8c7fbe6a0ce2518161a50f59a9cdd8a50835c02cb02bdd6206c18",
+            "en_US-amy-medium.onnx.json": "95a23eb4d42909d38df73bb9ac7f45f597dbfcde2d1bf9526fdeaf5466977d77",
+        },
     },
     # --- English (GB) voices ---
     "en_GB-cori-high": {
@@ -339,7 +366,10 @@ PIPER_VOICE_MODELS: dict[str, dict[str, Any]] = {
                  "en/en_GB/cori/high/en_GB-cori-high.onnx.json",
         "download_mb": "114",
         "sample_rate": "22050",
-        "sha256": {},
+        "sha256": {
+            "en_GB-cori-high.onnx": "470b4dd634c98f8a4850d7626ffc3dfc90774628eeef6605a6dd8f88f30a5903",
+            "en_GB-cori-high.onnx.json": "9e7fb5b5671612c22f3c81cbe46c1ae87b031a4632bcb509e499dad6f1e2adec",
+        },
     },
     "en_GB-cori-medium": {
         "label": "Cori (EN-GB, medium quality, female)",
@@ -348,7 +378,10 @@ PIPER_VOICE_MODELS: dict[str, dict[str, Any]] = {
                  "en/en_GB/cori/medium/en_GB-cori-medium.onnx.json",
         "download_mb": "64",
         "sample_rate": "22050",
-        "sha256": {},
+        "sha256": {
+            "en_GB-cori-medium.onnx": "1899f98e5fb8310154f3c2973f4b8a929ba7245e722b3d3a85680b833d95f10d",
+            "en_GB-cori-medium.onnx.json": "e262c16d7f192f69d4edd6b4ef8a5915379e67495fcc402f1ab15eeb33da3d36",
+        },
     },
     "en_GB-alba-medium": {
         "label": "Alba (EN-GB, medium quality, female)",
@@ -357,7 +390,10 @@ PIPER_VOICE_MODELS: dict[str, dict[str, Any]] = {
                  "en/en_GB/alba/medium/en_GB-alba-medium.onnx.json",
         "download_mb": "64",
         "sample_rate": "22050",
-        "sha256": {},
+        "sha256": {
+            "en_GB-alba-medium.onnx": "401369c4a81d09fdd86c32c5c864440811dbdcc66466cde2d64f7133a66ad03b",
+            "en_GB-alba-medium.onnx.json": "aa965a2f02ecced632c2694e1fc72bbff6d65f265fab567ca945918c73dd89f4",
+        },
     },
     "en_GB-jenny_dioco-medium": {
         "label": "Jenny (EN-GB, medium quality, female)",
@@ -366,7 +402,10 @@ PIPER_VOICE_MODELS: dict[str, dict[str, Any]] = {
                  "en/en_GB/jenny_dioco/medium/en_GB-jenny_dioco-medium.onnx.json",
         "download_mb": "64",
         "sample_rate": "22050",
-        "sha256": {},
+        "sha256": {
+            "en_GB-jenny_dioco-medium.onnx": "469c630d209e139dd392a66bf4abde4ab86390a0269c1e47b4e5d7ce81526b01",
+            "en_GB-jenny_dioco-medium.onnx.json": "a9a7a93a317c9a3cb6563e37eb057df9ef09c06188a8a4341b0fcb58cba54dd4",
+        },
     },
     "en_GB-alan-medium": {
         "label": "Alan (EN-GB, medium quality, male)",
@@ -375,7 +414,10 @@ PIPER_VOICE_MODELS: dict[str, dict[str, Any]] = {
                  "en/en_GB/alan/medium/en_GB-alan-medium.onnx.json",
         "download_mb": "64",
         "sample_rate": "22050",
-        "sha256": {},
+        "sha256": {
+            "en_GB-alan-medium.onnx": "0a309668932205e762801f1efc2736cd4b0120329622adf62be09e56339d3330",
+            "en_GB-alan-medium.onnx.json": "c0f0d124e5895c00e7c03b35dcc8287f319a6998a365b182deb5c8e752ee8c1e",
+        },
     },
 }
 
@@ -404,10 +446,39 @@ for _voice_name, _voice_info in PIPER_VOICE_MODELS.items():
 # An empty inner dict means "hashes not yet computed -- skip verification
 # but log a warning".  Populate after first download from log output.
 STT_MODEL_SHA256: dict[str, dict[str, str]] = {
-    "tiny": {},
-    "base": {},
-    "small": {},
-    "medium": {},
-    "large-v2": {},
-    "large-v3": {},
+    "tiny": {
+        "config.json": "a73a28cdfe1c43ccc7202fa333d1f89c202477271407ae9a7f19afa52039cac8",
+        "model.bin": "dcb76c6586fc06cbdac6dd21f14cfd129cc4cdd9dce19bf4ffa62e59cbe6e6d1",
+        "tokenizer.json": "fb7b63191e9bb045082c79fd742a3106a12c99513ab30df4a0d47fa6cb6fd0ab",
+        "vocabulary.txt": "34ce3fe1c5041027b3f8d42912270993f986dbc4bb34cf27f951e34a1e453913",
+    },
+    "base": {
+        "config.json": "56a6d8110d311f19c8f0471e562832c7527f146b567275bfca59fcf7c184da9a",
+        "model.bin": "d01c3014881c9c6f3133c182f3d2887eb6ca1c789a7538c5c007196857a0a6a9",
+        "tokenizer.json": "fb7b63191e9bb045082c79fd742a3106a12c99513ab30df4a0d47fa6cb6fd0ab",
+        "vocabulary.txt": "34ce3fe1c5041027b3f8d42912270993f986dbc4bb34cf27f951e34a1e453913",
+    },
+    "small": {
+        "config.json": "b55496ac7940a7ae47d2c01eab40edfd8701feec1229d9cce3b40014383fb828",
+        "model.bin": "3e305921506d8872816023e4c273e75d2419fb89b24da97b4fe7bce14170d671",
+        "tokenizer.json": "fb7b63191e9bb045082c79fd742a3106a12c99513ab30df4a0d47fa6cb6fd0ab",
+        "vocabulary.txt": "34ce3fe1c5041027b3f8d42912270993f986dbc4bb34cf27f951e34a1e453913",
+    },
+    "medium": {
+        "config.json": "3622a2ddc41ec0e0fd4e68c13c6830f03b90c38d89aaad184de02c8c642cf807",
+        "model.bin": "9b45e1009dcc4ab601eff815b61d80e60ce3fd8c74c1a14f4a282258286b51ae",
+        "tokenizer.json": "fb7b63191e9bb045082c79fd742a3106a12c99513ab30df4a0d47fa6cb6fd0ab",
+        "vocabulary.txt": "34ce3fe1c5041027b3f8d42912270993f986dbc4bb34cf27f951e34a1e453913",
+    },
+    "large-v2": {
+        "config.json": "d86b7a7664a12559d644aa210a32ce9a7e03913e794b7ea4fb7182de69e273a7",
+        "model.bin": "bf2a9746382e1aa7ffff6b3a0d137ed9edbd9670c3b87e5d35f5e85e70d0333a",
+        "tokenizer.json": "fb7b63191e9bb045082c79fd742a3106a12c99513ab30df4a0d47fa6cb6fd0ab",
+        "vocabulary.txt": "34ce3fe1c5041027b3f8d42912270993f986dbc4bb34cf27f951e34a1e453913",
+    },
+    "large-v3": {
+        "config.json": "a9306624f5ec14270a014b647e5c316b6e03a662c369758d1b90697a7b0655b9",
+        "model.bin": "69f74147e3334731bc3a76048724833325d2ec74642fb52620eda87352e3d4f1",
+        "tokenizer.json": "6d8cbd7cd0d8d5815e478dac67b85a26bbe77c1f5e0c6d76d1ce2abc0e5f21ca",
+    },
 }
