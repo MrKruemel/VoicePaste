@@ -248,6 +248,7 @@ match_mode = "contains"
 # - "transcribe_paste": Record speech -> Transcribe -> Summarize -> Paste (normal recording mode)
 # - "ask_tts": Record speech -> Send to LLM as question -> Speak answer via TTS
 # - "ask_paste": Record speech -> Send to LLM as question -> Paste answer
+# - "claude_code": Record speech -> Send to Claude Code CLI -> Response via configured mode
 pipeline = "ask_tts"
 
 # Silence detection timeout in seconds (default: 3.0)
@@ -260,6 +261,33 @@ silence_timeout_seconds = 3.0
 # Recording auto-stops after this duration to prevent runaway recordings.
 # Valid range: 10 to 300 seconds.
 max_duration_seconds = 60
+
+[claude_code]
+# Claude Code CLI integration (requires `claude` in PATH)
+# Sends voice input to Claude Code with full project context, CLAUDE.md, and tool use.
+# Install: npm install -g @anthropic-ai/claude-code
+enabled = false
+# Hotkey to trigger Claude Code voice input (default: "ctrl+alt+c")
+hotkey = "ctrl+alt+c"
+# Working directory for Claude Code (empty = VoicePaste's current directory)
+# Set this to your project root so Claude Code has access to CLAUDE.md and project files.
+# working_dir = "/path/to/your/project"
+# System prompt appended to Claude Code invocations (empty = none)
+# system_prompt = "Answer concisely in the same language as the question."
+# Response mode: how to deliver Claude's response
+# - "paste": paste at cursor position
+# - "speak": read aloud via TTS (requires TTS enabled)
+# - "both": speak and paste
+response_mode = "speak"
+# Timeout in seconds for Claude Code to respond (default: 120)
+timeout = 120
+# Skip permission prompts (--dangerously-skip-permissions).
+# Only enable on trusted systems where you don't want to maintain an allowlist.
+skip_permissions = false
+# Continue conversation: pass --continue on subsequent calls to maintain context.
+# When true, Claude remembers previous exchanges in the session.
+# Use "New Conversation" in the tray menu to start fresh.
+continue_conversation = false
 
 [logging]
 # Log level: "DEBUG", "INFO", "WARNING", or "ERROR" (default: "INFO")

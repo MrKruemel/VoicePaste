@@ -24,6 +24,7 @@ else:
 
 from constants import (
     CANCEL_HOTKEY,
+    DEFAULT_CLAUDE_CODE_HOTKEY,
     DEFAULT_HOTKEY,
     DEFAULT_PROMPT_HOTKEY,
     DEFAULT_TTS_ASK_HOTKEY,
@@ -189,6 +190,7 @@ class HotkeyManager:
         prompt_hotkey: str = DEFAULT_PROMPT_HOTKEY,
         tts_hotkey: str = DEFAULT_TTS_HOTKEY,
         tts_ask_hotkey: str = DEFAULT_TTS_ASK_HOTKEY,
+        claude_code_hotkey: str = DEFAULT_CLAUDE_CODE_HOTKEY,
         debounce_ms: int = HOTKEY_DEBOUNCE_MS,
     ) -> None:
         """Initialize the hotkey manager.
@@ -198,12 +200,14 @@ class HotkeyManager:
             prompt_hotkey: Voice Prompt hotkey combination string.
             tts_hotkey: TTS clipboard readout hotkey (v0.6).
             tts_ask_hotkey: TTS Ask AI + readout hotkey (v0.6).
+            claude_code_hotkey: Claude Code voice input hotkey (v1.2).
             debounce_ms: Debounce window in milliseconds.
         """
         self.hotkey = hotkey
         self.prompt_hotkey = prompt_hotkey
         self.tts_hotkey = tts_hotkey
         self.tts_ask_hotkey = tts_ask_hotkey
+        self.claude_code_hotkey = claude_code_hotkey
         self.debounce_ms = debounce_ms
         self._lock = threading.Lock()
 
@@ -213,6 +217,9 @@ class HotkeyManager:
             "prompt": _HotkeySlot(label="Prompt", combo=prompt_hotkey, validate=True),
             "tts": _HotkeySlot(label="TTS", combo=tts_hotkey),
             "tts_ask": _HotkeySlot(label="TTS Ask", combo=tts_ask_hotkey),
+            "claude_code": _HotkeySlot(
+                label="Claude Code", combo=claude_code_hotkey, validate=True,
+            ),
             "cancel": _HotkeySlot(
                 label="Cancel", combo=CANCEL_HOTKEY,
                 is_single_key=True, validate=False,
@@ -416,14 +423,27 @@ class HotkeyManager:
         """
         self._unregister_slot("cancel")
 
+    def register_claude_code(self, callback: Callable[[], None]) -> None:
+        """Register the Claude Code hotkey (v1.2).
+
+        Args:
+            callback: Function to call when the Claude Code hotkey is pressed.
+        """
+        self._register_slot("claude_code", callback)
+
+    def unregister_claude_code(self) -> None:
+        """Unregister the Claude Code hotkey. Safe to call if not registered."""
+        self._unregister_slot("claude_code")
+
     def unregister_tts(self) -> None:
         """Unregister TTS hotkeys. Safe to call even if not registered."""
         self._unregister_slot("tts")
         self._unregister_slot("tts_ask")
 
     def unregister(self) -> None:
-        """Unregister all hotkeys (main + prompt + cancel + TTS)."""
+        """Unregister all hotkeys (main + prompt + cancel + TTS + Claude Code)."""
         self.unregister_cancel()
         self.unregister_tts()
+        self.unregister_claude_code()
         self._unregister_slot("prompt")
         self._unregister_slot("main")

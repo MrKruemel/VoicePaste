@@ -439,12 +439,14 @@ class SettingsDialog:
         tts_tab = ttk.Frame(self._notebook, padding=(10, 8))
         general_tab = ttk.Frame(self._notebook, padding=(10, 8))
         handsfree_tab = ttk.Frame(self._notebook, padding=(10, 8))
+        claude_code_tab = ttk.Frame(self._notebook, padding=(10, 8))
 
         self._notebook.add(transcription_tab, text="Transcription")
         self._notebook.add(summarization_tab, text="Summarization")
         self._notebook.add(tts_tab, text="Text-to-Speech")
         self._notebook.add(general_tab, text="General")
         self._notebook.add(handsfree_tab, text="Hands-Free")
+        self._notebook.add(claude_code_tab, text="Claude Code")
 
         # ---------------------------------------------------------------
         # Tab 1: Transcription
@@ -466,6 +468,11 @@ class SettingsDialog:
         # ---------------------------------------------------------------
         self._build_general_tab(general_tab)
         self._build_handsfree_tab(handsfree_tab)
+
+        # ---------------------------------------------------------------
+        # Tab 6: Claude Code
+        # ---------------------------------------------------------------
+        self._build_claude_code_tab(claude_code_tab)
 
         # === Error label (below notebook, hidden by default) ===
         self._error_label = ttk.Label(
@@ -1470,6 +1477,7 @@ class SettingsDialog:
                 "Ask AI + TTS (ask_tts)",
                 "Transcribe + Paste (summary)",
                 "Ask AI + Paste (prompt)",
+                "Claude Code (claude_code)",
             ],
             state="readonly",
             width=28,
@@ -1528,6 +1536,198 @@ class SettingsDialog:
             font=("", 8),
             justify=tk.LEFT,
         ).pack(fill=tk.X)
+
+    def _build_claude_code_tab(self, parent: "ttk.Frame") -> None:
+        """Build the Claude Code tab UI (v1.2)."""
+        tk = self._tk
+        ttk = self._ttk
+
+        # Enable toggle
+        self._claude_code_enabled_var = tk.BooleanVar()
+        ttk.Checkbutton(
+            parent,
+            text="Enable Claude Code Integration",
+            variable=self._claude_code_enabled_var,
+        ).pack(fill=tk.X, pady=(0, 4))
+
+        # Status label
+        self._claude_code_status_var = tk.StringVar(value="Checking...")
+        status_row = ttk.Frame(parent)
+        status_row.pack(fill=tk.X, pady=(0, 8))
+        ttk.Label(status_row, text="Status:", width=16, anchor=tk.W).pack(side=tk.LEFT)
+        self._claude_code_status_label = ttk.Label(
+            status_row, textvariable=self._claude_code_status_var,
+        )
+        self._claude_code_status_label.pack(side=tk.LEFT, padx=(4, 0))
+
+        # Check CLI availability on tab build
+        try:
+            from claude_code import ClaudeCodeBackend
+            if ClaudeCodeBackend.is_available():
+                version = ClaudeCodeBackend.get_version() or "unknown version"
+                self._claude_code_status_var.set(f"Found: {version}")
+                self._claude_code_status_label.configure(foreground="#66BB6A")
+            else:
+                self._claude_code_status_var.set(
+                    "Not found. Install: npm i -g @anthropic-ai/claude-code"
+                )
+                self._claude_code_status_label.configure(foreground="#FF6B6B")
+        except Exception:
+            self._claude_code_status_var.set("Error checking CLI availability")
+            self._claude_code_status_label.configure(foreground="#FF6B6B")
+
+        ttk.Separator(parent, orient=tk.HORIZONTAL).pack(fill=tk.X, pady=(0, 8))
+
+        # Working directory
+        workdir_row = ttk.Frame(parent)
+        workdir_row.pack(fill=tk.X, pady=(0, 4))
+        ttk.Label(workdir_row, text="Working directory:", width=16, anchor=tk.W).pack(
+            side=tk.LEFT
+        )
+        self._claude_code_workdir_var = tk.StringVar()
+        ttk.Entry(
+            workdir_row, textvariable=self._claude_code_workdir_var, width=30
+        ).pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(4, 4))
+        ttk.Button(
+            workdir_row, text="Browse...", width=8,
+            command=self._browse_claude_code_workdir,
+        ).pack(side=tk.LEFT)
+
+        ttk.Label(
+            parent,
+            text="The project directory where Claude Code runs.\n"
+                 "Claude reads CLAUDE.md and project files from this directory.\n"
+                 "Leave empty to use VoicePaste's current directory.",
+            foreground="#999999",
+            font=("", 8),
+        ).pack(fill=tk.X, pady=(0, 8))
+
+        # System prompt
+        ttk.Label(parent, text="System prompt (optional):", anchor=tk.W).pack(
+            fill=tk.X, pady=(0, 2)
+        )
+        prompt_frame = ttk.Frame(parent)
+        prompt_frame.pack(fill=tk.X, pady=(0, 8))
+        self._claude_code_prompt_text = tk.Text(
+            prompt_frame, height=3, width=50, wrap=tk.WORD,
+        )
+        self._claude_code_prompt_text.pack(fill=tk.X)
+
+        ttk.Separator(parent, orient=tk.HORIZONTAL).pack(fill=tk.X, pady=(0, 8))
+
+        # Response mode
+        mode_row = ttk.Frame(parent)
+        mode_row.pack(fill=tk.X, pady=(0, 4))
+        ttk.Label(mode_row, text="Response mode:", width=16, anchor=tk.W).pack(
+            side=tk.LEFT
+        )
+        self._claude_code_mode_var = tk.StringVar()
+        ttk.Combobox(
+            mode_row,
+            textvariable=self._claude_code_mode_var,
+            values=["Paste", "Speak", "Both"],
+            state="readonly",
+            width=12,
+        ).pack(side=tk.LEFT, padx=(4, 0))
+
+        ttk.Label(
+            parent,
+            text="Paste = insert at cursor, Speak = read aloud via TTS, Both = speak + paste.",
+            foreground="#999999",
+            font=("", 8),
+        ).pack(fill=tk.X, pady=(0, 8))
+
+        # Timeout
+        timeout_row = ttk.Frame(parent)
+        timeout_row.pack(fill=tk.X, pady=(0, 4))
+        ttk.Label(timeout_row, text="Timeout:", width=16, anchor=tk.W).pack(
+            side=tk.LEFT
+        )
+        self._claude_code_timeout_var = tk.StringVar(value="120")
+        ttk.Spinbox(
+            timeout_row, from_=10, to=600, increment=10, width=6,
+            textvariable=self._claude_code_timeout_var,
+        ).pack(side=tk.LEFT, padx=(4, 0))
+        ttk.Label(timeout_row, text="seconds").pack(side=tk.LEFT, padx=(4, 0))
+
+        # Skip permissions toggle
+        self._claude_code_skip_perms_var = tk.BooleanVar()
+        ttk.Checkbutton(
+            parent,
+            text="Skip permission prompts (--dangerously-skip-permissions)",
+            variable=self._claude_code_skip_perms_var,
+        ).pack(fill=tk.X, pady=(4, 0))
+        ttk.Label(
+            parent,
+            text="Skips the tool-use allowlist. Only enable on trusted systems.",
+            foreground="#FF9966",
+            font=("", 8),
+        ).pack(fill=tk.X, pady=(0, 8))
+
+        # Continue conversation toggle
+        self._claude_code_continue_var = tk.BooleanVar()
+        ttk.Checkbutton(
+            parent,
+            text="Continue conversation (--continue)",
+            variable=self._claude_code_continue_var,
+        ).pack(fill=tk.X, pady=(4, 0))
+        ttk.Label(
+            parent,
+            text="Subsequent calls maintain context. Use tray menu to start fresh.",
+            foreground="#888888",
+            font=("", 8),
+        ).pack(fill=tk.X, pady=(0, 8))
+
+        # Hotkey display (read-only)
+        hotkey_row = ttk.Frame(parent)
+        hotkey_row.pack(fill=tk.X, pady=(4, 4))
+        ttk.Label(hotkey_row, text="Hotkey:", width=16, anchor=tk.W).pack(
+            side=tk.LEFT
+        )
+        self._claude_code_hotkey_label = ttk.Label(
+            hotkey_row, text=self._config.claude_code_hotkey,
+            foreground="#AAAAAA",
+        )
+        self._claude_code_hotkey_label.pack(side=tk.LEFT, padx=(4, 0))
+        ttk.Label(
+            hotkey_row, text="(change in config.toml)",
+            foreground="#666666", font=("", 8),
+        ).pack(side=tk.LEFT, padx=(8, 0))
+
+        ttk.Separator(parent, orient=tk.HORIZONTAL).pack(fill=tk.X, pady=(8, 8))
+
+        # Test button
+        ttk.Button(
+            parent, text="Test Connection", width=16,
+            command=self._test_claude_code,
+        ).pack(anchor=tk.W)
+
+    def _browse_claude_code_workdir(self) -> None:
+        """Open a directory chooser for Claude Code working directory."""
+        from tkinter import filedialog
+        directory = filedialog.askdirectory(
+            title="Select Claude Code Working Directory",
+            initialdir=self._claude_code_workdir_var.get() or None,
+        )
+        if directory:
+            self._claude_code_workdir_var.set(directory)
+
+    def _test_claude_code(self) -> None:
+        """Test Claude Code CLI availability and show result."""
+        try:
+            from claude_code import ClaudeCodeBackend
+            if ClaudeCodeBackend.is_available():
+                version = ClaudeCodeBackend.get_version() or "unknown version"
+                self._claude_code_status_var.set(f"Found: {version}")
+                self._claude_code_status_label.configure(foreground="#66BB6A")
+            else:
+                self._claude_code_status_var.set(
+                    "Not found. Install: npm i -g @anthropic-ai/claude-code"
+                )
+                self._claude_code_status_label.configure(foreground="#FF6B6B")
+        except Exception as e:
+            self._claude_code_status_var.set(f"Error: {e}")
+            self._claude_code_status_label.configure(foreground="#FF6B6B")
 
     def _populate_from_config(self) -> None:
         """Fill widget values from current config and keyring."""
@@ -1740,6 +1940,7 @@ class SettingsDialog:
             "ask_tts": "Ask AI + TTS (ask_tts)",
             "summary": "Transcribe + Paste (summary)",
             "prompt": "Ask AI + Paste (prompt)",
+            "claude_code": "Claude Code (claude_code)",
         }
         self._handsfree_pipeline_var.set(
             _pipeline_display.get(config.handsfree_pipeline, "Ask AI + TTS (ask_tts)")
@@ -1747,6 +1948,20 @@ class SettingsDialog:
         self._silence_timeout_var.set(str(config.silence_timeout_seconds))
         self._hf_max_recording_var.set(str(config.handsfree_max_recording_seconds))
         self._hf_cooldown_var.set(str(config.handsfree_cooldown_seconds))
+
+        # v1.2: Claude Code tab
+        self._claude_code_enabled_var.set(config.claude_code_enabled)
+        self._claude_code_workdir_var.set(config.claude_code_working_dir)
+        self._claude_code_prompt_text.delete("1.0", self._tk.END)
+        if config.claude_code_system_prompt:
+            self._claude_code_prompt_text.insert("1.0", config.claude_code_system_prompt)
+        _mode_display = {"paste": "Paste", "speak": "Speak", "both": "Both"}
+        self._claude_code_mode_var.set(
+            _mode_display.get(config.claude_code_response_mode, "Speak")
+        )
+        self._claude_code_timeout_var.set(str(config.claude_code_timeout))
+        self._claude_code_skip_perms_var.set(config.claude_code_skip_permissions)
+        self._claude_code_continue_var.set(config.claude_code_continue_conversation)
 
         # Show/hide backend sub-frames
         self._update_backend_ui()
@@ -3084,6 +3299,7 @@ class SettingsDialog:
             "Ask AI + TTS (ask_tts)": "ask_tts",
             "Transcribe + Paste (summary)": "summary",
             "Ask AI + Paste (prompt)": "prompt",
+            "Claude Code (claude_code)": "claude_code",
         }
         new_pipeline = _pipeline_save_map.get(self._handsfree_pipeline_var.get(), "ask_tts")
         if new_pipeline != config.handsfree_pipeline:
@@ -3116,6 +3332,47 @@ class SettingsDialog:
         if new_cooldown != config.handsfree_cooldown_seconds:
             changed_fields["handsfree_cooldown_seconds"] = new_cooldown
             config.handsfree_cooldown_seconds = new_cooldown
+
+        # v1.2: Claude Code
+        new_cc_enabled = self._claude_code_enabled_var.get()
+        if new_cc_enabled != config.claude_code_enabled:
+            changed_fields["claude_code_enabled"] = new_cc_enabled
+            config.claude_code_enabled = new_cc_enabled
+
+        new_cc_workdir = self._claude_code_workdir_var.get().strip()
+        if new_cc_workdir != config.claude_code_working_dir:
+            changed_fields["claude_code_working_dir"] = new_cc_workdir
+            config.claude_code_working_dir = new_cc_workdir
+
+        new_cc_prompt = self._claude_code_prompt_text.get("1.0", self._tk.END).strip()
+        if new_cc_prompt != config.claude_code_system_prompt:
+            changed_fields["claude_code_system_prompt"] = new_cc_prompt
+            config.claude_code_system_prompt = new_cc_prompt
+
+        _mode_save_map = {"Paste": "paste", "Speak": "speak", "Both": "both"}
+        new_cc_mode = _mode_save_map.get(self._claude_code_mode_var.get(), "speak")
+        if new_cc_mode != config.claude_code_response_mode:
+            changed_fields["claude_code_response_mode"] = new_cc_mode
+            config.claude_code_response_mode = new_cc_mode
+
+        try:
+            new_cc_timeout = int(self._claude_code_timeout_var.get())
+            new_cc_timeout = max(10, min(new_cc_timeout, 600))
+        except (ValueError, TypeError):
+            new_cc_timeout = config.claude_code_timeout
+        if new_cc_timeout != config.claude_code_timeout:
+            changed_fields["claude_code_timeout"] = new_cc_timeout
+            config.claude_code_timeout = new_cc_timeout
+
+        new_cc_skip_perms = self._claude_code_skip_perms_var.get()
+        if new_cc_skip_perms != config.claude_code_skip_permissions:
+            changed_fields["claude_code_skip_permissions"] = new_cc_skip_perms
+            config.claude_code_skip_permissions = new_cc_skip_perms
+
+        new_cc_continue = self._claude_code_continue_var.get()
+        if new_cc_continue != config.claude_code_continue_conversation:
+            changed_fields["claude_code_continue_conversation"] = new_cc_continue
+            config.claude_code_continue_conversation = new_cc_continue
 
         # Save non-secret fields to config.toml
         config.save_to_toml()

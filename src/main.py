@@ -85,6 +85,12 @@ from notifications import (
 )
 from api_server import start_api_server, stop_api_server
 from api_dispatch import APIController
+from claude_code import (
+    ClaudeCodeBackend,
+    ClaudeCodeError,
+    ClaudeCodeNotFoundError,
+    ClaudeCodeTimeoutError,
+)
 from tts_orchestrator import TTSOrchestrator
 
 logger = logging.getLogger(APP_NAME)
@@ -201,7 +207,12 @@ class VoicePasteApp:
             prompt_hotkey=config.prompt_hotkey,
             tts_hotkey=config.tts_hotkey,
             tts_ask_hotkey=config.tts_ask_hotkey,
+            claude_code_hotkey=config.claude_code_hotkey,
         )
+
+        # v1.2: Claude Code CLI backend
+        self._claude_code: ClaudeCodeBackend | None = None
+        self._rebuild_claude_code()
 
         # v0.3: TrayManager gets settings callback and state accessor
         # v0.8.7: Pass TTS config so startup notification shows TTS hotkeys
@@ -221,6 +232,10 @@ class VoicePasteApp:
             on_tts_cache_clear=lambda: self._tts_cache.clear(),
             on_language_changed=self._on_language_changed,
             get_current_language=lambda: self.config.transcription_language,
+            claude_code_enabled=config.claude_code_enabled,
+            claude_code_hotkey_label=config.claude_code_hotkey,
+            get_claude_code_available=lambda: self._claude_code is not None,
+            on_claude_new_conversation=self._on_claude_new_conversation,
         )
 
         # v1.2: TTS orchestrator (extracted from main.py)
@@ -352,6 +367,36 @@ class VoicePasteApp:
         else:
             logger.warning("TTS backend unavailable (no API key?).")
 
+    def _rebuild_claude_code(self) -> None:
+        """(Re)create the Claude Code backend based on current config.
+
+        Called on init and after settings changes (hot-reload).
+        """
+        if self.config.claude_code_enabled and ClaudeCodeBackend.is_available():
+            self._claude_code = ClaudeCodeBackend(
+                working_directory=self.config.claude_code_working_dir or None,
+                system_prompt=self.config.claude_code_system_prompt or None,
+                timeout_seconds=self.config.claude_code_timeout,
+                skip_permissions=self.config.claude_code_skip_permissions,
+                continue_conversation=self.config.claude_code_continue_conversation,
+            )
+            logger.info("Claude Code backend ready (cwd=%s).",
+                        self.config.claude_code_working_dir or "(default)")
+        else:
+            self._claude_code = None
+            if self.config.claude_code_enabled:
+                logger.warning("Claude Code enabled but CLI not found in PATH.")
+            else:
+                logger.debug("Claude Code integration disabled.")
+
+    def _on_claude_new_conversation(self) -> None:
+        """Reset Claude Code conversation state (tray menu callback)."""
+        if self._claude_code:
+            self._claude_code.new_conversation()
+            self._tray_manager.notify(APP_NAME, "Claude Code: New conversation started.")
+        else:
+            logger.debug("New conversation requested but Claude Code not active.")
+
     def _create_tts_cache(self) -> TTSAudioCache:
         """Create a TTS audio cache from current config."""
         cfg = CacheConfig(
@@ -474,6 +519,57 @@ class VoicePasteApp:
             self._stop_recording_and_process()
         else:
             logger.info("TTS Ask hotkey ignored (state=%s).", current.value)
+
+    def _on_claude_code_hotkey(self) -> None:
+        """Handle the Claude Code hotkey (Ctrl+Alt+C).
+
+        Records speech, transcribes, sends to Claude Code CLI, then
+        delivers the response based on config (paste, speak, or both).
+        """
+        current = self.state
+        logger.info("Claude Code hotkey invoked. State: %s", current.value)
+
+        if current == AppState.SPEAKING:
+            logger.info("Stopping TTS playback.")
+            self._audio_player.stop()
+            return
+
+        if current == AppState.IDLE:
+            if not self._claude_code:
+                if not ClaudeCodeBackend.is_available():
+                    self._show_error(
+                        "Claude Code CLI not found.\n"
+                        "Install: npm i -g @anthropic-ai/claude-code"
+                    )
+                else:
+                    self._show_error(
+                        "Claude Code integration is disabled.\n"
+                        "Enable in Settings > Claude Code."
+                    )
+                return
+            logger.info("Transition: IDLE -> RECORDING (claude_code mode)")
+            self._active_mode = "claude_code"
+            self._start_recording()
+
+        elif current == AppState.RECORDING:
+            if self._recording_during_processing:
+                logger.info("Stopping queued recording (pipeline still processing).")
+                self._stop_queued_recording()
+            else:
+                logger.info("Transition: RECORDING -> PROCESSING")
+                self._stop_recording_and_process()
+
+        elif current == AppState.PROCESSING:
+            if self._recording_during_processing:
+                logger.info("Queue full: already recording during PROCESSING.")
+                self._play_audio_cue(play_error_cue)
+            else:
+                logger.info("Starting queued recording during PROCESSING.")
+                self._queued_mode = "claude_code"
+                self._start_queued_recording()
+
+        else:
+            logger.info("Claude Code hotkey ignored (state=%s).", current.value)
 
     def _run_tts_pipeline(self, text: str) -> None:
         """Synthesize text and play audio. Delegates to TTSOrchestrator."""
@@ -610,7 +706,10 @@ class VoicePasteApp:
 
         # Set pipeline mode and start recording with silence auto-stop
         # Map config pipeline names to internal _active_mode names
-        _pipeline_to_mode = {"ask_tts": "tts_ask", "summary": "summary", "prompt": "prompt"}
+        _pipeline_to_mode = {
+            "ask_tts": "tts_ask", "summary": "summary",
+            "prompt": "prompt", "claude_code": "claude_code",
+        }
         self._active_mode = _pipeline_to_mode.get(self.config.handsfree_pipeline, "tts_ask")
         # Start recording for hands-free pipeline
         self._start_recording_handsfree()
@@ -796,6 +895,29 @@ class VoicePasteApp:
         if changed_fields.keys() & api_keys:
             self._stop_api_server()
             self._start_api_server()
+
+        # v1.2: Claude Code hot-reload
+        claude_keys = {
+            "claude_code_enabled", "claude_code_working_dir",
+            "claude_code_system_prompt", "claude_code_timeout",
+            "claude_code_response_mode", "claude_code_skip_permissions",
+            "claude_code_continue_conversation",
+        }
+        if changed_fields.keys() & claude_keys:
+            self._rebuild_claude_code()
+            if self.config.claude_code_enabled and self._claude_code:
+                if not self._hotkey_manager._slots["claude_code"].registered:
+                    try:
+                        self._hotkey_manager.register_claude_code(
+                            self._on_claude_code_hotkey
+                        )
+                    except Exception as exc:
+                        logger.warning(
+                            "Failed to register Claude Code hotkey: %s", exc
+                        )
+            else:
+                self._hotkey_manager.unregister_claude_code()
+            logger.info("Claude Code backend rebuilt with updated settings.")
 
         # Notify user via toast
         self._tray_manager.notify(
@@ -1306,8 +1428,72 @@ class VoicePasteApp:
                 self._set_state(AppState.IDLE)
                 return
 
+            # v1.2: Claude Code mode — send transcript to Claude CLI
+            if self._active_mode == "claude_code":
+                self._tray_manager.set_processing_step("Asking Claude...")
+                try:
+                    result = self._claude_code.invoke(transcript)
+                    response_text = result.text
+                except ClaudeCodeNotFoundError:
+                    self._tray_manager.notify(
+                        APP_NAME,
+                        "Claude Code CLI not found.\n"
+                        "Install: npm i -g @anthropic-ai/claude-code",
+                    )
+                    self._set_state(AppState.IDLE)
+                    return
+                except ClaudeCodeTimeoutError:
+                    self._tray_manager.notify(APP_NAME, "Claude Code timed out.")
+                    self._set_state(AppState.IDLE)
+                    return
+                except ClaudeCodeError as e:
+                    self._tray_manager.notify(
+                        APP_NAME, f"Claude Code error:\n{e}"
+                    )
+                    self._set_state(AppState.IDLE)
+                    return
+
+                if not response_text or not response_text.strip():
+                    self._tray_manager.notify(APP_NAME, "Claude returned empty response.")
+                    self._set_state(AppState.IDLE)
+                    return
+
+                # Route response based on config
+                mode = self.config.claude_code_response_mode
+                if mode in ("speak", "both"):
+                    # Put answer on clipboard for user access
+                    clipboard_restore(response_text)
+                    clip_backup = None  # Don't restore old clipboard
+                    logger.info("Claude answer placed on clipboard.")
+                    if self._tts:
+                        try:
+                            self._tts_orchestrator.synthesize_for_ask(response_text)
+                        except TTSError as e:
+                            logger.error("TTS error in Claude Code pipeline: %s", e)
+                            self._tray_manager.notify(
+                                APP_NAME,
+                                f"Answer on clipboard.\nTTS failed: {e}",
+                            )
+                        finally:
+                            self._hotkey_manager.unregister_cancel()
+                    else:
+                        self._tray_manager.notify(
+                            APP_NAME,
+                            "Answer on clipboard (TTS not configured).",
+                        )
+                        self._set_state(AppState.IDLE)
+                    if mode == "speak":
+                        return
+                    # "both" falls through to paste below
+
+                if mode in ("paste", "both"):
+                    summary = response_text
+                    # Falls through to the normal paste flow below
+                else:
+                    return  # speak-only, already handled
+
             # v0.6: TTS Ask mode — speak the answer instead of pasting
-            if self._active_mode == "tts_ask" and self._tts:
+            elif self._active_mode == "tts_ask" and self._tts:
                 # Put answer on clipboard (silently, no paste) using ctypes API
                 clipboard_restore(summary)
                 logger.info("AI answer placed on clipboard.")
@@ -1550,13 +1736,26 @@ class VoicePasteApp:
                     self.config.tts_ask_hotkey, exc,
                 )
 
+        # v1.2: Register Claude Code hotkey (non-fatal if registration fails)
+        if self.config.claude_code_enabled and self._claude_code:
+            try:
+                self._hotkey_manager.register_claude_code(
+                    self._on_claude_code_hotkey
+                )
+            except Exception as exc:
+                logger.warning(
+                    "Failed to register Claude Code hotkey '%s': %s",
+                    self.config.claude_code_hotkey, exc,
+                )
+
         logger.info(
-            "Hotkeys registered: summary='%s', prompt='%s', tts='%s', tts_ask='%s'. "
-            "Waiting for user input.",
+            "Hotkeys registered: summary='%s', prompt='%s', tts='%s', tts_ask='%s', "
+            "claude_code='%s'. Waiting for user input.",
             self.config.hotkey,
             self.config.prompt_hotkey,
             self.config.tts_hotkey if self.config.tts_enabled else "(disabled)",
             self.config.tts_ask_hotkey if self.config.tts_enabled else "(disabled)",
+            self.config.claude_code_hotkey if self.config.claude_code_enabled else "(disabled)",
         )
 
         # v1.0: Run startup cache eviction on a deferred thread

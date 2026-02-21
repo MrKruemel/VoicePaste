@@ -144,7 +144,7 @@ DEFAULT_HANDSFREE_MAX_RECORDING_SECONDS = 120
 DEFAULT_HANDSFREE_PIPELINE = "ask_tts"  # "ask_tts", "summary", "prompt"
 DEFAULT_HANDSFREE_COOLDOWN_SECONDS = 3.0
 DEFAULT_HANDSFREE_BUFFER_SECONDS = 2.5
-HANDSFREE_PIPELINES = ("ask_tts", "summary", "prompt")
+HANDSFREE_PIPELINES = ("ask_tts", "summary", "prompt", "claude_code")
 
 # Wake word confirmation tone: rising triple chirp
 AUDIO_CUE_WAKEWORD_FREQS = (660, 880, 1100)
@@ -474,6 +474,17 @@ PIPER_VOICE_MODELS: dict[str, dict[str, Any]] = {
         },
     },
 }
+
+# --- v1.2: Claude Code CLI integration ---
+DEFAULT_CLAUDE_CODE_ENABLED = False
+DEFAULT_CLAUDE_CODE_HOTKEY = "ctrl+alt+c"
+DEFAULT_CLAUDE_CODE_WORKING_DIR = ""      # empty = VoicePaste's cwd
+DEFAULT_CLAUDE_CODE_SYSTEM_PROMPT = ""
+DEFAULT_CLAUDE_CODE_TIMEOUT = 120         # seconds
+DEFAULT_CLAUDE_CODE_RESPONSE_MODE = "speak"  # "paste" | "speak" | "both"
+DEFAULT_CLAUDE_CODE_SKIP_PERMISSIONS = False
+DEFAULT_CLAUDE_CODE_CONTINUE_CONVERSATION = False
+CLAUDE_CODE_RESPONSE_MODES = ("paste", "speak", "both")
 
 # --- v1.0: TTS Audio Cache configuration ---
 DEFAULT_TTS_CACHE_ENABLED = True

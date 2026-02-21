@@ -15,7 +15,16 @@ from pathlib import Path
 from typing import Optional
 
 from constants import (
+    CLAUDE_CODE_RESPONSE_MODES,
     DEFAULT_AUDIO_DEVICE_INDEX,
+    DEFAULT_CLAUDE_CODE_CONTINUE_CONVERSATION,
+    DEFAULT_CLAUDE_CODE_ENABLED,
+    DEFAULT_CLAUDE_CODE_HOTKEY,
+    DEFAULT_CLAUDE_CODE_RESPONSE_MODE,
+    DEFAULT_CLAUDE_CODE_SKIP_PERMISSIONS,
+    DEFAULT_CLAUDE_CODE_SYSTEM_PROMPT,
+    DEFAULT_CLAUDE_CODE_TIMEOUT,
+    DEFAULT_CLAUDE_CODE_WORKING_DIR,
     DEFAULT_HANDSFREE_COOLDOWN_SECONDS,
     DEFAULT_HANDSFREE_ENABLED,
     DEFAULT_HANDSFREE_MAX_RECORDING_SECONDS,
@@ -278,6 +287,16 @@ class AppConfig:
     tts_export_enabled: bool = DEFAULT_TTS_EXPORT_ENABLED
     tts_export_path: str = DEFAULT_TTS_EXPORT_PATH
 
+    # --- v1.2: Claude Code CLI integration ---
+    claude_code_enabled: bool = DEFAULT_CLAUDE_CODE_ENABLED
+    claude_code_hotkey: str = DEFAULT_CLAUDE_CODE_HOTKEY
+    claude_code_working_dir: str = DEFAULT_CLAUDE_CODE_WORKING_DIR
+    claude_code_system_prompt: str = DEFAULT_CLAUDE_CODE_SYSTEM_PROMPT
+    claude_code_timeout: int = DEFAULT_CLAUDE_CODE_TIMEOUT
+    claude_code_response_mode: str = DEFAULT_CLAUDE_CODE_RESPONSE_MODE
+    claude_code_skip_permissions: bool = DEFAULT_CLAUDE_CODE_SKIP_PERMISSIONS
+    claude_code_continue_conversation: bool = DEFAULT_CLAUDE_CODE_CONTINUE_CONVERSATION
+
     @property
     def config_path(self) -> Path:
         """Path to the config.toml file."""
@@ -439,7 +458,7 @@ match_mode = "{esc(self.wake_phrase_match_mode)}"
 silence_timeout = {self.silence_timeout_seconds}
 # Maximum recording duration in seconds (hands-free mode)
 max_recording_seconds = {self.handsfree_max_recording_seconds}
-# Pipeline: "ask_tts" (ask AI + speak), "summary" (transcribe + paste), "prompt" (ask AI + paste)
+# Pipeline: "ask_tts" (ask AI + speak), "summary" (transcribe + paste), "prompt" (ask AI + paste), "claude_code" (Claude Code CLI)
 pipeline = "{esc(self.handsfree_pipeline)}"
 # Cooldown in seconds after wake word detection (prevents re-trigger)
 cooldown_seconds = {self.handsfree_cooldown_seconds}
@@ -455,6 +474,17 @@ max_entries = {self.tts_cache_max_entries}
 # Save generated TTS audio to a user-chosen folder with readable filenames.
 enabled = {str(self.tts_export_enabled).lower()}
 export_path = "{esc(self.tts_export_path)}"
+
+[claude_code]
+# Claude Code CLI integration (requires `claude` in PATH)
+enabled = {str(self.claude_code_enabled).lower()}
+hotkey = "{esc(self.claude_code_hotkey)}"
+working_dir = "{esc(self.claude_code_working_dir)}"
+system_prompt = "{esc(self.claude_code_system_prompt)}"
+response_mode = "{esc(self.claude_code_response_mode)}"
+timeout = {self.claude_code_timeout}
+skip_permissions = {str(self.claude_code_skip_permissions).lower()}
+continue_conversation = {str(self.claude_code_continue_conversation).lower()}
 
 [feedback]
 audio_cues = {str(self.audio_cues_enabled).lower()}
@@ -792,6 +822,47 @@ def load_config() -> Optional[AppConfig]:
     tts_export_enabled = bool(tts_export_section.get("enabled", DEFAULT_TTS_EXPORT_ENABLED))
     tts_export_path = str(tts_export_section.get("export_path", DEFAULT_TTS_EXPORT_PATH)).strip()
 
+    # --- v1.2: Claude Code CLI integration ---
+    claude_section = data.get("claude_code", {})
+    claude_code_enabled = bool(claude_section.get("enabled", DEFAULT_CLAUDE_CODE_ENABLED))
+    claude_code_working_dir = str(claude_section.get(
+        "working_dir", DEFAULT_CLAUDE_CODE_WORKING_DIR)).strip()
+    claude_code_system_prompt = str(claude_section.get(
+        "system_prompt", DEFAULT_CLAUDE_CODE_SYSTEM_PROMPT))
+    claude_code_timeout = int(claude_section.get("timeout", DEFAULT_CLAUDE_CODE_TIMEOUT))
+    claude_code_timeout = max(10, min(claude_code_timeout, 600))
+    claude_code_response_mode = claude_section.get(
+        "response_mode", DEFAULT_CLAUDE_CODE_RESPONSE_MODE)
+    if claude_code_response_mode not in CLAUDE_CODE_RESPONSE_MODES:
+        logger.warning(
+            "Invalid claude_code_response_mode '%s'. Falling back to '%s'.",
+            claude_code_response_mode, DEFAULT_CLAUDE_CODE_RESPONSE_MODE,
+        )
+        claude_code_response_mode = DEFAULT_CLAUDE_CODE_RESPONSE_MODE
+    claude_code_skip_permissions = bool(claude_section.get(
+        "skip_permissions", DEFAULT_CLAUDE_CODE_SKIP_PERMISSIONS))
+    claude_code_continue_conversation = bool(claude_section.get(
+        "continue_conversation", DEFAULT_CLAUDE_CODE_CONTINUE_CONVERSATION))
+
+    claude_code_hotkey = hotkey_section.get(
+        "claude_code_combination", DEFAULT_CLAUDE_CODE_HOTKEY)
+    # Also check the [claude_code] section for the hotkey
+    if "hotkey" in claude_section:
+        claude_code_hotkey = str(claude_section["hotkey"]).strip()
+    if claude_code_hotkey and claude_code_hotkey.strip():
+        claude_code_hotkey = claude_code_hotkey.strip()
+        try:
+            _parse_hotkey(claude_code_hotkey)
+            logger.info("Claude Code hotkey configured: '%s'", claude_code_hotkey)
+        except Exception as e:
+            logger.warning(
+                "Invalid Claude Code hotkey '%s': %s. Falling back to '%s'.",
+                claude_code_hotkey, e, DEFAULT_CLAUDE_CODE_HOTKEY,
+            )
+            claude_code_hotkey = DEFAULT_CLAUDE_CODE_HOTKEY
+    else:
+        claude_code_hotkey = DEFAULT_CLAUDE_CODE_HOTKEY
+
     # --- v0.9: Hands-Free Mode ---
     handsfree_section = data.get("handsfree", {})
     handsfree_enabled = bool(handsfree_section.get("enabled", DEFAULT_HANDSFREE_ENABLED))
@@ -916,6 +987,15 @@ def load_config() -> Optional[AppConfig]:
         # v1.0: TTS Audio Export
         tts_export_enabled=tts_export_enabled,
         tts_export_path=tts_export_path,
+        # v1.2: Claude Code CLI
+        claude_code_enabled=claude_code_enabled,
+        claude_code_hotkey=claude_code_hotkey,
+        claude_code_working_dir=claude_code_working_dir,
+        claude_code_system_prompt=claude_code_system_prompt,
+        claude_code_timeout=claude_code_timeout,
+        claude_code_response_mode=claude_code_response_mode,
+        claude_code_skip_permissions=claude_code_skip_permissions,
+        claude_code_continue_conversation=claude_code_continue_conversation,
         # v0.9: Hands-Free Mode
         handsfree_enabled=handsfree_enabled,
         wake_phrase=wake_phrase,

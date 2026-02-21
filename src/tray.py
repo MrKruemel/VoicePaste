@@ -129,6 +129,10 @@ class TrayManager:
         on_tts_cache_clear: Optional[Callable[[], int]] = None,
         on_language_changed: Optional[Callable[[str], None]] = None,
         get_current_language: Optional[Callable[[], str]] = None,
+        claude_code_enabled: bool = False,
+        claude_code_hotkey_label: str = "Ctrl+Alt+C",
+        get_claude_code_available: Optional[Callable[[], bool]] = None,
+        on_claude_new_conversation: Optional[Callable[[], None]] = None,
     ) -> None:
         """Initialize the tray manager.
 
@@ -163,6 +167,10 @@ class TrayManager:
         self._on_tts_cache_clear = on_tts_cache_clear
         self._on_language_changed = on_language_changed
         self._get_current_language = get_current_language
+        self._claude_code_enabled = claude_code_enabled
+        self._claude_code_hotkey_label = claude_code_hotkey_label
+        self._get_claude_code_available = get_claude_code_available
+        self._on_claude_new_conversation = on_claude_new_conversation
         self._icon: Optional[pystray.Icon] = None
         self._running = False
         self._current_state = AppState.IDLE
@@ -262,6 +270,26 @@ class TrayManager:
                 "Language",
                 self._build_language_submenu(),
                 enabled=lambda _: self._is_settings_enabled(),
+            ),
+            # v1.2: Claude Code status (only shown when enabled)
+            pystray.MenuItem(
+                lambda _: (
+                    "Claude Code: Ready"
+                    if self._get_claude_code_available and self._get_claude_code_available()
+                    else "Claude Code: N/A"
+                ),
+                None,
+                enabled=False,
+                visible=lambda _: self._claude_code_enabled,
+            ),
+            pystray.MenuItem(
+                "New Conversation",
+                lambda: (
+                    self._on_claude_new_conversation()
+                    if self._on_claude_new_conversation
+                    else None
+                ),
+                visible=lambda _: self._claude_code_enabled,
             ),
             # v0.9: Hands-Free toggle
             pystray.MenuItem(
@@ -552,6 +580,10 @@ class TrayManager:
                 )
                 notification_lines.append(
                     f"{self._tts_ask_hotkey_label}: Ask AI + TTS"
+                )
+            if self._claude_code_enabled:
+                notification_lines.append(
+                    f"{self._claude_code_hotkey_label}: Claude Code"
                 )
             notification_lines.append("Right-click for options.")
             icon.notify(
