@@ -521,6 +521,58 @@ class SettingsDialog:
         self._backend_combo.pack(side=tk.LEFT, padx=(4, 0))
         self._backend_combo.bind("<<ComboboxSelected>>", self._on_backend_changed)
 
+        # Language selector row
+        lang_row = ttk.Frame(parent)
+        lang_row.pack(fill=tk.X, pady=(0, 4))
+
+        ttk.Label(lang_row, text="Language:", width=10, anchor=tk.W).pack(side=tk.LEFT)
+
+        from constants import SUPPORTED_LANGUAGES
+        self._lang_var = tk.StringVar()
+        self._lang_display_values = list(SUPPORTED_LANGUAGES.values())
+        self._lang_code_keys = list(SUPPORTED_LANGUAGES.keys())
+        self._lang_combo = ttk.Combobox(
+            lang_row,
+            textvariable=self._lang_var,
+            values=self._lang_display_values,
+            state="readonly",
+            width=35,
+        )
+        self._lang_combo.pack(side=tk.LEFT, padx=(4, 0))
+
+        lang_hint = ttk.Label(
+            lang_row,
+            text="\"Auto-detect\" lets Whisper identify the language automatically",
+            foreground="#999999",
+            font=("", 8),
+        )
+        lang_hint.pack(side=tk.LEFT, padx=(8, 0))
+
+        # Audio input device selector row
+        mic_row = ttk.Frame(parent)
+        mic_row.pack(fill=tk.X, pady=(0, 4))
+
+        ttk.Label(mic_row, text="Microphone:", width=10, anchor=tk.W).pack(side=tk.LEFT)
+
+        self._audio_device_var = tk.StringVar()
+        self._audio_device_combo = ttk.Combobox(
+            mic_row,
+            textvariable=self._audio_device_var,
+            state="readonly",
+            width=45,
+        )
+        self._audio_device_combo.pack(side=tk.LEFT, padx=(4, 0))
+
+        # Populate device list
+        self._audio_device_map: list[tuple[int | None, str]] = []
+        self._refresh_audio_devices()
+
+        refresh_btn = ttk.Button(
+            mic_row, text="Refresh", width=8,
+            command=self._refresh_audio_devices,
+        )
+        refresh_btn.pack(side=tk.LEFT, padx=(4, 0))
+
         # --- Cloud sub-frame (shown when backend = cloud) ---
         self._cloud_frame = ttk.Frame(parent)
 
@@ -650,6 +702,32 @@ class SettingsDialog:
         self._transcription_error = ttk.Label(
             parent, text="", foreground="#FF6B6B", font=("", 8)
         )
+
+    def _refresh_audio_devices(self) -> None:
+        """Query sounddevice for available input devices and populate the combo."""
+        try:
+            import sounddevice as sd
+            devices = sd.query_devices()
+        except Exception:
+            self._audio_device_map = [(None, "System Default")]
+            self._audio_device_combo["values"] = ["System Default"]
+            self._audio_device_var.set("System Default")
+            return
+
+        self._audio_device_map = [(None, "System Default")]
+        for i, dev in enumerate(devices):
+            if dev.get("max_input_channels", 0) > 0:
+                name = dev.get("name", f"Device {i}")
+                label = f"{name} (#{i})"
+                self._audio_device_map.append((i, label))
+
+        display_values = [label for _, label in self._audio_device_map]
+        self._audio_device_combo["values"] = display_values
+
+        # Preserve current selection if still valid
+        current = self._audio_device_var.get()
+        if current not in display_values:
+            self._audio_device_var.set("System Default")
 
     def _build_summarization_tab(self, parent: "ttk.Frame") -> None:
         """Build widgets for the Summarization tab.
@@ -1460,6 +1538,29 @@ class SettingsDialog:
             self._backend_var.set("Local (faster-whisper, offline)")
         else:
             self._backend_var.set("Cloud (OpenAI Whisper API)")
+
+        # Transcription language
+        from constants import SUPPORTED_LANGUAGES
+        lang_code = config.transcription_language
+        if lang_code in SUPPORTED_LANGUAGES:
+            self._lang_var.set(SUPPORTED_LANGUAGES[lang_code])
+        else:
+            # Unknown language code -- show it directly
+            self._lang_var.set(lang_code)
+
+        # Audio input device
+        device_idx = config.audio_device_index
+        if device_idx is not None:
+            # Find the matching entry in the device map
+            for idx, label in self._audio_device_map:
+                if idx == device_idx:
+                    self._audio_device_var.set(label)
+                    break
+            else:
+                # Device index not found — might be unplugged; show as default
+                self._audio_device_var.set("System Default")
+        else:
+            self._audio_device_var.set("System Default")
 
         # OpenAI API Key
         if config.openai_api_key:
@@ -2694,6 +2795,28 @@ class SettingsDialog:
         if new_backend != config.stt_backend:
             changed_fields["stt_backend"] = new_backend
             config.stt_backend = new_backend
+
+        # Transcription language
+        lang_display = self._lang_var.get()
+        try:
+            lang_idx = self._lang_display_values.index(lang_display)
+            new_language = self._lang_code_keys[lang_idx]
+        except (ValueError, IndexError):
+            new_language = lang_display  # Direct code if not in display list
+        if new_language != config.transcription_language:
+            changed_fields["transcription_language"] = new_language
+            config.transcription_language = new_language
+
+        # Audio input device
+        device_label = self._audio_device_var.get()
+        new_device_index = None  # default
+        for idx, label in self._audio_device_map:
+            if label == device_label:
+                new_device_index = idx
+                break
+        if new_device_index != config.audio_device_index:
+            changed_fields["audio_device_index"] = new_device_index
+            config.audio_device_index = new_device_index
 
         # v0.4: Local STT fields
         new_model_size = self._get_selected_model_key()

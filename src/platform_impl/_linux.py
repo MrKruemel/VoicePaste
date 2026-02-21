@@ -19,6 +19,9 @@ from pathlib import Path
 
 from constants import PASTE_DELAY_MS
 
+# SEC-070: Maximum clipboard content size to prevent memory issues
+_MAX_CLIPBOARD_BYTES = 1 * 1024 * 1024  # 1 MB
+
 logger = logging.getLogger(__name__)
 
 
@@ -38,6 +41,7 @@ def _detect_session_type() -> str:
 def clipboard_backup() -> str | None:
     """Read clipboard text via xclip (X11) or wl-paste (Wayland)."""
     session = _detect_session_type()
+    content = None
     try:
         if session == "wayland":
             tool = shutil.which("wl-paste")
@@ -48,7 +52,7 @@ def clipboard_backup() -> str | None:
                 [tool, "--no-newline"],
                 capture_output=True, text=True, timeout=2,
             )
-            return result.stdout if result.returncode == 0 else None
+            content = result.stdout if result.returncode == 0 else None
         else:
             tool = shutil.which("xclip") or shutil.which("xsel")
             if not tool:
@@ -59,13 +63,23 @@ def clipboard_backup() -> str | None:
             else:
                 cmd = [tool, "--clipboard", "-o"]
             result = subprocess.run(cmd, capture_output=True, text=True, timeout=2)
-            return result.stdout if result.returncode == 0 else None
+            content = result.stdout if result.returncode == 0 else None
     except subprocess.TimeoutExpired:
         logger.warning("Clipboard backup timed out.")
         return None
     except Exception:
         logger.debug("Error reading clipboard for backup.")
         return None
+
+    # SEC-070: Guard against huge clipboard content
+    if content is not None and len(content) > _MAX_CLIPBOARD_BYTES:
+        logger.warning(
+            "Clipboard content too large (%d bytes), skipping backup.",
+            len(content),
+        )
+        return None
+
+    return content
 
 
 def clipboard_restore(backup: str | None) -> None:

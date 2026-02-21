@@ -16,6 +16,7 @@ import numpy as np
 import sounddevice as sd
 
 from constants import (
+    DEFAULT_AUDIO_DEVICE_INDEX,
     DEFAULT_CHANNELS,
     DEFAULT_DTYPE,
     DEFAULT_SAMPLE_RATE,
@@ -48,6 +49,7 @@ class AudioRecorder:
         silence_timeout_seconds: float = 3.0,
         silence_threshold_rms: float = 300.0,
         max_duration_override: Optional[int] = None,
+        device: Optional[int] = DEFAULT_AUDIO_DEVICE_INDEX,
     ) -> None:
         """Initialize the audio recorder.
 
@@ -68,10 +70,12 @@ class AudioRecorder:
                 (int16 scale, ~300 works for typical environments).
             max_duration_override: Override MAX_RECORDING_DURATION_SECONDS
                 (e.g. 120s for hands-free mode).
+            device: PortAudio device index for input. None = system default.
         """
         self.sample_rate = sample_rate
         self.channels = channels
         self.dtype = dtype
+        self._device = device
         self._frames: list[np.ndarray] = []
         self._stream: Optional[sd.InputStream] = None
         self._lock = threading.Lock()
@@ -142,11 +146,15 @@ class AudioRecorder:
             self._frames = []
 
             try:
-                # Check if any input device is available
-                device_info = sd.query_devices(kind="input")
+                # Check if the target input device is available
+                device_info = sd.query_devices(
+                    self._device if self._device is not None else None,
+                    kind="input",
+                )
                 logger.debug(
-                    "Using input device: %s",
+                    "Using input device: %s (index=%s)",
                     device_info.get("name", "unknown") if isinstance(device_info, dict) else "default",
+                    self._device,
                 )
             except sd.PortAudioError:
                 logger.error("No microphone detected. Cannot start recording.")
@@ -157,6 +165,7 @@ class AudioRecorder:
                     samplerate=self.sample_rate,
                     channels=self.channels,
                     dtype=self.dtype,
+                    device=self._device,
                     callback=self._audio_callback,
                 )
                 self._stream.start()

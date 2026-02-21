@@ -49,7 +49,9 @@ from constants import (
     PASTE_COUNTDOWN_BEEP_DURATION_MS,
     PASTE_COUNTDOWN_BEEP_FREQ,
     PROMPT_SYSTEM_PROMPT,
+    SUPPORTED_LANGUAGES,
     TTS_MAX_TEXT_LENGTH,
+    VALID_TRANSITIONS,
 )
 from config import AppConfig, load_config
 from audio import AudioRecorder
@@ -82,6 +84,8 @@ from notifications import (
     play_wakeword_cue,
 )
 from api_server import start_api_server, stop_api_server
+from api_dispatch import APIController
+from tts_orchestrator import TTSOrchestrator
 
 logger = logging.getLogger(APP_NAME)
 
@@ -164,7 +168,10 @@ class VoicePasteApp:
         self._active_mode: str = "summary"  # "summary", "prompt", "tts", "tts_ask"
 
         # Initialize components
-        self._recorder = AudioRecorder(on_auto_stop=self._on_auto_stop)
+        self._recorder = AudioRecorder(
+            on_auto_stop=self._on_auto_stop,
+            device=config.audio_device_index,
+        )
 
         # v0.4: STT backend via factory (cloud or local)
         self._stt = create_stt_backend(config)
@@ -212,10 +219,31 @@ class VoicePasteApp:
             get_tts_cache_entries=lambda: self._tts_cache.list_entries(),
             on_tts_replay=lambda eid: self.replay_tts_entry(eid),
             on_tts_cache_clear=lambda: self._tts_cache.clear(),
+            on_language_changed=self._on_language_changed,
+            get_current_language=lambda: self.config.transcription_language,
         )
+
+        # v1.2: TTS orchestrator (extracted from main.py)
+        self._tts_orchestrator = TTSOrchestrator(
+            config=self.config,
+            tts_backend=self._tts,
+            audio_player=self._audio_player,
+            tts_cache=self._tts_cache,
+            tts_exporter=self._tts_exporter,
+            set_state=self._set_state,
+            get_state=lambda: self.state,
+            register_cancel=self._hotkey_manager.register_cancel,
+            unregister_cancel=self._hotkey_manager.unregister_cancel,
+            show_error=self._show_error,
+        )
+        self._tts_orchestrator.on_cancel = self._on_cancel
 
         self._shutdown_event = threading.Event()
         self._pipeline_thread: threading.Thread | None = None
+        # Pipeline queueing: allow one recording while processing
+        self._queued_audio: bytes | None = None
+        self._queued_mode: str = "summary"
+        self._recording_during_processing: bool = False
         # v0.9: Confirm-before-paste synchronization
         self._paste_confirm_event = threading.Event()
         self._paste_cancel_event = threading.Event()
@@ -225,6 +253,15 @@ class VoicePasteApp:
         # v0.9: HTTP API server
         self._api_server = None
         self._api_thread = None
+        # v1.1: API dispatch controller (extracted from main.py)
+        self._api_controller = APIController(
+            app=self,
+            tts_backend=self._tts,
+            audio_player=self._audio_player,
+            tts_cache=self._tts_cache,
+            tts_exporter=self._tts_exporter,
+            paste_cancel_event=self._paste_cancel_event,
+        )
 
     @property
     def state(self) -> AppState:
@@ -235,7 +272,8 @@ class VoicePasteApp:
     def _set_state(self, new_state: AppState) -> None:
         """Set the application state (thread-safe).
 
-        Updates the tray icon to reflect the new state.
+        Validates the transition against the explicit transition table,
+        updates the tray icon to reflect the new state.
         All state transitions are logged.
 
         Args:
@@ -243,6 +281,12 @@ class VoicePasteApp:
         """
         with self._state_lock:
             old_state = self._state
+            if old_state != new_state and (old_state, new_state) not in VALID_TRANSITIONS:
+                logger.error(
+                    "Invalid state transition: %s -> %s",
+                    old_state.value,
+                    new_state.value,
+                )
             self._state = new_state
             logger.info("State: %s -> %s", old_state.value, new_state.value)
 
@@ -320,27 +364,11 @@ class VoicePasteApp:
 
     def _get_tts_cache_key(self, text: str) -> CacheKey:
         """Build a CacheKey from the current TTS config and text."""
-        config = self.config
-        if config.tts_provider == "piper":
-            return CacheKey(
-                provider="piper",
-                voice_id=config.tts_local_voice,
-                text=text,
-            )
-        return CacheKey(
-            provider="elevenlabs",
-            voice_id=config.tts_voice_id,
-            text=text,
-        )
+        return self._tts_orchestrator.get_cache_key(text)
 
     def _get_tts_voice_label(self) -> str:
         """Get a human-readable label for the current TTS voice."""
-        config = self.config
-        if config.tts_provider == "piper":
-            return config.tts_local_voice
-        from constants import ELEVENLABS_VOICE_PRESETS
-        preset = ELEVENLABS_VOICE_PRESETS.get(config.tts_voice_id, {})
-        return preset.get("name", config.tts_voice_id)
+        return self._tts_orchestrator.get_voice_label()
 
     def _create_tts_exporter(self) -> TTSAudioExporter:
         """Create a TTS audio exporter from current config.
@@ -357,49 +385,12 @@ class VoicePasteApp:
         )
 
     def _export_tts_audio(self, text: str, audio_data: bytes) -> None:
-        """Export TTS audio to the user's export directory if enabled.
-
-        This is a fire-and-forget helper. Errors are logged but never
-        raised, so export failures do not disrupt the TTS pipeline.
-
-        Args:
-            text: The TTS input text (used for filename generation).
-            audio_data: Raw audio bytes to export.
-        """
-        try:
-            result = self._tts_exporter.export(text, audio_data)
-            if result is not None:
-                logger.info("TTS audio exported to: %s", result)
-        except Exception:
-            logger.exception("Error exporting TTS audio (non-fatal).")
+        """Export TTS audio to the user's export directory if enabled."""
+        self._tts_orchestrator.export_audio(text, audio_data)
 
     def replay_tts_entry(self, entry_id: str) -> bool:
         """Replay a cached TTS entry by its ID. Returns True if started."""
-        if self.state != AppState.IDLE:
-            return False
-        audio_data = self._tts_cache.replay(entry_id)
-        if audio_data is None:
-            return False
-        self._set_state(AppState.SPEAKING)
-        thread = threading.Thread(
-            target=self._play_cached_audio,
-            args=(audio_data,),
-            daemon=True,
-            name="cache-replay-worker",
-        )
-        thread.start()
-        return True
-
-    def _play_cached_audio(self, audio_data: bytes) -> None:
-        """Play cached audio bytes. Runs in worker thread."""
-        try:
-            self._hotkey_manager.register_cancel(self._on_cancel)
-            self._audio_player.play(audio_data)
-        except Exception:
-            logger.exception("Error during cached audio playback.")
-        finally:
-            self._hotkey_manager.unregister_cancel()
-            self._set_state(AppState.IDLE)
+        return self._tts_orchestrator.replay_entry(entry_id)
 
     def _on_tts_hotkey(self) -> None:
         """Handle the TTS clipboard readout hotkey (Ctrl+Alt+T).
@@ -485,101 +476,19 @@ class VoicePasteApp:
             logger.info("TTS Ask hotkey ignored (state=%s).", current.value)
 
     def _run_tts_pipeline(self, text: str) -> None:
-        """Synthesize text and play audio. Runs in a worker thread.
-
-        Uses cache-through: checks cache before synthesis, stores after.
-
-        Args:
-            text: Text to synthesize and play.
-        """
-        try:
-            # v1.0: Cache-through — check cache first
-            cache_key = self._get_tts_cache_key(text)
-            audio_data = self._tts_cache.get(cache_key)
-            cached = audio_data is not None
-
-            if audio_data is None:
-                # Cache miss — synthesize
-                audio_data = self._tts.synthesize(text)
-                # Store in cache
-                self._tts_cache.put(
-                    cache_key, audio_data,
-                    voice_label=self._get_tts_voice_label(),
-                )
-            else:
-                logger.info("TTS cache hit — skipping synthesis.")
-
-            # v1.0: Export to user directory (non-blocking, fire-and-forget)
-            self._export_tts_audio(text, audio_data)
-
-            # Play
-            self._set_state(AppState.SPEAKING)
-
-            # Register Escape to stop TTS
-            self._hotkey_manager.register_cancel(self._on_cancel)
-
-            self._audio_player.play(audio_data)
-
-        except TTSError as e:
-            logger.error("TTS error: %s", e)
-            self._show_error(f"TTS error:\n{e}")
-
-        except Exception:
-            logger.exception("Unexpected error in TTS pipeline.")
-            self._show_error("TTS playback failed.\nCheck the log file.")
-
-        finally:
-            self._hotkey_manager.unregister_cancel()
-            self._set_state(AppState.IDLE)
+        """Synthesize text and play audio. Delegates to TTSOrchestrator."""
+        self._tts_orchestrator.synthesize_and_play(text)
 
     def _run_tts_export_pipeline(self, text: str, filename_hint: str = "") -> None:
-        """Synthesize text and save to the export directory (API-driven).
-
-        Unlike _run_tts_pipeline, this does NOT play the audio -- it only
-        synthesizes and exports. Used by the POST /tts/export API endpoint.
-
-        Args:
-            text: Text to synthesize and export.
-            filename_hint: Optional custom filename hint.
-        """
-        try:
-            # Cache-through: check cache first
-            cache_key = self._get_tts_cache_key(text)
-            audio_data = self._tts_cache.get(cache_key)
-
-            if audio_data is None:
-                audio_data = self._tts.synthesize(text)
-                self._tts_cache.put(
-                    cache_key, audio_data,
-                    voice_label=self._get_tts_voice_label(),
-                )
-            else:
-                logger.info("TTS cache hit — skipping synthesis for export.")
-
-            # Export to user directory
-            result = self._tts_exporter.export(
-                text, audio_data, filename_hint=filename_hint,
-            )
-            if result is not None:
-                logger.info("API TTS export complete: %s", result)
-            else:
-                logger.warning("API TTS export returned None (check config).")
-
-        except TTSError as e:
-            logger.error("TTS error in export pipeline: %s", e)
-            self._show_error(f"TTS export error:\n{e}")
-
-        except Exception:
-            logger.exception("Unexpected error in TTS export pipeline.")
-            self._show_error("TTS export failed.\nCheck the log file.")
-
-        finally:
-            self._set_state(AppState.IDLE)
+        """Synthesize text and export to file. Delegates to TTSOrchestrator."""
+        self._tts_orchestrator.synthesize_and_export(text, filename_hint)
 
     # --- v0.9: HTTP API ---
 
     def _api_dispatch(self, command: dict) -> dict:
         """Handle an API command and return a JSON-serializable response.
+
+        Delegates to the extracted APIController (v1.1).
 
         Args:
             command: Dict with "action" key and optional parameters.
@@ -587,219 +496,7 @@ class VoicePasteApp:
         Returns:
             Response dict with "status" key.
         """
-        action = command.get("action", "")
-
-        if action == "status":
-            return {
-                "status": "ok",
-                "data": {
-                    "state": self.state.value,
-                    "tts_enabled": self.config.tts_enabled,
-                    "api_version": "1",
-                    "app_version": APP_VERSION,
-                },
-            }
-
-        if action == "tts":
-            text = command.get("text", "")
-            if not text or not text.strip():
-                return {
-                    "status": "error",
-                    "error_code": "INVALID_PARAMS",
-                    "message": "text is required and must be non-empty",
-                }
-            text = text.strip()
-            if len(text) > TTS_MAX_TEXT_LENGTH:
-                return {
-                    "status": "error",
-                    "error_code": "TEXT_TOO_LONG",
-                    "message": f"Text exceeds {TTS_MAX_TEXT_LENGTH} character limit",
-                }
-            if not self._tts:
-                return {
-                    "status": "error",
-                    "error_code": "TTS_NOT_CONFIGURED",
-                    "message": "TTS is not enabled or configured",
-                }
-            if self.state != AppState.IDLE:
-                return {
-                    "status": "busy",
-                    "state": self.state.value,
-                    "message": "Another operation is in progress",
-                }
-            # Fire-and-forget: start TTS in worker thread
-            self._set_state(AppState.PROCESSING)
-            thread = threading.Thread(
-                target=self._run_tts_pipeline,
-                args=(text,),
-                daemon=True,
-                name="api-tts-worker",
-            )
-            thread.start()
-            return {"status": "ok"}
-
-        if action == "stop_tts":
-            if self.state == AppState.SPEAKING:
-                self._audio_player.stop()
-            return {"status": "ok"}
-
-        if action == "record_start":
-            if self.state != AppState.IDLE:
-                return {
-                    "status": "busy",
-                    "state": self.state.value,
-                    "message": "Another operation is in progress",
-                }
-            mode = command.get("mode", "summary")
-            if mode not in ("summary", "prompt"):
-                mode = "summary"
-            self._active_mode = mode
-            self._start_recording()
-            return {"status": "ok"}
-
-        if action == "record_stop":
-            if self.state != AppState.RECORDING:
-                return {
-                    "status": "busy",
-                    "state": self.state.value,
-                    "message": "Not currently recording",
-                }
-            self._stop_recording_and_process()
-            return {"status": "ok"}
-
-        if action == "cancel":
-            current = self.state
-            if current == AppState.RECORDING:
-                self._on_cancel()
-            elif current == AppState.SPEAKING:
-                self._audio_player.stop()
-            elif current == AppState.AWAITING_PASTE:
-                self._paste_cancel_event.set()
-            return {"status": "ok"}
-
-        # --- v1.0: TTS Cache API ---
-
-        if action == "tts_history_list":
-            entries = self._tts_cache.list_entries(limit=50)
-            stats = self._tts_cache.stats()
-            return {
-                "status": "ok",
-                "data": {
-                    "entries": entries,
-                    "total_entries": stats["total_entries"],
-                    "total_size_mb": stats["total_size_mb"],
-                    "cache_enabled": stats["cache_enabled"],
-                },
-            }
-
-        if action == "tts_history_get":
-            entry_id = command.get("id", "")
-            entry = self._tts_cache.get_entry(entry_id)
-            if entry is None:
-                return {
-                    "status": "error",
-                    "error_code": "NOT_FOUND",
-                    "message": f"Cache entry '{entry_id}' not found",
-                }
-            return {"status": "ok", "data": entry}
-
-        if action == "tts_replay":
-            entry_id = command.get("id", "")
-            if self.state != AppState.IDLE:
-                return {
-                    "status": "busy",
-                    "state": self.state.value,
-                    "message": "Another operation is in progress",
-                }
-            success = self.replay_tts_entry(entry_id)
-            if not success:
-                return {
-                    "status": "error",
-                    "error_code": "NOT_FOUND",
-                    "message": f"Cache entry '{entry_id}' not found",
-                }
-            return {"status": "ok"}
-
-        if action == "tts_history_delete":
-            entry_id = command.get("id", "")
-            deleted = self._tts_cache.delete(entry_id)
-            if not deleted:
-                return {
-                    "status": "error",
-                    "error_code": "NOT_FOUND",
-                    "message": f"Cache entry '{entry_id}' not found",
-                }
-            return {"status": "ok", "deleted": True}
-
-        if action == "tts_history_clear":
-            count = self._tts_cache.clear()
-            return {"status": "ok", "deleted_count": count}
-
-        # --- v1.0: TTS Export API ---
-
-        if action == "tts_export_list":
-            exports = self._tts_exporter.list_exports()
-            stats = self._tts_exporter.stats()
-            return {
-                "status": "ok",
-                "data": {
-                    "exports": exports,
-                    "total_files": stats["total_files"],
-                    "total_size_mb": stats["total_size_mb"],
-                    "export_enabled": stats["enabled"],
-                    "export_dir": stats["export_dir"],
-                },
-            }
-
-        if action == "tts_export":
-            text = command.get("text", "")
-            if not text or not text.strip():
-                return {
-                    "status": "error",
-                    "error_code": "INVALID_PARAMS",
-                    "message": "text is required and must be non-empty",
-                }
-            text = text.strip()
-            if len(text) > TTS_MAX_TEXT_LENGTH:
-                return {
-                    "status": "error",
-                    "error_code": "TEXT_TOO_LONG",
-                    "message": f"Text exceeds {TTS_MAX_TEXT_LENGTH} character limit",
-                }
-            if not self._tts:
-                return {
-                    "status": "error",
-                    "error_code": "TTS_NOT_CONFIGURED",
-                    "message": "TTS is not enabled or configured",
-                }
-            if not self._tts_exporter.enabled:
-                return {
-                    "status": "error",
-                    "error_code": "EXPORT_DISABLED",
-                    "message": "TTS export is not enabled. Enable in Settings.",
-                }
-            if self.state != AppState.IDLE:
-                return {
-                    "status": "busy",
-                    "state": self.state.value,
-                    "message": "Another operation is in progress",
-                }
-            # Synthesize + export in worker thread (fire-and-forget)
-            self._set_state(AppState.PROCESSING)
-            thread = threading.Thread(
-                target=self._run_tts_export_pipeline,
-                args=(text, command.get("filename_hint", "")),
-                daemon=True,
-                name="api-tts-export-worker",
-            )
-            thread.start()
-            return {"status": "ok", "message": "Export started"}
-
-        return {
-            "status": "error",
-            "error_code": "INVALID_PARAMS",
-            "message": f"Unknown action: {action}",
-        }
+        return self._api_controller.dispatch(command)
 
     def _start_api_server(self) -> None:
         """Start the HTTP API server if enabled."""
@@ -930,6 +627,7 @@ class VoicePasteApp:
             on_silence_stop=self._on_silence_auto_stop,
             silence_timeout_seconds=self.config.silence_timeout_seconds,
             max_duration_override=self.config.handsfree_max_recording_seconds,
+            device=self.config.audio_device_index,
         )
 
         success = self._recorder.start()
@@ -1028,6 +726,8 @@ class VoicePasteApp:
                     logger.warning("Error unloading local TTS model: %s", e)
 
             self._rebuild_tts()
+            self._tts_orchestrator.update_tts(self._tts)
+            self._api_controller.update_tts(self._tts)
             logger.info("TTS backend rebuilt with updated settings.")
 
             # Register/unregister TTS hotkeys based on new enabled state
@@ -1079,12 +779,16 @@ class VoicePasteApp:
         }
         if changed_fields.keys() & cache_keys:
             self._tts_cache = self._create_tts_cache()
+            self._tts_orchestrator.update_cache(self._tts_cache)
+            self._api_controller.update_cache(self._tts_cache)
             logger.info("TTS cache rebuilt with updated settings.")
 
         # v1.0: TTS export hot-reload
         export_keys = {"tts_export_enabled", "tts_export_path"}
         if changed_fields.keys() & export_keys:
             self._tts_exporter = self._create_tts_exporter()
+            self._tts_orchestrator.update_exporter(self._tts_exporter)
+            self._api_controller.update_exporter(self._tts_exporter)
             logger.info("TTS exporter rebuilt with updated settings.")
 
         # v0.9: API server hot-reload
@@ -1097,6 +801,22 @@ class VoicePasteApp:
         self._tray_manager.notify(
             APP_NAME, "Settings saved and applied."
         )
+
+    def _on_language_changed(self, lang_code: str) -> None:
+        """Handle language change from tray submenu.
+
+        Updates config, saves to disk, and notifies the user.
+
+        Args:
+            lang_code: Language code (e.g. "de", "en", "auto").
+        """
+        if lang_code == self.config.transcription_language:
+            return
+        self.config.transcription_language = lang_code
+        self.config.save_to_toml()
+        display = SUPPORTED_LANGUAGES.get(lang_code, lang_code)
+        logger.info("Transcription language changed to '%s' (%s).", lang_code, display)
+        self._tray_manager.notify(APP_NAME, f"Language: {display}")
 
     def _play_audio_cue(self, cue_fn: callable) -> None:
         """Play an audio cue if audio cues are enabled in config.
@@ -1136,11 +856,24 @@ class VoicePasteApp:
             self._start_recording()
 
         elif current == AppState.RECORDING:
-            logger.info("Transition: RECORDING -> PROCESSING (stopping recording)")
-            self._stop_recording_and_process()
+            if self._recording_during_processing:
+                # Stop queued recording: save audio, stay in PROCESSING
+                logger.info("Stopping queued recording (pipeline still processing).")
+                self._stop_queued_recording()
+            else:
+                logger.info("Transition: RECORDING -> PROCESSING (stopping recording)")
+                self._stop_recording_and_process()
 
         elif current == AppState.PROCESSING:
-            logger.info("Hotkey pressed during PROCESSING state, ignored.")
+            if self._recording_during_processing:
+                # Already recording while processing — queue is full
+                logger.info("Queue full: already recording during PROCESSING.")
+                self._play_audio_cue(play_error_cue)
+            else:
+                # Start a new recording while pipeline is processing
+                logger.info("Starting queued recording during PROCESSING.")
+                self._queued_mode = "summary"
+                self._start_queued_recording()
 
         elif current == AppState.PASTING:
             logger.info("Hotkey pressed during PASTING state, ignored.")
@@ -1163,11 +896,21 @@ class VoicePasteApp:
             self._start_recording()
 
         elif current == AppState.RECORDING:
-            logger.info("Transition: RECORDING -> PROCESSING (stopping recording)")
-            self._stop_recording_and_process()
+            if self._recording_during_processing:
+                logger.info("Stopping queued recording (pipeline still processing).")
+                self._stop_queued_recording()
+            else:
+                logger.info("Transition: RECORDING -> PROCESSING (stopping recording)")
+                self._stop_recording_and_process()
 
         elif current == AppState.PROCESSING:
-            logger.info("Prompt hotkey pressed during PROCESSING state, ignored.")
+            if self._recording_during_processing:
+                logger.info("Queue full: already recording during PROCESSING.")
+                self._play_audio_cue(play_error_cue)
+            else:
+                logger.info("Starting queued recording during PROCESSING.")
+                self._queued_mode = "prompt"
+                self._start_queued_recording()
 
         elif current == AppState.PASTING:
             logger.info("Prompt hotkey pressed during PASTING state, ignored.")
@@ -1177,7 +920,7 @@ class VoicePasteApp:
 
         Active during RECORDING state (discards audio), SPEAKING state
         (stops TTS playback), and AWAITING_PASTE state (cancels paste, v0.9).
-        Returns to IDLE.
+        Returns to IDLE (or PROCESSING if cancelling a queued recording).
         """
         current = self.state
 
@@ -1190,6 +933,18 @@ class VoicePasteApp:
         if current == AppState.AWAITING_PASTE:
             logger.info("Paste cancelled by user (via _on_cancel).")
             self._paste_cancel_event.set()
+            return
+
+        if current == AppState.PROCESSING and self._recording_during_processing:
+            # Cancel queued recording, but keep the pipeline running
+            logger.info("Queued recording cancelled by user.")
+            self._recorder.stop()
+            self._recording_during_processing = False
+            self._queued_audio = None
+            self._hotkey_manager.unregister_cancel()
+            self._play_audio_cue(play_cancel_cue)
+            # Stay in PROCESSING — the pipeline is still running
+            self._tray_manager.update_state(AppState.PROCESSING)
             return
 
         if current != AppState.RECORDING:
@@ -1206,7 +961,6 @@ class VoicePasteApp:
 
         # Play cancel cue and return to idle
         self._play_audio_cue(play_cancel_cue)
-        self._handsfree_recording = False
         self._set_state(AppState.IDLE)
 
     def _on_auto_stop(self) -> None:
@@ -1218,6 +972,16 @@ class VoicePasteApp:
         the recording was auto-stopped.
         """
         current = self.state
+
+        # Handle auto-stop during queued recording
+        if current == AppState.PROCESSING and self._recording_during_processing:
+            logger.info("Queued recording auto-stopped after max duration.")
+            self._tray_manager.notify(
+                APP_NAME, "Queued recording auto-stopped."
+            )
+            self._stop_queued_recording()
+            return
+
         if current != AppState.RECORDING:
             logger.debug(
                 "Auto-stop fired but state is %s, not RECORDING. Ignored.",
@@ -1230,6 +994,61 @@ class VoicePasteApp:
             APP_NAME, "Recording auto-stopped after 5 minutes."
         )
         self._stop_recording_and_process()
+
+    def _start_queued_recording(self) -> None:
+        """Start a new recording while the pipeline is still processing.
+
+        Does NOT change the application state (stays in PROCESSING).
+        The recorder runs in the background; audio is saved to
+        _queued_audio when the user stops the recording.
+        """
+        if self._stt is None:
+            logger.info("No STT backend — cannot queue recording.")
+            self._play_audio_cue(play_error_cue)
+            return
+
+        # Create a fresh recorder for the queued recording
+        self._recorder = AudioRecorder(
+            on_auto_stop=self._on_auto_stop,
+            device=self.config.audio_device_index,
+        )
+        success = self._recorder.start()
+        if success:
+            self._recording_during_processing = True
+            self._play_audio_cue(play_recording_start_cue)
+            self._hotkey_manager.register_cancel(self._on_cancel)
+            # Update tray tooltip to indicate recording + processing
+            self._tray_manager.set_processing_step("Recording (queued)...")
+            logger.info("Queued recording started.")
+        else:
+            logger.error("Failed to start queued recording.")
+            self._play_audio_cue(play_error_cue)
+
+    def _stop_queued_recording(self) -> None:
+        """Stop a queued recording and save the audio for later processing.
+
+        Does NOT start a new pipeline thread — the audio is saved to
+        _queued_audio and will be picked up by _run_pipeline's finally block.
+        """
+        self._play_audio_cue(play_recording_stop_cue)
+        self._hotkey_manager.unregister_cancel()
+
+        audio_data = self._recorder.stop()
+        self._recording_during_processing = False
+
+        if audio_data is None:
+            logger.info("No audio captured in queued recording.")
+            self._queued_audio = None
+        else:
+            self._queued_audio = audio_data
+            self._active_mode = self._queued_mode
+            logger.info(
+                "Queued recording saved (%d bytes). Will process after current pipeline.",
+                len(audio_data),
+            )
+
+        # Restore tray to processing state
+        self._tray_manager.update_state(AppState.PROCESSING)
 
     def _start_recording(self) -> None:
         """Transition from IDLE to RECORDING.
@@ -1428,21 +1247,30 @@ class VoicePasteApp:
             unregister_key_hook(enter_hook)
             self._hotkey_manager.unregister_cancel()
 
-    def _run_pipeline(self, audio_data: bytes) -> None:
+    def _run_pipeline(self, audio_data: bytes, clip_backup: str | None = None) -> None:
         """Execute the STT, summarization, and paste pipeline in a worker thread.
 
         Includes clipboard backup/restore for clipboard preservation (US-0.2.5).
         All errors are caught and reported via toast notifications.
+        Supports pipeline queueing: if queued audio exists after this pipeline
+        completes, it is processed before returning to IDLE.
 
         Args:
             audio_data: WAV audio bytes to transcribe and paste.
+            clip_backup: Pre-existing clipboard backup (used by queued pipeline
+                to share the original backup). If None, backs up now.
         """
         # Backup clipboard before we overwrite it (US-0.2.5)
-        clip_backup = clipboard_backup()
+        owns_clipboard = clip_backup is None
+        if owns_clipboard:
+            clip_backup = clipboard_backup()
 
         try:
-            # Step 1: Transcribe
-            transcript = self._stt.transcribe(audio_data)
+            # Step 1: Transcribe -- update tray tooltip for progress feedback
+            self._tray_manager.set_processing_step("Transcribing...")
+            transcript = self._stt.transcribe(
+                audio_data, language=self.config.transcription_language
+            )
 
             if not transcript or not transcript.strip():
                 logger.info("Empty transcript. Nothing to paste.")
@@ -1451,13 +1279,25 @@ class VoicePasteApp:
                 return
 
             # Step 2: Summarize or Prompt (v0.5: voice prompt mode)
-            if self._active_mode in ("prompt", "tts_ask"):
-                logger.info("Prompt mode: sending transcript as prompt to LLM.")
-                summary = self._summarizer.summarize(
-                    transcript, system_prompt=PROMPT_SYSTEM_PROMPT
+            self._tray_manager.set_processing_step("Summarizing...")
+            try:
+                if self._active_mode in ("prompt", "tts_ask"):
+                    logger.info("Prompt mode: sending transcript as prompt to LLM.")
+                    summary = self._summarizer.summarize(
+                        transcript, system_prompt=PROMPT_SYSTEM_PROMPT
+                    )
+                else:
+                    summary = self._summarizer.summarize(transcript)
+            except SummarizerError as e:
+                # Graceful fallback: paste raw transcript instead of failing
+                logger.warning(
+                    "Summarization failed, falling back to raw transcript: %s", e
                 )
-            else:
-                summary = self._summarizer.summarize(transcript)
+                summary = transcript
+                self._tray_manager.notify(
+                    APP_NAME,
+                    "Summarization unavailable \u2014 raw transcript pasted.",
+                )
 
             # Handle empty result (e.g., all filler words removed)
             if not summary or not summary.strip():
@@ -1475,26 +1315,8 @@ class VoicePasteApp:
                 # Prevent the finally block from overwriting the AI answer
                 clip_backup = None
 
-                # v1.0: Cache-through for TTS Ask mode
                 try:
-                    cache_key = self._get_tts_cache_key(summary)
-                    tts_audio = self._tts_cache.get(cache_key)
-
-                    if tts_audio is None:
-                        tts_audio = self._tts.synthesize(summary)
-                        self._tts_cache.put(
-                            cache_key, tts_audio,
-                            voice_label=self._get_tts_voice_label(),
-                        )
-                    else:
-                        logger.info("TTS cache hit in Ask+TTS — skipping synthesis.")
-
-                    # v1.0: Export to user directory (non-blocking, fire-and-forget)
-                    self._export_tts_audio(summary, tts_audio)
-
-                    self._set_state(AppState.SPEAKING)
-                    self._hotkey_manager.register_cancel(self._on_cancel)
-                    self._audio_player.play(tts_audio)
+                    self._tts_orchestrator.synthesize_for_ask(summary)
                 except TTSError as e:
                     logger.error("TTS error in Ask+TTS pipeline: %s", e)
                     self._tray_manager.notify(
@@ -1528,10 +1350,6 @@ class VoicePasteApp:
         except STTError as e:
             logger.error("STT pipeline error: %s", e)
             self._show_error(f"Transcription error:\n{e}")
-
-        except SummarizerError as e:
-            logger.error("Summarizer pipeline error: %s", e)
-            self._show_error(f"Summarization error:\n{e}")
 
         except ImportError as e:
             # Catches late-binding import failures in local STT (e.g.,
@@ -1596,13 +1414,30 @@ class VoicePasteApp:
             )
 
         finally:
-            # Always restore clipboard and return to IDLE
             # Brief delay to ensure paste has completed before restoring
             time.sleep(0.1)
-            clipboard_restore(clip_backup)
-            # Restore default recorder (without silence detection)
-            self._recorder = AudioRecorder(on_auto_stop=self._on_auto_stop)
-            self._set_state(AppState.IDLE)
+
+            # Check for queued audio before returning to IDLE
+            queued = self._queued_audio
+            self._queued_audio = None
+
+            if queued is not None:
+                logger.info(
+                    "Processing queued audio (%d bytes)...", len(queued)
+                )
+                # Process the queued audio, passing the original clipboard
+                # backup so it is only restored after the LAST pipeline.
+                self._set_state(AppState.PROCESSING)
+                self._run_pipeline(queued, clip_backup=clip_backup)
+            else:
+                # No queued audio — normal cleanup
+                clipboard_restore(clip_backup)
+                # Restore default recorder (without silence detection)
+                self._recorder = AudioRecorder(
+                    on_auto_stop=self._on_auto_stop,
+                    device=self.config.audio_device_index,
+                )
+                self._set_state(AppState.IDLE)
 
     def _shutdown(self) -> None:
         """Clean shutdown of all components."""

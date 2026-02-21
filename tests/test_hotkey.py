@@ -69,14 +69,14 @@ class TestHotkeyManager:
         """Rapid presses within debounce window are ignored."""
         manager = HotkeyManager(debounce_ms=300)
         callback = MagicMock()
-        manager._callback = callback
+        manager._slots["main"].callback = callback
 
         # First press should go through
-        manager._on_hotkey()
+        manager._on_slot_fired("main")
         assert callback.call_count == 1
 
         # Second press immediately should be debounced
-        manager._on_hotkey()
+        manager._on_slot_fired("main")
         assert callback.call_count == 1
 
     @patch("hotkey.kb")
@@ -84,15 +84,15 @@ class TestHotkeyManager:
         """Presses after debounce window are accepted."""
         manager = HotkeyManager(debounce_ms=50)
         callback = MagicMock()
-        manager._callback = callback
+        manager._slots["main"].callback = callback
 
-        manager._on_hotkey()
+        manager._on_slot_fired("main")
         assert callback.call_count == 1
 
         # Wait for debounce to expire
         time.sleep(0.1)
 
-        manager._on_hotkey()
+        manager._on_slot_fired("main")
         assert callback.call_count == 2
 
     @patch("hotkey.kb")

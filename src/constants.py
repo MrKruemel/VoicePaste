@@ -14,11 +14,17 @@ class AppState(enum.Enum):
         PROCESSING -> PASTING  (on STT/summarization complete)
         PROCESSING -> AWAITING_PASTE  (when confirmation/delay configured, v0.9)
         PROCESSING -> SPEAKING  (on Ask AI + TTS pipeline, v0.6)
+        PROCESSING -> IDLE  (on empty transcript, error)
         AWAITING_PASTE -> PASTING  (on Enter or delay elapsed, v0.9)
         AWAITING_PASTE -> IDLE  (on Escape cancel or timeout, v0.9)
         PASTING -> IDLE  (on paste complete)
         SPEAKING -> IDLE  (on TTS playback complete or Escape, v0.6)
-        Any error state -> IDLE  (on error)
+
+        Pipeline queueing (v1.1):
+        During PROCESSING, pressing the hotkey starts a new recording
+        (tracked by _recording_during_processing flag, not a new state).
+        When the current pipeline finishes, queued audio is processed
+        before returning to IDLE.  Queue depth = 1.
     """
 
     IDLE = "idle"
@@ -27,6 +33,28 @@ class AppState(enum.Enum):
     AWAITING_PASTE = "awaiting_paste"
     PASTING = "pasting"
     SPEAKING = "speaking"
+
+
+# Valid state transitions.  Key = (from_state, to_state).
+# Any transition not in this set is invalid and will be logged as an error.
+VALID_TRANSITIONS: frozenset[tuple[AppState, AppState]] = frozenset({
+    # Normal recording flow
+    (AppState.IDLE, AppState.RECORDING),
+    (AppState.RECORDING, AppState.PROCESSING),
+    (AppState.RECORDING, AppState.IDLE),          # cancel or no audio
+    (AppState.PROCESSING, AppState.PASTING),
+    (AppState.PROCESSING, AppState.AWAITING_PASTE),
+    (AppState.PROCESSING, AppState.SPEAKING),     # TTS ask mode
+    (AppState.PROCESSING, AppState.IDLE),          # empty transcript, error
+    (AppState.AWAITING_PASTE, AppState.PASTING),
+    (AppState.AWAITING_PASTE, AppState.IDLE),      # cancel or timeout
+    (AppState.PASTING, AppState.IDLE),
+    (AppState.SPEAKING, AppState.IDLE),
+
+    # TTS / API dispatch flows (start from IDLE)
+    (AppState.IDLE, AppState.PROCESSING),          # TTS pipeline, API tts
+    (AppState.IDLE, AppState.SPEAKING),            # replay cached audio
+})
 
 
 # Application metadata
@@ -57,6 +85,7 @@ else:
 DEFAULT_SAMPLE_RATE = 16000
 DEFAULT_CHANNELS = 1
 DEFAULT_DTYPE = "int16"
+DEFAULT_AUDIO_DEVICE_INDEX: int | None = None  # None = system default microphone
 
 # API configuration
 WHISPER_API_URL = "https://api.openai.com/v1/audio/transcriptions"
@@ -163,6 +192,24 @@ OPENROUTER_DEFAULT_MODEL = "openai/gpt-4o-mini"
 # STT backend options
 STT_BACKENDS = ("cloud", "local")
 DEFAULT_STT_BACKEND = "cloud"
+
+# Transcription language: "auto" lets Whisper detect, or use a language code.
+DEFAULT_TRANSCRIPTION_LANGUAGE = "de"
+SUPPORTED_LANGUAGES = {
+    "auto": "Auto-detect",
+    "de": "Deutsch (German)",
+    "en": "English",
+    "fr": "Fran\u00e7ais (French)",
+    "es": "Espa\u00f1ol (Spanish)",
+    "it": "Italiano (Italian)",
+    "pt": "Portugu\u00eas (Portuguese)",
+    "nl": "Nederlands (Dutch)",
+    "pl": "Polski (Polish)",
+    "ja": "\u65e5\u672c\u8a9e (Japanese)",
+    "zh": "\u4e2d\u6587 (Chinese)",
+    "ko": "\ud55c\uad6d\uc5b4 (Korean)",
+    "ru": "\u0420\u0443\u0441\u0441\u043a\u0438\u0439 (Russian)",
+}
 
 # Local model sizes (CTranslate2-format Whisper models from Hugging Face)
 LOCAL_MODEL_SIZES = ("tiny", "base", "small", "medium", "large-v2", "large-v3")

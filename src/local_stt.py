@@ -581,7 +581,7 @@ class LocalWhisperSTT:
         """Whether the Whisper model is currently loaded in memory."""
         return self._model_loaded and self._model is not None
 
-    def transcribe(self, audio_data: bytes, language: str = "de") -> str:
+    def transcribe(self, audio_data: bytes, language: str | None = "de") -> str:
         """Transcribe audio bytes to text using the local Whisper model.
 
         Loads the model lazily on first call if not already loaded.
@@ -593,6 +593,7 @@ class LocalWhisperSTT:
         Args:
             audio_data: WAV audio file bytes (in-memory, never from disk).
             language: Language code for transcription (default 'de' for German).
+                Pass None or "auto" for automatic language detection.
 
         Returns:
             Transcribed text string.
@@ -600,6 +601,10 @@ class LocalWhisperSTT:
         Raises:
             STTError: If transcription fails (model not available, decode error, etc.).
         """
+        # Normalize "auto" to None (faster-whisper auto-detects when language=None)
+        if language == "auto":
+            language = None
+
         logger.info("Local STT: transcribing %d bytes of audio...", len(audio_data))
 
         # Lazy load model on first use

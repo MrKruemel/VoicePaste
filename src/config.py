@@ -15,9 +15,12 @@ from pathlib import Path
 from typing import Optional
 
 from constants import (
+    DEFAULT_AUDIO_DEVICE_INDEX,
     DEFAULT_HANDSFREE_COOLDOWN_SECONDS,
     DEFAULT_HANDSFREE_ENABLED,
     DEFAULT_HANDSFREE_MAX_RECORDING_SECONDS,
+    DEFAULT_TRANSCRIPTION_LANGUAGE,
+    SUPPORTED_LANGUAGES,
     DEFAULT_HANDSFREE_PIPELINE,
     DEFAULT_HOTKEY,
     DEFAULT_API_ENABLED,
@@ -99,6 +102,12 @@ prompt_combination = "ctrl+alt+a"
 # Backend: "cloud" (OpenAI Whisper API) or "local" (faster-whisper, offline)
 # Cloud requires an OpenAI API key. Local requires a downloaded Whisper model.
 backend = "cloud"
+# Transcription language: "auto" (let Whisper detect) or a language code
+# e.g. "de" (German), "en" (English), "fr" (French), "es" (Spanish)
+language = "de"
+# Audio input device index (-1 = system default microphone)
+# Use Settings dialog to select from available devices.
+audio_device_index = -1
 # Local STT model size (only used when backend = "local")
 # Options: tiny (~75MB, fast), base (~145MB, good quality),
 #          small (~480MB, better), medium (~1.5GB), large-v3 (~3GB)
@@ -219,6 +228,8 @@ class AppConfig:
 
     # --- v0.4: Local STT fields ---
     stt_backend: str = DEFAULT_STT_BACKEND
+    transcription_language: str = DEFAULT_TRANSCRIPTION_LANGUAGE
+    audio_device_index: Optional[int] = DEFAULT_AUDIO_DEVICE_INDEX
     local_model_size: str = LOCAL_STT_DEFAULT_MODEL_SIZE
     local_device: str = LOCAL_STT_DEFAULT_DEVICE
     local_compute_type: str = LOCAL_STT_DEFAULT_COMPUTE_TYPE
@@ -370,6 +381,10 @@ tts_ask_combination = "{esc(self.tts_ask_hotkey)}"
 [transcription]
 # Backend: "cloud" (OpenAI Whisper API) or "local" (faster-whisper, offline)
 backend = "{esc(self.stt_backend)}"
+# Transcription language: "auto" or a language code (de, en, fr, es, ...)
+language = "{esc(self.transcription_language)}"
+# Audio input device index (empty or -1 = system default microphone)
+audio_device_index = {self.audio_device_index if self.audio_device_index is not None else -1}
 # Local model size: tiny, base, small, medium, large-v2, large-v3
 model_size = "{esc(self.local_model_size)}"
 # Device: cpu, cuda, auto
@@ -453,6 +468,10 @@ level = "{esc(self.log_level)}"
             tmp_path = config_path.with_suffix(".toml.tmp")
             tmp_path.write_text(content, encoding="utf-8")
             tmp_path.replace(config_path)
+            # SEC-069: Restrict config file permissions on Linux (0600)
+            if sys.platform != "win32":
+                import stat
+                os.chmod(config_path, stat.S_IRUSR | stat.S_IWUSR)
             logger.info("Configuration saved to %s", config_path)
             return True
         except OSError as e:
@@ -521,6 +540,10 @@ def load_config() -> Optional[AppConfig]:
         )
         try:
             config_path.write_text(CONFIG_TEMPLATE, encoding="utf-8")
+            # SEC-069: Restrict config file permissions on Linux (0600)
+            if sys.platform != "win32":
+                import stat
+                os.chmod(config_path, stat.S_IRUSR | stat.S_IWUSR)
             logger.info("Created config.toml template at %s.", config_path)
         except OSError as e:
             logger.error("Failed to create config.toml template: %s", e)
@@ -582,6 +605,28 @@ def load_config() -> Optional[AppConfig]:
             DEFAULT_STT_BACKEND,
         )
         stt_backend = DEFAULT_STT_BACKEND
+
+    transcription_language = transcription_section.get(
+        "language", DEFAULT_TRANSCRIPTION_LANGUAGE
+    )
+    # Accept any non-empty string (Whisper supports many language codes beyond
+    # our SUPPORTED_LANGUAGES display list), but warn if not recognized.
+    if not transcription_language or not isinstance(transcription_language, str):
+        logger.warning(
+            "Invalid transcription language '%s'. Falling back to '%s'.",
+            transcription_language,
+            DEFAULT_TRANSCRIPTION_LANGUAGE,
+        )
+        transcription_language = DEFAULT_TRANSCRIPTION_LANGUAGE
+
+    # Audio input device index
+    _raw_device_idx = transcription_section.get("audio_device_index", -1)
+    try:
+        audio_device_index: Optional[int] = int(_raw_device_idx)
+        if audio_device_index is not None and audio_device_index < 0:
+            audio_device_index = None  # -1 or negative = system default
+    except (ValueError, TypeError):
+        audio_device_index = None
 
     local_model_size = transcription_section.get("model_size", LOCAL_STT_DEFAULT_MODEL_SIZE)
     if local_model_size not in LOCAL_MODEL_SIZES:
@@ -837,6 +882,8 @@ def load_config() -> Optional[AppConfig]:
         audio_cues_enabled=bool(audio_cues_enabled),
         app_directory=app_dir,
         stt_backend=stt_backend,
+        transcription_language=transcription_language,
+        audio_device_index=audio_device_index,
         local_model_size=local_model_size,
         local_device=local_device,
         local_compute_type=local_compute_type,

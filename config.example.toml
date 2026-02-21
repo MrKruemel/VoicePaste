@@ -52,6 +52,17 @@ port = 18923
 # - "local": downloads a Whisper model (~75MB–3GB depending on size). Offline, slower, no API key needed.
 backend = "cloud"
 
+# Transcription language: "auto" (let Whisper detect) or a language code.
+# Examples: "de" (German), "en" (English), "fr" (French), "es" (Spanish)
+# "auto" works well for multilingual users but may be slightly less accurate
+# than specifying the exact language.
+language = "de"
+
+# Audio input device: -1 = system default microphone, or a device index number.
+# Use the Settings dialog (right-click tray icon > Settings > Transcription) to
+# see available microphones and select one. The device index is shown as (#N).
+# audio_device_index = -1
+
 # Local model size (only used when backend = "local")
 # Options: tiny (~75MB, fast, lower quality)
 #          base (~145MB, good quality, recommended)
