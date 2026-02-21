@@ -10,8 +10,21 @@
 #   ./build_linux.sh clean        Remove build artifacts
 #
 # Prerequisites:
-#   - Python 3.11+ with pip
-#   - pip install -r requirements.txt pyinstaller
+#   - Python 3.11+ with pip in a venv (system Python may block pip installs)
+#   - The venv MUST use --system-site-packages so PyGObject (gi) and
+#     AppIndicator3 are available. These are system packages (cannot pip install).
+#     Without them, pystray falls back to _xorg backend and the tray right-click
+#     menu does not work.
+#
+#     Build venv setup:
+#       python3 -m venv --system-site-packages .venv
+#       source .venv/bin/activate
+#       pip install -r requirements.txt pyinstaller pynput
+#
+#   - pynput is the Linux hotkey backend. It is NOT in requirements.txt
+#     (Windows uses the 'keyboard' library instead). If pynput is missing from
+#     the build environment, the binary will fail at startup with:
+#       "No module named 'pynput'" / "Could not register the hotkey"
 #   - System packages:
 #       sudo apt install espeak-ng libportaudio2 xclip xdotool python3-tk
 #       sudo apt install python3-gi gir1.2-ayatanaappindicator3-0.1  # tray menu
@@ -86,6 +99,17 @@ if ! python3 -m PyInstaller --version &>/dev/null; then
     exit 1
 fi
 echo "[OK] PyInstaller $(python3 -m PyInstaller --version 2>&1)"
+
+# -- Check pynput (Linux hotkey backend, not in requirements.txt) --
+echo ""
+if ! python3 -c "import pynput" &>/dev/null; then
+    echo "[ERROR] pynput not found in the Python environment."
+    echo "        pynput is the Linux hotkey backend and MUST be installed for the build."
+    echo "        Install with: pip install pynput"
+    echo ""
+    exit 1
+fi
+echo "[OK] pynput $(python3 -c 'from importlib.metadata import version; print(version("pynput"))' 2>/dev/null || echo '(version unknown)')"
 
 # -- Check system dependencies --
 echo ""

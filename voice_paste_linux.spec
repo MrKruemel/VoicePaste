@@ -156,6 +156,8 @@ _hidden_imports = [
     'pynput.keyboard._xorg',
     'pynput.mouse',
     'pynput.mouse._xorg',
+    'pynput._util.xorg',
+    'pynput._util.xorg_keysyms',
 
     # --- Pillow (PIL) ---
     'PIL',
