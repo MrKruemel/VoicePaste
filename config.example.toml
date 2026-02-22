@@ -1,4 +1,4 @@
-# Voice-to-Summary Paste Tool Configuration
+# VoicePaste Configuration
 # Copy this file to config.toml and customize as needed.
 #
 # IMPORTANT: API keys are stored securely in the OS credential store
@@ -232,8 +232,8 @@ confirmation_timeout_seconds = 30.0
 # Controls which keyboard shortcut is simulated to paste text:
 # - "auto": Detect terminal emulators and use Ctrl+Shift+V, otherwise Ctrl+V.
 #   On X11: uses xprop to read WM_CLASS window property.
-#   On Wayland/GNOME: uses GNOME Shell D-Bus (gdbus) for reliable terminal detection.
-#   On Wayland/non-GNOME: falls back to Ctrl+V (may not detect all terminals).
+#   On Wayland/GNOME: attempts GNOME Shell D-Bus detection (may be blocked on GNOME 41+).
+#   On Wayland: falls back to Ctrl+V if detection is unavailable. Use Terminal Mode toggle (Ctrl+Alt+M) to switch manually.
 # - "ctrl+v": Always use Ctrl+V (standard paste, works in most applications).
 # - "ctrl+shift+v": Always use Ctrl+Shift+V (terminal-only paste, overrides auto-detection).
 # Use "ctrl+shift+v" if auto-detection fails on your terminal or desktop environment.
