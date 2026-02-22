@@ -146,6 +146,8 @@ DEFAULT_HANDSFREE_MAX_RECORDING_SECONDS = 120
 DEFAULT_HANDSFREE_PIPELINE = "ask_tts"  # "ask_tts", "summary", "prompt"
 DEFAULT_HANDSFREE_COOLDOWN_SECONDS = 3.0
 DEFAULT_HANDSFREE_BUFFER_SECONDS = 2.5
+DEFAULT_HANDSFREE_WAKE_MODEL_SIZE = "base"
+HANDSFREE_WAKE_MODEL_SIZES = ("tiny", "base", "small")
 HANDSFREE_PIPELINES = ("ask_tts", "summary", "prompt", "claude_code")
 
 # Adaptive silence detection calibration

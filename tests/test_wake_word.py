@@ -455,7 +455,7 @@ class TestModelLoading:
             result = detector._load_model()
 
         assert result is True
-        mock_mm.download_model.assert_called_once_with("tiny")
+        mock_mm.download_model.assert_called_once_with("base")
 
     def test_load_model_download_fails(self):
         """If both get_model_path and download_model return None, should fail."""

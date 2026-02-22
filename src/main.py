@@ -663,6 +663,7 @@ class VoicePasteApp:
             language="en",  # Wake phrases are typically English
             should_listen=lambda: self.state == AppState.IDLE,
             adaptive_energy=_use_adaptive,
+            model_size=self.config.handsfree_wake_model_size,
             **({"energy_threshold": _silence_rms} if not _use_adaptive else {}),
         )
 

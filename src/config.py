@@ -30,6 +30,8 @@ from constants import (
     DEFAULT_HANDSFREE_ENABLED,
     DEFAULT_HANDSFREE_MAX_RECORDING_SECONDS,
     DEFAULT_HANDSFREE_SILENCE_THRESHOLD_RMS,
+    DEFAULT_HANDSFREE_WAKE_MODEL_SIZE,
+    HANDSFREE_WAKE_MODEL_SIZES,
     DEFAULT_TRANSCRIPTION_LANGUAGE,
     SUPPORTED_LANGUAGES,
     DEFAULT_HANDSFREE_PIPELINE,
@@ -291,6 +293,7 @@ class AppConfig:
     handsfree_pipeline: str = DEFAULT_HANDSFREE_PIPELINE
     handsfree_cooldown_seconds: float = DEFAULT_HANDSFREE_COOLDOWN_SECONDS
     handsfree_silence_threshold_rms: float = DEFAULT_HANDSFREE_SILENCE_THRESHOLD_RMS
+    handsfree_wake_model_size: str = DEFAULT_HANDSFREE_WAKE_MODEL_SIZE
 
     # --- v1.0: TTS Audio Cache ---
     tts_cache_enabled: bool = DEFAULT_TTS_CACHE_ENABLED
@@ -489,6 +492,8 @@ cooldown_seconds = {self.handsfree_cooldown_seconds}
 # 0 = adaptive (auto-calibrate from ambient noise at recording start).
 # Set to a fixed value (e.g. 500-1000) if adaptive detection misbehaves.
 silence_threshold_rms = {self.handsfree_silence_threshold_rms}
+# Wake word STT model size: "tiny" (~75MB, fast), "base" (~145MB, better noise handling), "small" (~480MB)
+wake_model_size = "{esc(self.handsfree_wake_model_size)}"
 
 [tts_cache]
 # Cache TTS audio locally to avoid re-synthesis of the same text.
@@ -934,6 +939,12 @@ def load_config() -> Optional[AppConfig]:
         "silence_threshold_rms", DEFAULT_HANDSFREE_SILENCE_THRESHOLD_RMS))
     handsfree_silence_threshold_rms = max(0.0, min(handsfree_silence_threshold_rms, 10000.0))
 
+    # Wake word model size
+    handsfree_wake_model_size = str(handsfree_section.get(
+        "wake_model_size", DEFAULT_HANDSFREE_WAKE_MODEL_SIZE)).strip().lower()
+    if handsfree_wake_model_size not in HANDSFREE_WAKE_MODEL_SIZES:
+        handsfree_wake_model_size = DEFAULT_HANDSFREE_WAKE_MODEL_SIZE
+
     # --- v0.9: Paste confirmation/delay ---
     paste_require_confirmation = bool(paste_section.get(
         "require_confirmation", DEFAULT_PASTE_CONFIRM))
@@ -1065,6 +1076,7 @@ def load_config() -> Optional[AppConfig]:
         handsfree_pipeline=handsfree_pipeline,
         handsfree_cooldown_seconds=handsfree_cooldown_seconds,
         handsfree_silence_threshold_rms=handsfree_silence_threshold_rms,
+        handsfree_wake_model_size=handsfree_wake_model_size,
     )
 
     # REQ-S01: Only log the masked key

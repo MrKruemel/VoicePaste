@@ -286,6 +286,13 @@ cooldown_seconds = 3.0
 # Higher values = less sensitive (ignore more background noise).
 silence_threshold_rms = 0
 
+# Whisper model size for wake word detection (default: "base")
+# Larger models are more accurate in noisy environments but use more RAM and CPU.
+# Options: "tiny" (~75MB, fastest, lower accuracy in noise),
+#          "base" (~145MB, recommended, good noise handling),
+#          "small" (~480MB, best accuracy, slower, higher CPU)
+wake_model_size = "base"
+
 [tts_cache]
 # Cache TTS audio locally to avoid re-synthesis of the same text.
 # Saves API credits (ElevenLabs) and reduces latency on repeated playback.
