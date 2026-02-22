@@ -132,15 +132,17 @@ STT, summarization, and TTS each use a `Protocol` class with a factory function:
 
 | Section | Options | Purpose |
 |---------|---------|---------|
-| `[hotkey]` | `combination`, `prompt_combination`, `tts_combination`, `tts_ask_combination` | Global hotkey bindings |
-| `[api]` | `enabled`, `port` | HTTP API server configuration |
+| `[hotkey]` | `combination`, `prompt_combination`, `tts_combination`, `tts_ask_combination`, `terminal_mode_combination` | Global hotkey bindings |
+| `[api]` | `api_enabled`, `api_port` | HTTP API server configuration |
 | `[transcription]` | `backend`, `model_size`, `device`, `compute_type`, `vad_filter`, `language`, `audio_device_index` | STT backend selection and parameters |
 | `[summarization]` | `enabled`, `provider`, `model`, `base_url`, `custom_prompt` | Text cleanup and LLM selection |
 | `[tts]` | `enabled`, `provider`, `voice_id`, `local_voice`, `speed`, `model_id`, `output_format` | Text-to-speech backend and voice selection |
-| `[paste]` | `delay_seconds`, `require_confirmation`, `confirmation_timeout_seconds`, `paste_shortcut` | Paste behavior and keystroke simulation |
-| `[handsfree]` | `enabled`, `wake_phrase`, `match_mode`, `pipeline`, `silence_timeout_seconds`, `max_duration_seconds` | Hands-Free wake word configuration |
+| `[paste]` | `delay_seconds`, `require_confirmation`, `confirmation_timeout_seconds`, `auto_enter`, `paste_shortcut` | Paste behavior and keystroke simulation |
+| `[handsfree]` | `enabled`, `wake_phrase`, `match_mode`, `pipeline`, `silence_timeout`, `max_recording_seconds`, `cooldown_seconds` | Hands-Free wake word configuration |
+| `[tts_cache]` | `enabled`, `max_size_mb`, `max_age_days`, `max_entries` | TTS audio cache configuration |
+| `[tts_export]` | `enabled`, `export_path` | Save generated TTS audio to files |
 | `[claude_code]` | `enabled`, `hotkey`, `working_dir`, `system_prompt`, `response_mode`, `timeout`, `skip_permissions`, `continue_conversation` | Claude Code CLI integration |
-| `[feedback]` | `audio_cues`, `show_overlay` | Audio/visual feedback toggles |
+| `[feedback]` | `audio_cues` | Audio feedback toggles |
 | `[logging]` | `level` | Log verbosity |
 
 ### Key Modules
@@ -169,7 +171,7 @@ STT, summarization, and TTS each use a `Protocol` class with a factory function:
 - Tests are in `tests/` and use pytest with `pytest-mock` and `pytest-timeout`.
 - `conftest.py` adds `src/` to `sys.path` and skips Windows-only test files (`test_paste.py`, `test_clipboard.py`, `test_single_instance.py`) on Linux.
 - Tests mock all external APIs (OpenAI, ElevenLabs) and hardware (microphone, clipboard). No real API calls or audio recording in tests.
-- CI runs on Windows, Ubuntu 22.04, and Ubuntu 24.04 (see `.github/workflows/ci.yml`).
+- CI was previously configured via GitHub Actions (removed). Tests are run locally.
 
 ## Build Notes
 

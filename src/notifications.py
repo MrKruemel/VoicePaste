@@ -1,4 +1,4 @@
-"""Toast notification and audio cue module for the Voice-to-Summary Paste Tool.
+"""Toast notification and audio cue module for VoicePaste.
 
 Provides non-intrusive user feedback via:
 - Audio cues using platform_impl.play_beep (winsound on Windows,

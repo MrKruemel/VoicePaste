@@ -1,6 +1,6 @@
 # Manual End-to-End Test Plan
 
-## Voice-to-Summary Paste Tool v0.2.0
+## VoicePaste v0.2.0
 
 **Document Version**: 1.0
 **Date**: 2026-02-13

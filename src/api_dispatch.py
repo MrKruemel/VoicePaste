@@ -1,4 +1,4 @@
-"""API command dispatch for the Voice-to-Summary Paste Tool.
+"""API command dispatch for VoicePaste.
 
 Extracted from VoicePasteApp to reduce the god-object pattern.
 Maps incoming API commands to application actions and returns

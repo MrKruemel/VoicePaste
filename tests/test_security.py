@@ -1,4 +1,4 @@
-"""Security-focused tests for the Voice-to-Summary Paste Tool.
+"""Security-focused tests for VoicePaste.
 
 Validates all Critical security requirements from the threat model:
 - REQ-S01: Never log API key

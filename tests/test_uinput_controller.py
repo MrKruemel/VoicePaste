@@ -172,9 +172,9 @@ class TestUInputController:
             result = ctrl._ensure_device()
 
         assert result is mock_uinput_instance
-        # SEC-082: UInput is now created with restricted capabilities
+        # SEC-082 / SEC-085: UInput is created with restricted capabilities
         mock_uinput_cls.assert_called_once_with(
-            {1: [29, 42, 47]},  # EV_KEY: [KEY_LEFTCTRL, KEY_LEFTSHIFT, KEY_V]
+            {1: [29, 42, 47, 28, 1]},  # EV_KEY: [LEFTCTRL, LEFTSHIFT, V, ENTER, ESCAPE]
             name="VoicePaste Virtual Keyboard",
             phys="voicepaste/uinput",
         )

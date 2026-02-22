@@ -1,4 +1,4 @@
-"""Global hotkey registration for the Voice-to-Summary Paste Tool.
+"""Global hotkey registration for VoicePaste.
 
 Uses the `keyboard` library on Windows and `pynput` on Linux for
 global hotkey hooks.  On Wayland sessions, `evdev` is used instead

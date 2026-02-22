@@ -1,4 +1,4 @@
-"""Configuration loading, validation, and persistence for the Voice-to-Summary Paste Tool.
+"""Configuration loading, validation, and persistence for VoicePaste.
 
 Reads config.toml from the application directory. Creates a template if missing.
 v0.3: Mutable AppConfig, keyring integration, migration, save_to_toml(),
@@ -89,7 +89,7 @@ logger = logging.getLogger(__name__)
 
 # Template content for config.toml when it does not exist (v0.3)
 CONFIG_TEMPLATE = """\
-# Voice-to-Summary Paste Tool Configuration
+# VoicePaste Configuration
 # See README.md for full documentation of all options.
 
 # NOTE: API keys are stored securely in Windows Credential Manager.
@@ -189,6 +189,7 @@ export_path = ""
 [feedback]
 # Play audio cues on recording start/stop (default: true)
 audio_cues = true
+
 [logging]
 # Log level: DEBUG, INFO, WARNING, ERROR
 level = "INFO"

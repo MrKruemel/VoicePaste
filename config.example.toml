@@ -45,12 +45,12 @@ terminal_mode_combination = "ctrl+alt+m"
 # The server binds to 127.0.0.1 only (no network exposure, localhost-only).
 # API is disabled by default for security. Enable in Settings dialog or set to true here.
 # WARNING: Only enable if you trust local applications on your machine.
-enabled = false
+api_enabled = false
 
 # HTTP API port (default: 18923)
 # The server will listen on http://127.0.0.1:18923.
 # Only change this if port 18923 is already in use on your machine.
-port = 18923
+api_port = 18923
 
 [transcription]
 # STT backend: "cloud" (OpenAI Whisper API) or "local" (faster-whisper, offline, v0.4+)
@@ -200,15 +200,6 @@ speed = 1.0
 # Set to false for silent operation.
 audio_cues = true
 
-# Show floating overlay UI (default: true, v0.8+)
-# Displays non-intrusive status in bottom-right corner:
-# - Red dot + timer during recording
-# - Amber dot + dots during processing
-# - Blue pulsing dot during TTS playback
-# - Green dot + "Pasted" confirmation when pasting
-# Set to false to disable overlay and use only tray icon for feedback.
-show_overlay = true
-
 [paste]
 # Delayed Paste (v0.9+)
 # Delay before pasting in seconds (default: 0 = paste immediately, same as v0.8 and earlier)
@@ -227,6 +218,11 @@ require_confirmation = false
 # If require_confirmation is true, how long to wait for the Enter key before cancelling the paste.
 # Valid range: 5.0 to 120.0 seconds.
 confirmation_timeout_seconds = 30.0
+
+# Automatically press Enter after pasting (default: false)
+# When true, simulates pressing Enter after the text is pasted.
+# Useful to immediately execute a pasted command in a terminal.
+auto_enter = false
 
 # Paste shortcut selection (default: "auto")
 # Controls which keyboard shortcut is simulated to paste text:
@@ -262,9 +258,9 @@ wake_phrase = "Hello Cloud"
 match_mode = "contains"
 
 # Recording pipeline for hands-free mode (default: "ask_tts")
-# - "transcribe_paste": Record speech -> Transcribe -> Summarize -> Paste (normal recording mode)
 # - "ask_tts": Record speech -> Send to LLM as question -> Speak answer via TTS
-# - "ask_paste": Record speech -> Send to LLM as question -> Paste answer
+# - "summary": Record speech -> Transcribe -> Summarize -> Paste (normal recording mode)
+# - "prompt": Record speech -> Send to LLM as question -> Paste answer
 # - "claude_code": Record speech -> Send to Claude Code CLI -> Response via configured mode
 pipeline = "ask_tts"
 
@@ -272,12 +268,39 @@ pipeline = "ask_tts"
 # After speech is detected, recording stops when silence exceeds this duration.
 # Longer values capture extended pauses within a single utterance.
 # Valid range: 1.0 to 10.0 seconds.
-silence_timeout_seconds = 3.0
+silence_timeout = 3.0
 
-# Maximum recording duration in seconds (default: 60)
+# Maximum recording duration in seconds (default: 120)
 # Recording auto-stops after this duration to prevent runaway recordings.
 # Valid range: 10 to 300 seconds.
-max_duration_seconds = 60
+max_recording_seconds = 120
+
+# Cooldown in seconds after wake word detection (default: 3.0)
+# Prevents the wake phrase from re-triggering immediately after a recording.
+# Valid range: 1.0 to 10.0 seconds.
+cooldown_seconds = 3.0
+
+[tts_cache]
+# Cache TTS audio locally to avoid re-synthesis of the same text.
+# Saves API credits (ElevenLabs) and reduces latency on repeated playback.
+enabled = true
+# Maximum total cache size in MB. Oldest entries are evicted when exceeded.
+# Valid range: 10 to 2000.
+max_size_mb = 200
+# Maximum age of unused cache entries in days. Set to 0 to disable age limit.
+# Valid range: 0 to 365.
+max_age_days = 30
+# Maximum number of cached entries. Set to 0 for unlimited (bounded by size).
+# Valid range: 0 to 5000.
+max_entries = 500
+
+[tts_export]
+# TTS Audio Export: save generated audio to a user-chosen folder with
+# human-readable filenames. Useful for creating audio collections,
+# training material, or any batch TTS output you want to keep.
+enabled = false
+# Default export directory (empty = ask on first export).
+export_path = ""
 
 [claude_code]
 # Claude Code CLI integration (requires `claude` in PATH)

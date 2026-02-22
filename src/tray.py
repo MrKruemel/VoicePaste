@@ -1,4 +1,4 @@
-"""System tray icon management for the Voice-to-Summary Paste Tool.
+"""System tray icon management for VoicePaste.
 
 Uses pystray for system tray integration and Pillow for icon generation.
 

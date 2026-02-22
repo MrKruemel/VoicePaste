@@ -1,4 +1,4 @@
-"""Voice-to-Summary Paste Tool -- Main Entry Point.
+"""VoicePaste -- Main Entry Point.
 
 A Windows desktop application that lets users press a hotkey (default: Ctrl+Shift+V),
 speak into their microphone, and have a clean German-language summary
@@ -785,12 +785,26 @@ class VoicePasteApp:
         Useful on Wayland where auto-detection of the focused window is unreliable.
         """
         self._terminal_mode = not self._terminal_mode
-        mode_label = "Terminal (Ctrl+Shift+V)" if self._terminal_mode else "GUI (Ctrl+V)"
+
+        if self._terminal_mode:
+            mode_label = "Terminal (Ctrl+Shift+V)"
+        else:
+            # BUG-3: Show the actual configured paste shortcut, not a
+            # hardcoded "GUI (Ctrl+V)" which is wrong when config uses
+            # "auto" or "ctrl+shift+v".
+            shortcut = self.config.paste_shortcut
+            if shortcut == "ctrl+v":
+                mode_label = "GUI (Ctrl+V)"
+            elif shortcut == "ctrl+shift+v":
+                mode_label = "Terminal (Ctrl+Shift+V)"
+            else:
+                mode_label = "Auto-Detect"
+
         logger.info("Paste mode toggled: %s", mode_label)
-        # Update tray menu to reflect new check state
-        if hasattr(self, '_tray_manager'):
-            self._tray_manager.refresh_menu()
-        # Show notification
+        # Update tray menu to reflect new check state and show notification.
+        # Note: _tray_manager is always initialised before hotkeys can fire,
+        # so no hasattr guard is needed (BUG-4).
+        self._tray_manager.refresh_menu()
         self._tray_manager.notify(APP_NAME, f"Paste: {mode_label}")
 
     def _open_settings(self) -> None:
@@ -1709,13 +1723,22 @@ class VoicePasteApp:
 
         # v1.3: Stop evdev monitor if running (Wayland)
         # SEC-083: Also clean up UInput virtual keyboard device
+        # SEC-086: Separate try blocks so stop_monitor() failure does not
+        # skip cleanup_uinput() (and vice versa).
         if sys.platform == "linux":
             try:
                 from evdev_hotkey import stop_monitor, cleanup_uinput
-                stop_monitor()
-                cleanup_uinput()
             except ImportError:
                 pass
+            else:
+                try:
+                    stop_monitor()
+                except Exception:
+                    logger.debug("Error stopping evdev monitor during shutdown.")
+                try:
+                    cleanup_uinput()
+                except Exception:
+                    logger.debug("Error cleaning up UInput during shutdown.")
 
         # Stop tray (this unblocks the main thread)
         self._tray_manager.stop()

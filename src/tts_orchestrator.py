@@ -1,4 +1,4 @@
-"""TTS orchestration for the Voice-to-Summary Paste Tool.
+"""TTS orchestration for VoicePaste.
 
 Extracted from VoicePasteApp to reduce the god-object pattern.
 Manages the TTS synthesis, playback, caching, and export pipeline.

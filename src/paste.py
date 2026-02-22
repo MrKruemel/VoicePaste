@@ -1,4 +1,4 @@
-"""Clipboard and paste module for the Voice-to-Summary Paste Tool.
+"""Clipboard and paste module for VoicePaste.
 
 Writes text to the clipboard and simulates Ctrl+V to paste.
 v0.2+: Clipboard backup/restore to preserve user's clipboard contents.
@@ -215,7 +215,7 @@ def clipboard_restore(backup: str | None) -> None:
         _close_clipboard()
 
 
-def paste_text(text: str) -> bool:
+def paste_text(text: str, paste_shortcut: str = "auto") -> bool:
     """Write text to clipboard and simulate Ctrl+V to paste.
 
     REQ-S18: Uses CF_UNICODETEXT for plain text only.
@@ -226,6 +226,9 @@ def paste_text(text: str) -> bool:
 
     Args:
         text: Text to paste at the current cursor position.
+        paste_shortcut: Accepted for API compatibility with the Linux
+            backend but ignored on Windows. Windows always uses Ctrl+V
+            because terminal emulators on Windows also accept Ctrl+V.
 
     Returns:
         True if paste was executed, False if clipboard write failed.

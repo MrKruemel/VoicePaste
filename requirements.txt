@@ -1,4 +1,4 @@
-# Voice-to-Summary Paste Tool - Pinned Production Dependencies
+# VoicePaste - Pinned Production Dependencies
 # Install: pip install -r requirements.txt
 # Python 3.11+ required (for tomllib in stdlib)
 #

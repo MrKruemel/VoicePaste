@@ -1,4 +1,4 @@
-"""Shared constants and enums for the Voice-to-Summary Paste Tool."""
+"""Shared constants and enums for VoicePaste."""
 
 import enum
 from typing import Any

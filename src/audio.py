@@ -1,4 +1,4 @@
-"""Audio recording module for the Voice-to-Summary Paste Tool.
+"""Audio recording module for VoicePaste.
 
 Captures microphone audio using sounddevice into an in-memory buffer.
 REQ-S09: Audio is NEVER written to disk.

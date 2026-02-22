@@ -1,6 +1,6 @@
 # -*- mode: python ; coding: utf-8 -*-
 # =============================================================================
-# PyInstaller spec file for Voice-to-Summary Paste Tool
+# PyInstaller spec file for VoicePaste
 # =============================================================================
 #
 # Produces a single portable .exe (--onefile) with all dependencies bundled,

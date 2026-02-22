@@ -1,4 +1,4 @@
-"""Shared pytest fixtures for the Voice-to-Summary Paste Tool test suite."""
+"""Shared pytest fixtures for the VoicePaste test suite."""
 
 import sys
 import os

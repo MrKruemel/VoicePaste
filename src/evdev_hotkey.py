@@ -639,14 +639,20 @@ class UInputController:
                 "Install with: pip install evdev"
             )
 
-        # SEC-082: Restrict UInput capabilities to only the keys needed
-        # for paste simulation (Ctrl+V, Ctrl+Shift+V). Registering all
-        # KEY_* codes is unnecessary and broadens the attack surface.
+        # SEC-082 / SEC-085: Restrict UInput capabilities to only the
+        # keys needed for paste simulation and post-paste actions.
+        # - Ctrl, Shift, V: paste combos (Ctrl+V, Ctrl+Shift+V)
+        # - Enter: auto-enter after paste (config.paste_auto_enter)
+        # - Escape: cancel actions
+        # Registering all KEY_* codes is unnecessary and broadens the
+        # attack surface.
         self._uinput = evdev.UInput(
             {ecodes.EV_KEY: [
                 ecodes.KEY_LEFTCTRL,
                 ecodes.KEY_LEFTSHIFT,
                 ecodes.KEY_V,
+                ecodes.KEY_ENTER,
+                ecodes.KEY_ESC,
             ]},
             name="VoicePaste Virtual Keyboard",
             phys="voicepaste/uinput",
