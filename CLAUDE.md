@@ -85,10 +85,13 @@ IDLE → RECORDING → PROCESSING → PASTING → IDLE
 - **X11**: xclip via subprocess (preferred), falls back to xsel
 - **Wayland**: wl-copy/wl-paste (native), falls back to xclip via XWayland
 
-**Paste Simulation (Ctrl+V):**
-- **Windows**: ctypes keyboard_event (VK_CONTROL + VK_V)
-- **X11**: xdotool key ctrl+v (with --clearmodifiers flag to release stuck modifier keys)
-- **Wayland**: evdev UInput (preferred, no external tools, requires /dev/uinput), falls back to ydotool, final fallback to wtype
+**Paste Simulation & Terminal Detection:**
+- **Windows**: ctypes keyboard_event (VK_CONTROL + VK_V). No terminal detection.
+- **X11**: xdotool key with auto-detected shortcut (Ctrl+V or Ctrl+Shift+V). Terminal detection via xprop/xdotool WM_CLASS. Flag `--clearmodifiers` prevents stuck modifiers.
+- **Wayland**: evdev UInput (preferred, no external tools, requires /dev/uinput), fallback to ydotool, final fallback to wtype.
+  - GNOME terminal detection via GNOME Shell D-Bus (gdbus)
+  - Non-GNOME Wayland: Falls back to Ctrl+V if detection unavailable
+- **Configurable override**: `[paste] paste_shortcut` = "auto"/"ctrl+v"/"ctrl+shift+v" for manual control
 
 **Hotkey Registration:**
 - **Windows**: `keyboard` library with low-level Windows hooks
@@ -124,6 +127,21 @@ STT, summarization, and TTS each use a `Protocol` class with a factory function:
 - `src/config.py::AppConfig` is a mutable dataclass with `save_to_toml()` for hot-reload
 - API keys are stored in the OS credential store (Windows Credential Manager / Linux keyring), never in config files
 - All defaults live in `src/constants.py`
+
+**Key Configuration Sections:**
+
+| Section | Options | Purpose |
+|---------|---------|---------|
+| `[hotkey]` | `combination`, `prompt_combination`, `tts_combination`, `tts_ask_combination` | Global hotkey bindings |
+| `[api]` | `enabled`, `port` | HTTP API server configuration |
+| `[transcription]` | `backend`, `model_size`, `device`, `compute_type`, `vad_filter`, `language`, `audio_device_index` | STT backend selection and parameters |
+| `[summarization]` | `enabled`, `provider`, `model`, `base_url`, `custom_prompt` | Text cleanup and LLM selection |
+| `[tts]` | `enabled`, `provider`, `voice_id`, `local_voice`, `speed`, `model_id`, `output_format` | Text-to-speech backend and voice selection |
+| `[paste]` | `delay_seconds`, `require_confirmation`, `confirmation_timeout_seconds`, `paste_shortcut` | Paste behavior and keystroke simulation |
+| `[handsfree]` | `enabled`, `wake_phrase`, `match_mode`, `pipeline`, `silence_timeout_seconds`, `max_duration_seconds` | Hands-Free wake word configuration |
+| `[claude_code]` | `enabled`, `hotkey`, `working_dir`, `system_prompt`, `response_mode`, `timeout`, `skip_permissions`, `continue_conversation` | Claude Code CLI integration |
+| `[feedback]` | `audio_cues`, `show_overlay` | Audio/visual feedback toggles |
+| `[logging]` | `level` | Log verbosity |
 
 ### Key Modules
 

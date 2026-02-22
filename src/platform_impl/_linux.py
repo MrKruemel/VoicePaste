@@ -28,6 +28,20 @@ _MAX_CLIPBOARD_BYTES = 1 * 1024 * 1024  # 1 MB
 
 logger = logging.getLogger(__name__)
 
+# Terminal emulator WM_CLASS names (lowercase) used for paste shortcut detection.
+# Terminal emulators use Ctrl+Shift+V for paste instead of Ctrl+V.
+# This set is shared by both X11 (xprop WM_CLASS) and Wayland (GNOME Shell
+# focus_window.get_wm_class()) detection paths.
+_TERMINAL_CLASSES: frozenset[str] = frozenset({
+    "gnome-terminal", "gnome-terminal-server",
+    "xterm", "uxterm", "konsole", "xfce4-terminal",
+    "terminator", "tilix", "alacritty", "kitty",
+    "wezterm", "org.wezfurlong.wezterm",
+    "foot", "ghostty",
+    "sakura", "lxterminal",
+    "mate-terminal", "guake", "yakuake", "st",
+})
+
 
 # ---------------------------------------------------------------------------
 # Session type detection
@@ -262,9 +276,31 @@ def clipboard_restore(backup: str | None) -> None:
 def _is_terminal_focused() -> bool:
     """Check if the currently focused window is a terminal emulator.
 
+    Dispatches to the appropriate detection method based on session type:
+    - Wayland: queries GNOME Shell D-Bus via gdbus for the focused window's
+      WM_CLASS.
+    - X11: uses xdotool + xprop to read the WM_CLASS of the active window.
+
     Terminal emulators use Ctrl+Shift+V for paste instead of Ctrl+V.
-    We detect this by checking the WM_CLASS of the active X11 window
-    via xprop (xdotool's getwindowclassname is not available in all versions).
+
+    Returns:
+        True if the focused window is a known terminal emulator.
+    """
+    session = _detect_session_type()
+    if session == "wayland":
+        return _is_terminal_focused_wayland()
+    return _is_terminal_focused_x11()
+
+
+def _is_terminal_focused_x11() -> bool:
+    """Check if the focused X11 window is a terminal emulator.
+
+    Uses xdotool to get the active window ID and xprop to read its
+    WM_CLASS property. Matches against the module-level _TERMINAL_CLASSES
+    set.
+
+    Returns:
+        True if the focused window is a known terminal emulator.
     """
     xdotool = shutil.which("xdotool")
     xprop = shutil.which("xprop")
@@ -293,19 +329,65 @@ def _is_terminal_focused() -> bool:
             if stripped and stripped not in (',', '=', '') and 'wm_class' not in stripped:
                 wm_classes.add(stripped)
 
-        terminal_classes = {
-            "gnome-terminal", "gnome-terminal-server",
-            "xterm", "uxterm", "konsole", "xfce4-terminal",
-            "terminator", "tilix", "alacritty", "kitty",
-            "wezterm", "foot", "sakura", "lxterminal",
-            "mate-terminal", "guake", "yakuake", "st",
-        }
-        matched = wm_classes & terminal_classes
+        matched = wm_classes & _TERMINAL_CLASSES
         if matched:
-            logger.debug("Terminal detected: %s", matched)
+            logger.debug("Terminal detected (X11): %s", matched)
             return True
         return False
     except Exception:
+        return False
+
+
+def _is_terminal_focused_wayland() -> bool:
+    """Check if the focused Wayland window is a terminal emulator.
+
+    Queries GNOME Shell's D-Bus interface via gdbus to get the WM_CLASS
+    of the currently focused window. This works on GNOME-based Wayland
+    sessions (Ubuntu default). On non-GNOME compositors (sway, wlroots),
+    this will fail gracefully and return False.
+
+    Returns:
+        True if the focused window is a known terminal emulator.
+    """
+    gdbus = shutil.which("gdbus")
+    if not gdbus:
+        logger.debug(
+            "gdbus not found; cannot detect terminal on Wayland. "
+            "Install glib2 utilities if terminal paste detection is needed."
+        )
+        return False
+    try:
+        result = subprocess.run(
+            [
+                gdbus, "call", "--session",
+                "--dest", "org.gnome.Shell",
+                "--object-path", "/org/gnome/Shell",
+                "--method", "org.gnome.Shell.Eval",
+                "global.display.focus_window "
+                "? global.display.focus_window.get_wm_class() : ''",
+            ],
+            capture_output=True, text=True, timeout=2,
+        )
+        if result.returncode != 0:
+            logger.debug(
+                "gdbus GNOME Shell query failed (rc=%d). "
+                "Non-GNOME compositor or Shell.Eval disabled.",
+                result.returncode,
+            )
+            return False
+
+        # gdbus output format: (true, 'gnome-terminal-server')
+        output = result.stdout.lower()
+        for tc in _TERMINAL_CLASSES:
+            if tc in output:
+                logger.debug("Terminal detected (Wayland/gdbus): %s", tc)
+                return True
+        return False
+    except subprocess.TimeoutExpired:
+        logger.debug("gdbus terminal detection timed out.")
+        return False
+    except Exception as e:
+        logger.debug("gdbus terminal detection failed: %s", e)
         return False
 
 
@@ -451,11 +533,12 @@ def _combo_to_wtype_args(combo: str) -> list[str]:
     return args
 
 
-def paste_text(text: str) -> bool:
+def paste_text(text: str, paste_shortcut: str = "auto") -> bool:
     """Write text to clipboard and simulate paste keystroke.
 
     Detects terminal emulators and uses Ctrl+Shift+V (the standard
-    terminal paste shortcut) instead of Ctrl+V.
+    terminal paste shortcut) instead of Ctrl+V.  The detection can be
+    overridden via the ``paste_shortcut`` parameter.
 
     On Wayland, keystroke simulation uses (in priority order):
     1. evdev UInput -- native, no external tools needed
@@ -463,6 +546,13 @@ def paste_text(text: str) -> bool:
     3. wtype -- works on wlroots compositors
 
     On X11, uses xdotool.
+
+    Args:
+        text: The text to paste.
+        paste_shortcut: Paste key override.
+            "auto" -- detect terminal and choose (default).
+            "ctrl+v" -- always use Ctrl+V.
+            "ctrl+shift+v" -- always use Ctrl+Shift+V.
     """
     if not text or not text.strip():
         logger.info("Empty text, nothing to paste.")
@@ -492,15 +582,29 @@ def paste_text(text: str) -> bool:
     # that serves the selection). 150ms is a safe margin.
     time.sleep(0.15)
 
-    # Detect terminal for correct paste shortcut
-    is_terminal = _is_terminal_focused()
-    paste_key = "ctrl+shift+v" if is_terminal else "ctrl+v"
+    # Determine paste key: respect explicit override, or auto-detect terminal
+    if paste_shortcut == "ctrl+v":
+        paste_key = "ctrl+v"
+    elif paste_shortcut == "ctrl+shift+v":
+        paste_key = "ctrl+shift+v"
+    else:  # "auto"
+        is_terminal = _is_terminal_focused()
+        paste_key = "ctrl+shift+v" if is_terminal else "ctrl+v"
+
+    logger.debug(
+        "Paste shortcut mode=%s, resolved key=%s, session=%s.",
+        paste_shortcut, paste_key, session,
+    )
 
     # Simulate paste keystroke
     try:
         if session == "wayland":
             if _simulate_wayland_keystroke(paste_key):
                 time.sleep(PASTE_DELAY_MS / 1000.0)
+                logger.info(
+                    "Paste complete (Wayland, key=%s, mode=%s).",
+                    paste_key, paste_shortcut,
+                )
                 return True
             logger.error(
                 "No Wayland keystroke simulation method available.\n"
@@ -525,8 +629,8 @@ def paste_text(text: str) -> bool:
             subprocess.run([xdotool, "key", paste_key], timeout=2)
             time.sleep(PASTE_DELAY_MS / 1000.0)
             logger.info(
-                "Paste complete (xdotool/X11, key=%s, terminal=%s).",
-                paste_key, is_terminal,
+                "Paste complete (xdotool/X11, key=%s, mode=%s).",
+                paste_key, paste_shortcut,
             )
             return True
     except subprocess.TimeoutExpired:

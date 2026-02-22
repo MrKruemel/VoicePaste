@@ -241,6 +241,15 @@ All options can be set via the **Settings dialog** (right-click tray → Setting
 | `[tts]` `local_voice` | string | `"de_DE-thorsten-medium"` | Piper voice model name. See below for available voices. Download models via Settings. Only used when `provider = "piper"`. |
 | `[tts]` `speed` | float | `1.0` | Piper speech speed (length_scale). `0.5` = slow, `1.0` = normal, `2.0` = fast. Range: 0.25–4.0. Only used when `provider = "piper"`. |
 
+### Paste Settings
+
+| Key | Type | Default | Description |
+|-----|------|---------|-------------|
+| `[paste]` `delay_seconds` | float | `0.0` | Delay before pasting in seconds (0.0–30.0). Useful to ensure cursor is in correct place. |
+| `[paste]` `require_confirmation` | boolean | `false` | If `true`, require Enter key press before pasting. Press Escape to cancel. |
+| `[paste]` `confirmation_timeout_seconds` | float | `30.0` | Timeout for confirmation prompt (5.0–120.0 seconds). |
+| `[paste]` `paste_shortcut` | string | `"auto"` | Paste keystroke: `"auto"` (detect terminals), `"ctrl+v"` (standard), or `"ctrl+shift+v"` (terminal-only). |
+
 ### Feedback & Logging
 
 | Key | Type | Default | Description |
@@ -500,11 +509,24 @@ For details on VAD handling, see the [Troubleshooting](README.md#troubleshooting
 
 **Solutions**:
 
-**Windows & Linux (X11):**
-- Voice Paste automatically detects terminal emulators (GNOME Terminal, Konsole, Alacritty, kitty, xterm, etc.) and uses Ctrl+Shift+V automatically.
-- If your terminal is not detected, try using right-click paste or manually pressing Ctrl+Shift+V.
+**Automatic Terminal Detection (Recommended):**
+- Voice Paste automatically detects terminal emulators (GNOME Terminal, Konsole, Alacritty, kitty, xterm, etc.) and uses the correct paste keystroke:
+  - **X11**: Uses xprop/xdotool to detect WM_CLASS window property
+  - **Wayland (GNOME)**: Uses GNOME Shell D-Bus (gdbus) for reliable detection
+  - **Wayland (non-GNOME)**: May not detect all terminals; see manual override below
+- Auto-detection is the default (`[paste] paste_shortcut = "auto"`).
 
-**Linux (Wayland only):**
+**Manual Override (if auto-detection fails):**
+- Edit `config.toml` and set `[paste] paste_shortcut` to one of:
+  - `"ctrl+v"` — Always use Ctrl+V (standard paste)
+  - `"ctrl+shift+v"` — Always use Ctrl+Shift+V (terminal-only paste)
+- Example:
+  ```toml
+  [paste]
+  paste_shortcut = "ctrl+shift+v"  # Force terminal paste for all windows
+  ```
+
+**Linux (Wayland-specific issues):**
 - Wayland paste uses evdev UInput for keystroke injection (preferred) or falls back to ydotool.
 - **If paste fails on Wayland**:
   1. Verify you have write access to `/dev/uinput`:
@@ -523,6 +545,7 @@ For details on VAD handling, see the [Troubleshooting](README.md#troubleshooting
      ```bash
      sudo apt install ydotool
      ```
+  5. If all else fails, set `paste_shortcut = "ctrl+shift+v"` in `config.toml` as a manual workaround.
 
 ### Clipboard Contents Lost
 

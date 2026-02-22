@@ -38,6 +38,7 @@ from constants import (
     DEFAULT_PASTE_CONFIRM,
     DEFAULT_PASTE_CONFIRMATION_TIMEOUT,
     DEFAULT_PASTE_DELAY_SECONDS,
+    DEFAULT_PASTE_SHORTCUT,
     DEFAULT_PIPER_VOICE,
     DEFAULT_PROMPT_HOTKEY,
     DEFAULT_SILENCE_TIMEOUT_SECONDS,
@@ -75,6 +76,7 @@ from constants import (
     OPENAI_DEFAULT_BASE_URL,
     OPENROUTER_DEFAULT_BASE_URL,
     OPENROUTER_DEFAULT_MODEL,
+    PASTE_SHORTCUT_OPTIONS,
     PIPER_VOICE_MODELS,
     STT_BACKENDS,
     SUMMARIZE_MODEL,
@@ -155,6 +157,10 @@ delay_seconds = 0.0
 confirmation_timeout_seconds = 30.0
 # Automatically press Enter after pasting (e.g. to run a command in terminal)
 auto_enter = false
+# Paste shortcut: "auto" (detect terminal vs normal app), "ctrl+v", or "ctrl+shift+v"
+# "auto" uses GNOME Shell D-Bus on Wayland, xdotool/xprop on X11.
+# Override to "ctrl+shift+v" if auto-detection fails (e.g. non-GNOME Wayland).
+paste_shortcut = "auto"
 
 [tts_cache]
 # Cache TTS audio locally to avoid re-synthesis of the same text.
@@ -267,6 +273,7 @@ class AppConfig:
     paste_delay_seconds: float = DEFAULT_PASTE_DELAY_SECONDS
     paste_confirmation_timeout: float = DEFAULT_PASTE_CONFIRMATION_TIMEOUT
     paste_auto_enter: bool = DEFAULT_PASTE_AUTO_ENTER
+    paste_shortcut: str = DEFAULT_PASTE_SHORTCUT
 
     # --- v0.9: Hands-Free Mode ---
     handsfree_enabled: bool = DEFAULT_HANDSFREE_ENABLED
@@ -445,6 +452,9 @@ delay_seconds = {self.paste_delay_seconds}
 confirmation_timeout_seconds = {self.paste_confirmation_timeout}
 # Automatically press Enter after pasting (e.g. to execute a command in a terminal).
 auto_enter = {str(self.paste_auto_enter).lower()}
+# Paste shortcut: "auto" (detect terminal), "ctrl+v", or "ctrl+shift+v".
+# On Wayland, auto-detection uses GNOME Shell D-Bus. Override if detection fails.
+paste_shortcut = "{esc(self.paste_shortcut)}"
 
 [handsfree]
 # Hands-Free Mode: continuous wake word detection via STT keyword spotting.
@@ -894,6 +904,14 @@ def load_config() -> Optional[AppConfig]:
         "confirmation_timeout_seconds", DEFAULT_PASTE_CONFIRMATION_TIMEOUT))
     paste_auto_enter = bool(paste_section.get(
         "auto_enter", DEFAULT_PASTE_AUTO_ENTER))
+    paste_shortcut = str(paste_section.get(
+        "paste_shortcut", DEFAULT_PASTE_SHORTCUT)).strip().lower()
+    if paste_shortcut not in PASTE_SHORTCUT_OPTIONS:
+        logger.warning(
+            "Invalid paste_shortcut '%s'. Falling back to '%s'.",
+            paste_shortcut, DEFAULT_PASTE_SHORTCUT,
+        )
+        paste_shortcut = DEFAULT_PASTE_SHORTCUT
     # Clamp values to sane ranges
     paste_delay_seconds = max(0.0, min(paste_delay_seconds, 36000.0))
     paste_confirmation_timeout = max(5.0, min(paste_confirmation_timeout, 120.0))
@@ -979,6 +997,7 @@ def load_config() -> Optional[AppConfig]:
         paste_delay_seconds=paste_delay_seconds,
         paste_confirmation_timeout=paste_confirmation_timeout,
         paste_auto_enter=paste_auto_enter,
+        paste_shortcut=paste_shortcut,
         # v1.0: TTS Audio Cache
         tts_cache_enabled=tts_cache_enabled,
         tts_cache_max_size_mb=tts_cache_max_size_mb,

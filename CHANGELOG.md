@@ -7,7 +7,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-### Planned
+### Added
+- **Paste Shortcut Configuration**: New `[paste] paste_shortcut` option ("auto"/"ctrl+v"/"ctrl+shift+v") for manual override of terminal paste detection. Wayland terminal detection now uses GNOME Shell D-Bus (`gdbus`) for reliable detection. X11 continues to use xprop/xdotool.
+- **Claude Code CLI Integration** (v1.3): Voice input control for Claude Code command-line tool. New `[claude_code]` config section with hotkey (default Ctrl+Alt+C), working directory, system prompt, response mode (paste/speak/both), permission handling, and conversation context. Requires `claude` in PATH. Hands-Free compatible.
+
+### Changed
+- **Paste Shortcut Auto-Detection**: Enhanced with D-Bus integration on Wayland for terminal detection. Auto-detection now more reliable across terminal emulators on both X11 and Wayland.
+
+### Fixed
+- **SEC-082: UInput Capabilities Restricted**: UInput device now restricted to only Ctrl, Shift, and V key codes instead of unrestricted all-key capabilities. Limits attack surface if process is compromised.
+- **SEC-083: UInput Cleanup on Shutdown**: Added explicit `cleanup_uinput()` call on Linux shutdown to ensure clean device removal from `/sys/devices/virtual/input/`.
+
+### Security
+- SEC-082: Restrict UInput capabilities to paste-only key codes (Ctrl, Shift, V).
+- SEC-083: Clean up UInput device on shutdown.
+- SEC-078 (carried): Clipboard write return codes should be checked on Linux (See SECURITY_REVIEW_2026-02-22.md for details).
+
+---
+
+## [1.1.0] - 2026-02-20
+
+See [BACKLOG.md](docs/BACKLOG.md) for the complete roadmap.
+
+### Planned (Future Releases)
 - Code signing for reduced antivirus false positives
 - Multi-language UI (localization)
 - Bundled language models in single-file .exe
@@ -16,8 +38,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Custom keybinds for all actions (not just recording/prompt)
 - Streaming response output (paste as LLM answers)
 - Multi-turn conversation context for Voice Prompt mode
-
-See [BACKLOG.md](docs/BACKLOG.md) for the complete v1.0 roadmap.
 
 ---
 

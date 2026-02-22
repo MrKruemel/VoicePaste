@@ -122,6 +122,8 @@ API_INITIAL_BACKOFF_SECONDS = 1.0
 
 # Paste configuration
 PASTE_DELAY_MS = 150
+DEFAULT_PASTE_SHORTCUT = "auto"  # "auto", "ctrl+v", "ctrl+shift+v"
+PASTE_SHORTCUT_OPTIONS = ("auto", "ctrl+v", "ctrl+shift+v")
 
 # v0.9: HTTP API configuration
 DEFAULT_API_ENABLED = False

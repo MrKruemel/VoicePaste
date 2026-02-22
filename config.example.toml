@@ -222,6 +222,17 @@ require_confirmation = false
 # Valid range: 5.0 to 120.0 seconds.
 confirmation_timeout_seconds = 30.0
 
+# Paste shortcut selection (default: "auto")
+# Controls which keyboard shortcut is simulated to paste text:
+# - "auto": Detect terminal emulators and use Ctrl+Shift+V, otherwise Ctrl+V.
+#   On X11: uses xprop to read WM_CLASS window property.
+#   On Wayland/GNOME: uses GNOME Shell D-Bus (gdbus) for reliable terminal detection.
+#   On Wayland/non-GNOME: falls back to Ctrl+V (may not detect all terminals).
+# - "ctrl+v": Always use Ctrl+V (standard paste, works in most applications).
+# - "ctrl+shift+v": Always use Ctrl+Shift+V (terminal-only paste, overrides auto-detection).
+# Use "ctrl+shift+v" if auto-detection fails on your terminal or desktop environment.
+paste_shortcut = "auto"
+
 [handsfree]
 # Hands-Free Mode (v0.9+)
 # Activate voice recording by saying a wake phrase (default: "Hello Cloud")

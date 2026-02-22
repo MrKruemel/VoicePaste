@@ -656,7 +656,9 @@ class TestSummarizationFallback:
         time.sleep(0.8)
 
         # paste_text should have been called with the raw transcript
-        tts_app._mocks["paste"].assert_called_once_with("Das ist ein Test.")
+        tts_app._mocks["paste"].assert_called_once_with(
+            "Das ist ein Test.", paste_shortcut="auto"
+        )
         assert tts_app.state == AppState.IDLE
 
     def test_summarizer_error_shows_fallback_notification(self, tts_app):

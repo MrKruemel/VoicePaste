@@ -5,11 +5,15 @@ Validates:
 - _combo_to_ydotool_args: scancode sequence generation
 - _combo_to_wtype_args: wtype argument generation
 - paste_text: clipboard write + keystroke simulation (Wayland path)
+- paste_text: paste_shortcut override ("ctrl+v", "ctrl+shift+v", "auto")
 - send_key: Wayland delegation to _simulate_wayland_keystroke
+- _is_terminal_focused: session-type dispatch (Wayland vs X11)
+- _is_terminal_focused_wayland: gdbus-based terminal detection
 
 All tests mock subprocess, evdev_hotkey, and shutil.which.
 """
 
+import subprocess
 import sys
 from unittest.mock import MagicMock, patch, call
 
@@ -313,3 +317,300 @@ class TestSendKeyWayland:
             ["/usr/bin/xdotool", "key", "--clearmodifiers", "Return"],
             timeout=2,
         )
+
+
+# ---------------------------------------------------------------------------
+# TestIsTerminalFocusedDispatch
+# ---------------------------------------------------------------------------
+
+@_linux_only
+class TestIsTerminalFocusedDispatch:
+    """Tests for _is_terminal_focused() session-type dispatch."""
+
+    def test_dispatches_to_wayland_path(self):
+        """_is_terminal_focused calls _is_terminal_focused_wayland on Wayland."""
+        mod = _import_linux()
+
+        with (
+            patch.object(mod, "_detect_session_type", return_value="wayland"),
+            patch.object(
+                mod, "_is_terminal_focused_wayland", return_value=True,
+            ) as mock_wayland,
+            patch.object(
+                mod, "_is_terminal_focused_x11",
+            ) as mock_x11,
+        ):
+            result = mod._is_terminal_focused()
+
+        assert result is True
+        mock_wayland.assert_called_once()
+        mock_x11.assert_not_called()
+
+    def test_dispatches_to_x11_path(self):
+        """_is_terminal_focused calls _is_terminal_focused_x11 on X11."""
+        mod = _import_linux()
+
+        with (
+            patch.object(mod, "_detect_session_type", return_value="x11"),
+            patch.object(
+                mod, "_is_terminal_focused_wayland",
+            ) as mock_wayland,
+            patch.object(
+                mod, "_is_terminal_focused_x11", return_value=False,
+            ) as mock_x11,
+        ):
+            result = mod._is_terminal_focused()
+
+        assert result is False
+        mock_x11.assert_called_once()
+        mock_wayland.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# TestIsTerminalFocusedWayland
+# ---------------------------------------------------------------------------
+
+@_linux_only
+class TestIsTerminalFocusedWayland:
+    """Tests for _is_terminal_focused_wayland() gdbus detection."""
+
+    def test_returns_true_for_terminal_class(self):
+        """Returns True when gdbus reports a known terminal WM_CLASS."""
+        mod = _import_linux()
+
+        mock_result = MagicMock()
+        mock_result.returncode = 0
+        mock_result.stdout = "(true, 'gnome-terminal-server')"
+
+        with (
+            patch("platform_impl._linux.shutil.which", return_value="/usr/bin/gdbus"),
+            patch("platform_impl._linux.subprocess.run", return_value=mock_result),
+        ):
+            result = mod._is_terminal_focused_wayland()
+
+        assert result is True
+
+    def test_returns_true_for_alacritty(self):
+        """Returns True for another terminal emulator (alacritty)."""
+        mod = _import_linux()
+
+        mock_result = MagicMock()
+        mock_result.returncode = 0
+        mock_result.stdout = "(true, 'Alacritty')"
+
+        with (
+            patch("platform_impl._linux.shutil.which", return_value="/usr/bin/gdbus"),
+            patch("platform_impl._linux.subprocess.run", return_value=mock_result),
+        ):
+            result = mod._is_terminal_focused_wayland()
+
+        assert result is True
+
+    def test_returns_false_for_non_terminal_class(self):
+        """Returns False when gdbus reports a non-terminal WM_CLASS."""
+        mod = _import_linux()
+
+        mock_result = MagicMock()
+        mock_result.returncode = 0
+        mock_result.stdout = "(true, 'firefox')"
+
+        with (
+            patch("platform_impl._linux.shutil.which", return_value="/usr/bin/gdbus"),
+            patch("platform_impl._linux.subprocess.run", return_value=mock_result),
+        ):
+            result = mod._is_terminal_focused_wayland()
+
+        assert result is False
+
+    def test_returns_false_when_gdbus_not_found(self):
+        """Returns False when gdbus binary is not installed."""
+        mod = _import_linux()
+
+        with patch("platform_impl._linux.shutil.which", return_value=None):
+            result = mod._is_terminal_focused_wayland()
+
+        assert result is False
+
+    def test_returns_false_on_gdbus_timeout(self):
+        """Returns False when gdbus subprocess times out."""
+        mod = _import_linux()
+
+        with (
+            patch("platform_impl._linux.shutil.which", return_value="/usr/bin/gdbus"),
+            patch(
+                "platform_impl._linux.subprocess.run",
+                side_effect=subprocess.TimeoutExpired(cmd="gdbus", timeout=2),
+            ),
+        ):
+            result = mod._is_terminal_focused_wayland()
+
+        assert result is False
+
+    def test_returns_false_on_gdbus_nonzero_exit(self):
+        """Returns False when gdbus returns non-zero (e.g. non-GNOME compositor)."""
+        mod = _import_linux()
+
+        mock_result = MagicMock()
+        mock_result.returncode = 1
+        mock_result.stdout = ""
+
+        with (
+            patch("platform_impl._linux.shutil.which", return_value="/usr/bin/gdbus"),
+            patch("platform_impl._linux.subprocess.run", return_value=mock_result),
+        ):
+            result = mod._is_terminal_focused_wayland()
+
+        assert result is False
+
+    def test_returns_false_on_unexpected_exception(self):
+        """Returns False on any unexpected error from gdbus."""
+        mod = _import_linux()
+
+        with (
+            patch("platform_impl._linux.shutil.which", return_value="/usr/bin/gdbus"),
+            patch(
+                "platform_impl._linux.subprocess.run",
+                side_effect=OSError("D-Bus not available"),
+            ),
+        ):
+            result = mod._is_terminal_focused_wayland()
+
+        assert result is False
+
+    def test_gdbus_called_with_correct_args(self):
+        """Verify the exact gdbus command used for GNOME Shell Eval."""
+        mod = _import_linux()
+
+        mock_result = MagicMock()
+        mock_result.returncode = 0
+        mock_result.stdout = "(true, '')"
+
+        with (
+            patch("platform_impl._linux.shutil.which", return_value="/usr/bin/gdbus"),
+            patch("platform_impl._linux.subprocess.run", return_value=mock_result) as mock_run,
+        ):
+            mod._is_terminal_focused_wayland()
+
+        mock_run.assert_called_once()
+        args = mock_run.call_args[0][0]
+        assert args[0] == "/usr/bin/gdbus"
+        assert args[1:3] == ["call", "--session"]
+        assert "--dest" in args
+        assert "org.gnome.Shell" in args
+        assert "--method" in args
+        assert "org.gnome.Shell.Eval" in args
+
+
+# ---------------------------------------------------------------------------
+# TestPasteTextShortcutOverride
+# ---------------------------------------------------------------------------
+
+@_linux_only
+class TestPasteTextShortcutOverride:
+    """Tests for paste_text() paste_shortcut parameter."""
+
+    def test_ctrl_shift_v_override_bypasses_detection(self):
+        """paste_shortcut='ctrl+shift+v' forces Ctrl+Shift+V without detection."""
+        mod = _import_linux()
+
+        with (
+            patch.object(mod, "_detect_session_type", return_value="wayland"),
+            patch.object(mod, "_find_clipboard_write_tool", return_value=(
+                ["/usr/bin/wl-copy"], "wl-copy"
+            )),
+            patch("platform_impl._linux.subprocess.run"),
+            patch("platform_impl._linux.time.sleep"),
+            patch.object(mod, "_is_terminal_focused") as mock_detect,
+            patch.object(mod, "_simulate_wayland_keystroke", return_value=True) as mock_sim,
+        ):
+            result = mod.paste_text("test", paste_shortcut="ctrl+shift+v")
+
+        assert result is True
+        mock_detect.assert_not_called()
+        mock_sim.assert_called_once_with("ctrl+shift+v")
+
+    def test_ctrl_v_override_bypasses_detection(self):
+        """paste_shortcut='ctrl+v' forces Ctrl+V without detection."""
+        mod = _import_linux()
+
+        with (
+            patch.object(mod, "_detect_session_type", return_value="wayland"),
+            patch.object(mod, "_find_clipboard_write_tool", return_value=(
+                ["/usr/bin/wl-copy"], "wl-copy"
+            )),
+            patch("platform_impl._linux.subprocess.run"),
+            patch("platform_impl._linux.time.sleep"),
+            patch.object(mod, "_is_terminal_focused") as mock_detect,
+            patch.object(mod, "_simulate_wayland_keystroke", return_value=True) as mock_sim,
+        ):
+            result = mod.paste_text("test", paste_shortcut="ctrl+v")
+
+        assert result is True
+        mock_detect.assert_not_called()
+        mock_sim.assert_called_once_with("ctrl+v")
+
+    def test_auto_calls_is_terminal_focused(self):
+        """paste_shortcut='auto' calls _is_terminal_focused for detection."""
+        mod = _import_linux()
+
+        with (
+            patch.object(mod, "_detect_session_type", return_value="wayland"),
+            patch.object(mod, "_find_clipboard_write_tool", return_value=(
+                ["/usr/bin/wl-copy"], "wl-copy"
+            )),
+            patch("platform_impl._linux.subprocess.run"),
+            patch("platform_impl._linux.time.sleep"),
+            patch.object(mod, "_is_terminal_focused", return_value=False) as mock_detect,
+            patch.object(mod, "_simulate_wayland_keystroke", return_value=True) as mock_sim,
+        ):
+            result = mod.paste_text("test", paste_shortcut="auto")
+
+        assert result is True
+        mock_detect.assert_called_once()
+        mock_sim.assert_called_once_with("ctrl+v")
+
+    def test_auto_default_calls_is_terminal_focused(self):
+        """Default paste_shortcut (no argument) calls _is_terminal_focused."""
+        mod = _import_linux()
+
+        with (
+            patch.object(mod, "_detect_session_type", return_value="wayland"),
+            patch.object(mod, "_find_clipboard_write_tool", return_value=(
+                ["/usr/bin/wl-copy"], "wl-copy"
+            )),
+            patch("platform_impl._linux.subprocess.run"),
+            patch("platform_impl._linux.time.sleep"),
+            patch.object(mod, "_is_terminal_focused", return_value=True) as mock_detect,
+            patch.object(mod, "_simulate_wayland_keystroke", return_value=True) as mock_sim,
+        ):
+            result = mod.paste_text("test")
+
+        assert result is True
+        mock_detect.assert_called_once()
+        mock_sim.assert_called_once_with("ctrl+shift+v")
+
+    def test_ctrl_v_override_on_x11(self):
+        """paste_shortcut='ctrl+v' override also works on X11 path."""
+        mod = _import_linux()
+
+        with (
+            patch.object(mod, "_detect_session_type", return_value="x11"),
+            patch.object(mod, "_find_clipboard_write_tool", return_value=(
+                ["/usr/bin/xclip", "-selection", "clipboard", "-i"], "xclip"
+            )),
+            patch("platform_impl._linux.subprocess.run") as mock_run,
+            patch("platform_impl._linux.time.sleep"),
+            patch("platform_impl._linux.shutil.which", return_value="/usr/bin/xdotool"),
+            patch.object(mod, "_is_terminal_focused") as mock_detect,
+        ):
+            result = mod.paste_text("test", paste_shortcut="ctrl+v")
+
+        assert result is True
+        mock_detect.assert_not_called()
+        # The xdotool call should use "ctrl+v" as the key
+        xdotool_calls = [
+            c for c in mock_run.call_args_list
+            if c[0][0][0] == "/usr/bin/xdotool"
+        ]
+        assert len(xdotool_calls) == 1
+        assert xdotool_calls[0][0][0] == ["/usr/bin/xdotool", "key", "ctrl+v"]

@@ -639,9 +639,15 @@ class UInputController:
                 "Install with: pip install evdev"
             )
 
-        # Create a virtual keyboard that supports all standard keys.
-        # By default, evdev.UInput allows all KEY_* and BTN_* codes.
+        # SEC-082: Restrict UInput capabilities to only the keys needed
+        # for paste simulation (Ctrl+V, Ctrl+Shift+V). Registering all
+        # KEY_* codes is unnecessary and broadens the attack surface.
         self._uinput = evdev.UInput(
+            {ecodes.EV_KEY: [
+                ecodes.KEY_LEFTCTRL,
+                ecodes.KEY_LEFTSHIFT,
+                ecodes.KEY_V,
+            ]},
             name="VoicePaste Virtual Keyboard",
             phys="voicepaste/uinput",
         )

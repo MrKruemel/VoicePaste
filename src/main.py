@@ -1520,7 +1520,7 @@ class VoicePasteApp:
                 return
 
             self._set_state(AppState.PASTING)
-            success = paste_text(summary)
+            success = paste_text(summary, paste_shortcut=self.config.paste_shortcut)
 
             if success:
                 # v0.9: Auto-Enter after paste (e.g. execute command in terminal)
@@ -1665,10 +1665,12 @@ class VoicePasteApp:
         self._hotkey_manager.unregister()
 
         # v1.3: Stop evdev monitor if running (Wayland)
+        # SEC-083: Also clean up UInput virtual keyboard device
         if sys.platform == "linux":
             try:
-                from evdev_hotkey import stop_monitor
+                from evdev_hotkey import stop_monitor, cleanup_uinput
                 stop_monitor()
+                cleanup_uinput()
             except ImportError:
                 pass
 

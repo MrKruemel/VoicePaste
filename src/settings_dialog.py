@@ -1369,9 +1369,26 @@ class SettingsDialog:
             variable=self._paste_auto_enter_var,
         ).pack(fill=tk.X, pady=(4, 0))
 
+        # Paste shortcut selection (Linux)
+        shortcut_row = ttk.Frame(parent)
+        shortcut_row.pack(fill=tk.X, pady=(6, 2))
+        ttk.Label(
+            shortcut_row, text="Paste shortcut:", anchor=tk.W
+        ).pack(side=tk.LEFT)
+        self._paste_shortcut_var = tk.StringVar()
+        self._paste_shortcut_combo = ttk.Combobox(
+            shortcut_row,
+            textvariable=self._paste_shortcut_var,
+            values=["Auto-detect", "Ctrl+V", "Ctrl+Shift+V"],
+            state="readonly",
+            width=16,
+        )
+        self._paste_shortcut_combo.pack(side=tk.LEFT, padx=(8, 0))
+
         paste_hint = ttk.Label(
             parent,
-            text="When confirmation is on, delay is ignored (Enter triggers paste).",
+            text="When confirmation is on, delay is ignored (Enter triggers paste).\n"
+                 "Paste shortcut: Auto detects terminals for Ctrl+Shift+V.",
             foreground="#999999",
             font=("", 8),
         )
@@ -1919,6 +1936,15 @@ class SettingsDialog:
         self._paste_delay_var.set(str(config.paste_delay_seconds))
         self._paste_timeout_var.set(str(config.paste_confirmation_timeout))
         self._paste_auto_enter_var.set(config.paste_auto_enter)
+        # Paste shortcut display mapping
+        _shortcut_display_map = {
+            "auto": "Auto-detect",
+            "ctrl+v": "Ctrl+V",
+            "ctrl+shift+v": "Ctrl+Shift+V",
+        }
+        self._paste_shortcut_var.set(
+            _shortcut_display_map.get(config.paste_shortcut, "Auto-detect")
+        )
         self._on_paste_confirm_toggled()
 
         # v0.9: API
@@ -3254,6 +3280,19 @@ class SettingsDialog:
         if new_paste_auto_enter != config.paste_auto_enter:
             changed_fields["paste_auto_enter"] = new_paste_auto_enter
             config.paste_auto_enter = new_paste_auto_enter
+
+        # Paste shortcut
+        _shortcut_save_map = {
+            "Auto-detect": "auto",
+            "Ctrl+V": "ctrl+v",
+            "Ctrl+Shift+V": "ctrl+shift+v",
+        }
+        new_paste_shortcut = _shortcut_save_map.get(
+            self._paste_shortcut_var.get(), "auto"
+        )
+        if new_paste_shortcut != config.paste_shortcut:
+            changed_fields["paste_shortcut"] = new_paste_shortcut
+            config.paste_shortcut = new_paste_shortcut
 
         # v0.9: API
         new_api_enabled = self._api_enabled_var.get()
