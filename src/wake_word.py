@@ -36,6 +36,7 @@ import numpy as np
 import sounddevice as sd
 
 from constants import (
+    ADAPTIVE_CALIBRATION_SECONDS,
     DEFAULT_HANDSFREE_BUFFER_SECONDS,
     DEFAULT_HANDSFREE_COOLDOWN_SECONDS,
     DEFAULT_SAMPLE_RATE,
@@ -105,6 +106,7 @@ class WakeWordDetector:
         match_mode: str = DEFAULT_WAKE_PHRASE_MATCH_MODE,
         language: Optional[str] = None,
         should_listen: Optional[Callable[[], bool]] = None,
+        adaptive_energy: bool = False,
     ) -> None:
         self._wake_phrase = wake_phrase
         self._wake_phrase_normalized = _normalize_text(wake_phrase)
@@ -120,6 +122,8 @@ class WakeWordDetector:
         # When False, the listen loop discards frames (saves CPU, avoids
         # concurrent audio stream conflicts during recording/processing).
         self._should_listen = should_listen
+        # Adaptive energy threshold: calibrate from ambient noise on start.
+        self._adaptive_energy = adaptive_energy
 
         self._model = None
         self._model_lock = threading.Lock()
@@ -300,6 +304,39 @@ class WakeWordDetector:
             return
 
         logger.debug("Wake word listener loop started.")
+
+        # Adaptive energy calibration: collect ambient noise frames to
+        # derive a dynamic energy threshold that works in noisy environments.
+        if self._adaptive_energy:
+            logger.info(
+                "Calibrating ambient noise for wake word detection (%.1fs)...",
+                ADAPTIVE_CALIBRATION_SECONDS,
+            )
+            cal_frames: list[np.ndarray] = []
+            cal_start = time.monotonic()
+            while (time.monotonic() - cal_start) < ADAPTIVE_CALIBRATION_SECONDS:
+                if self._stop_event.is_set():
+                    try:
+                        stream.stop()
+                        stream.close()
+                    except Exception:
+                        pass
+                    logger.debug("Wake word calibration aborted (stop event).")
+                    self._running = False
+                    return
+                try:
+                    frame, _ = stream.read(_FRAME_SIZE)
+                    cal_frames.append(frame.copy())
+                except Exception:
+                    break
+
+            from audio import calibrate_rms_threshold
+            self._energy_threshold = calibrate_rms_threshold(cal_frames)
+            _clear_buffer(cal_frames)
+            logger.info(
+                "Wake word energy threshold calibrated: %.1f RMS.",
+                self._energy_threshold,
+            )
 
         try:
             while not self._stop_event.is_set():

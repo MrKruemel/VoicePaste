@@ -16,6 +16,10 @@ import numpy as np
 import sounddevice as sd
 
 from constants import (
+    ADAPTIVE_CALIBRATION_SECONDS,
+    ADAPTIVE_MAX_THRESHOLD,
+    ADAPTIVE_MIN_THRESHOLD,
+    ADAPTIVE_THRESHOLD_MULTIPLIER,
     DEFAULT_AUDIO_DEVICE_INDEX,
     DEFAULT_CHANNELS,
     DEFAULT_DTYPE,
@@ -25,6 +29,35 @@ from constants import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+def calibrate_rms_threshold(
+    frames: list[np.ndarray],
+    multiplier: float = ADAPTIVE_THRESHOLD_MULTIPLIER,
+    min_threshold: float = ADAPTIVE_MIN_THRESHOLD,
+    max_threshold: float = ADAPTIVE_MAX_THRESHOLD,
+) -> float:
+    """Compute adaptive silence threshold from ambient noise frames.
+
+    Uses median RMS (robust to speech outliers during calibration) of the
+    provided audio frames, multiplied by a factor, and clamped to a sane
+    range.
+
+    Args:
+        frames: List of int16 numpy arrays captured during calibration.
+        multiplier: Factor applied to median RMS to derive threshold.
+        min_threshold: Minimum allowed threshold (floor).
+        max_threshold: Maximum allowed threshold (ceiling).
+
+    Returns:
+        Computed RMS threshold for silence detection.
+    """
+    if not frames:
+        return min_threshold
+    rms_values = [float(np.sqrt(np.mean(f.astype(np.float32) ** 2))) for f in frames]
+    baseline_rms = float(np.median(rms_values))
+    threshold = baseline_rms * multiplier
+    return max(min_threshold, min(threshold, max_threshold))
 
 
 class AudioRecorder:
@@ -50,6 +83,7 @@ class AudioRecorder:
         silence_threshold_rms: float = 300.0,
         max_duration_override: Optional[int] = None,
         device: Optional[int] = DEFAULT_AUDIO_DEVICE_INDEX,
+        adaptive_silence: bool = False,
     ) -> None:
         """Initialize the audio recorder.
 
@@ -71,6 +105,9 @@ class AudioRecorder:
             max_duration_override: Override MAX_RECORDING_DURATION_SECONDS
                 (e.g. 120s for hands-free mode).
             device: PortAudio device index for input. None = system default.
+            adaptive_silence: When True, calibrate silence threshold from
+                ambient noise during the first ADAPTIVE_CALIBRATION_SECONDS
+                of recording. Overrides silence_threshold_rms.
         """
         self.sample_rate = sample_rate
         self.channels = channels
@@ -92,6 +129,11 @@ class AudioRecorder:
         self._silence_start: Optional[float] = None
         self._silence_fired: bool = False
         self._max_duration_override = max_duration_override
+        # Adaptive silence detection
+        self._adaptive_silence = adaptive_silence
+        self._calibrating = False
+        self._calibration_frames: list[np.ndarray] = []
+        self._calibration_start: float = 0.0
 
     def _audio_callback(
         self,
@@ -114,6 +156,24 @@ class AudioRecorder:
 
         # Silence detection (only when callback is registered)
         if self._on_silence_stop is not None and not self._silence_fired:
+            # Adaptive calibration phase: collect ambient noise frames
+            if self._calibrating:
+                self._calibration_frames.append(indata.copy())
+                elapsed = time.monotonic() - self._calibration_start
+                if elapsed >= ADAPTIVE_CALIBRATION_SECONDS:
+                    self._silence_threshold_rms = calibrate_rms_threshold(
+                        self._calibration_frames,
+                    )
+                    self._calibrating = False
+                    self._calibration_frames = []  # Free memory
+                    logger.info(
+                        "Adaptive silence calibration complete. "
+                        "Threshold: %.1f RMS (%.1fs ambient noise).",
+                        self._silence_threshold_rms,
+                        elapsed,
+                    )
+                return  # Skip normal silence detection during calibration
+
             rms = np.sqrt(np.mean(indata.astype(np.float32) ** 2))
             if rms > self._silence_threshold_rms:
                 self._speech_detected = True
@@ -176,6 +236,17 @@ class AudioRecorder:
                 self._speech_detected = False
                 self._silence_start = None
                 self._silence_fired = False
+
+                # Adaptive silence calibration: collect ambient noise at
+                # recording start to compute a dynamic threshold.
+                if self._adaptive_silence and self._on_silence_stop is not None:
+                    self._calibrating = True
+                    self._calibration_frames = []
+                    self._calibration_start = time.monotonic()
+                    logger.info(
+                        "Starting ambient noise calibration (%.1fs)...",
+                        ADAPTIVE_CALIBRATION_SECONDS,
+                    )
 
                 # Start max-duration timer to auto-stop recording
                 max_dur = self._max_duration_override or MAX_RECORDING_DURATION_SECONDS

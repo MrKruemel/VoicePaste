@@ -280,6 +280,12 @@ max_recording_seconds = 120
 # Valid range: 1.0 to 10.0 seconds.
 cooldown_seconds = 3.0
 
+# Silence detection threshold (RMS energy, int16 scale).
+# 0 = adaptive (auto-calibrate from ambient noise at recording start).
+# Set to a fixed value (e.g. 500-1000) if adaptive detection misbehaves.
+# Higher values = less sensitive (ignore more background noise).
+silence_threshold_rms = 0
+
 [tts_cache]
 # Cache TTS audio locally to avoid re-synthesis of the same text.
 # Saves API credits (ElevenLabs) and reduces latency on repeated playback.

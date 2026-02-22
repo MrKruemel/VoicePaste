@@ -1528,6 +1528,24 @@ class SettingsDialog:
             font=("", 8),
         ).pack(fill=tk.X, pady=(0, 8))
 
+        # Silence threshold RMS
+        threshold_row = ttk.Frame(parent)
+        threshold_row.pack(fill=tk.X, pady=(0, 4))
+        ttk.Label(threshold_row, text="Silence threshold:", width=16, anchor=tk.W).pack(side=tk.LEFT)
+        self._hf_silence_threshold_var = tk.StringVar(value="0")
+        ttk.Spinbox(
+            threshold_row, from_=0, to=10000, increment=50, width=6,
+            textvariable=self._hf_silence_threshold_var,
+        ).pack(side=tk.LEFT, padx=(4, 0))
+        ttk.Label(threshold_row, text="RMS").pack(side=tk.LEFT, padx=(4, 0))
+
+        ttk.Label(
+            parent,
+            text="RMS threshold for silence. 0 = auto-calibrate from ambient noise.",
+            foreground="#999999",
+            font=("", 8),
+        ).pack(fill=tk.X, pady=(0, 8))
+
         # Max recording duration
         max_row = ttk.Frame(parent)
         max_row.pack(fill=tk.X, pady=(0, 4))
@@ -1982,6 +2000,7 @@ class SettingsDialog:
             _pipeline_display.get(config.handsfree_pipeline, "Ask AI + TTS (ask_tts)")
         )
         self._silence_timeout_var.set(str(config.silence_timeout_seconds))
+        self._hf_silence_threshold_var.set(str(int(config.handsfree_silence_threshold_rms)))
         self._hf_max_recording_var.set(str(config.handsfree_max_recording_seconds))
         self._hf_cooldown_var.set(str(config.handsfree_cooldown_seconds))
 
@@ -3363,6 +3382,15 @@ class SettingsDialog:
         if new_silence_timeout != config.silence_timeout_seconds:
             changed_fields["silence_timeout_seconds"] = new_silence_timeout
             config.silence_timeout_seconds = new_silence_timeout
+
+        try:
+            new_silence_threshold = float(self._hf_silence_threshold_var.get())
+            new_silence_threshold = max(0.0, min(new_silence_threshold, 10000.0))
+        except (ValueError, TypeError):
+            new_silence_threshold = config.handsfree_silence_threshold_rms
+        if new_silence_threshold != config.handsfree_silence_threshold_rms:
+            changed_fields["handsfree_silence_threshold_rms"] = new_silence_threshold
+            config.handsfree_silence_threshold_rms = new_silence_threshold
 
         try:
             new_hf_max = int(float(self._hf_max_recording_var.get()))

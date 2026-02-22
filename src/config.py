@@ -29,6 +29,7 @@ from constants import (
     DEFAULT_HANDSFREE_COOLDOWN_SECONDS,
     DEFAULT_HANDSFREE_ENABLED,
     DEFAULT_HANDSFREE_MAX_RECORDING_SECONDS,
+    DEFAULT_HANDSFREE_SILENCE_THRESHOLD_RMS,
     DEFAULT_TRANSCRIPTION_LANGUAGE,
     SUPPORTED_LANGUAGES,
     DEFAULT_HANDSFREE_PIPELINE,
@@ -289,6 +290,7 @@ class AppConfig:
     handsfree_max_recording_seconds: int = DEFAULT_HANDSFREE_MAX_RECORDING_SECONDS
     handsfree_pipeline: str = DEFAULT_HANDSFREE_PIPELINE
     handsfree_cooldown_seconds: float = DEFAULT_HANDSFREE_COOLDOWN_SECONDS
+    handsfree_silence_threshold_rms: float = DEFAULT_HANDSFREE_SILENCE_THRESHOLD_RMS
 
     # --- v1.0: TTS Audio Cache ---
     tts_cache_enabled: bool = DEFAULT_TTS_CACHE_ENABLED
@@ -483,6 +485,10 @@ max_recording_seconds = {self.handsfree_max_recording_seconds}
 pipeline = "{esc(self.handsfree_pipeline)}"
 # Cooldown in seconds after wake word detection (prevents re-trigger)
 cooldown_seconds = {self.handsfree_cooldown_seconds}
+# Silence detection threshold (RMS energy, int16 scale).
+# 0 = adaptive (auto-calibrate from ambient noise at recording start).
+# Set to a fixed value (e.g. 500-1000) if adaptive detection misbehaves.
+silence_threshold_rms = {self.handsfree_silence_threshold_rms}
 
 [tts_cache]
 # Cache TTS audio locally to avoid re-synthesis of the same text.
@@ -923,6 +929,11 @@ def load_config() -> Optional[AppConfig]:
         "cooldown_seconds", DEFAULT_HANDSFREE_COOLDOWN_SECONDS))
     handsfree_cooldown_seconds = max(1.0, min(handsfree_cooldown_seconds, 10.0))
 
+    # Silence threshold RMS (0.0 = adaptive auto-calibration)
+    handsfree_silence_threshold_rms = float(handsfree_section.get(
+        "silence_threshold_rms", DEFAULT_HANDSFREE_SILENCE_THRESHOLD_RMS))
+    handsfree_silence_threshold_rms = max(0.0, min(handsfree_silence_threshold_rms, 10000.0))
+
     # --- v0.9: Paste confirmation/delay ---
     paste_require_confirmation = bool(paste_section.get(
         "require_confirmation", DEFAULT_PASTE_CONFIRM))
@@ -1053,6 +1064,7 @@ def load_config() -> Optional[AppConfig]:
         handsfree_max_recording_seconds=handsfree_max_recording_seconds,
         handsfree_pipeline=handsfree_pipeline,
         handsfree_cooldown_seconds=handsfree_cooldown_seconds,
+        handsfree_silence_threshold_rms=handsfree_silence_threshold_rms,
     )
 
     # REQ-S01: Only log the masked key

@@ -650,6 +650,11 @@ class VoicePasteApp:
 
         from wake_word import WakeWordDetector
 
+        # Determine energy threshold / adaptive mode based on config.
+        # 0.0 = adaptive (auto-calibrate from ambient noise).
+        _silence_rms = self.config.handsfree_silence_threshold_rms
+        _use_adaptive = _silence_rms == 0.0
+
         self._wake_detector = WakeWordDetector(
             wake_phrase=self.config.wake_phrase,
             on_detected=self._on_wake_word_detected,
@@ -657,6 +662,8 @@ class VoicePasteApp:
             match_mode=self.config.wake_phrase_match_mode,
             language="en",  # Wake phrases are typically English
             should_listen=lambda: self.state == AppState.IDLE,
+            adaptive_energy=_use_adaptive,
+            **({"energy_threshold": _silence_rms} if not _use_adaptive else {}),
         )
 
         success = self._wake_detector.start()
@@ -727,13 +734,19 @@ class VoicePasteApp:
             self._show_error("No STT backend available for Hands-Free recording.")
             return
 
-        # Create a new AudioRecorder with silence auto-stop
+        # Create a new AudioRecorder with silence auto-stop.
+        # If silence_threshold_rms == 0.0, use adaptive calibration.
+        _silence_rms = self.config.handsfree_silence_threshold_rms
+        _use_adaptive = _silence_rms == 0.0
+
         self._recorder = AudioRecorder(
             on_auto_stop=self._on_auto_stop,
             on_silence_stop=self._on_silence_auto_stop,
             silence_timeout_seconds=self.config.silence_timeout_seconds,
+            silence_threshold_rms=_silence_rms if not _use_adaptive else 300.0,
             max_duration_override=self.config.handsfree_max_recording_seconds,
             device=self.config.audio_device_index,
+            adaptive_silence=_use_adaptive,
         )
 
         success = self._recorder.start()
