@@ -45,7 +45,9 @@ build.bat clean          # remove build artifacts
 sudo apt install espeak-ng libportaudio2 xclip xdotool python3-tk
 sudo apt install python3-gi gir1.2-ayatanaappindicator3-0.1
 sudo apt install gnome-shell-extension-appindicator  # GNOME tray icon
-pip install pynput  # not in requirements.txt, Linux-only hotkey library
+pip install pynput evdev  # not in requirements.txt, Linux-only hotkey libraries
+# For Wayland: ensure you are in the 'input' group (for evdev device access)
+sudo usermod -aG input $USER  # then logout and login
 ```
 
 ## Architecture
@@ -53,7 +55,7 @@ pip install pynput  # not in requirements.txt, Linux-only hotkey library
 ### Threading Model
 
 - **Main thread**: pystray event loop (system tray icon + menu)
-- **Hotkey thread**: `keyboard` library listener (Windows) or `pynput` GlobalHotKeys (Linux), daemon thread
+- **Hotkey thread**: `keyboard` library listener (Windows), `pynput` GlobalHotKeys (Linux X11), or `evdev` monitor daemon (Linux Wayland), daemon thread
 - **Pipeline worker**: spawned per recording session — handles STT → summarization → paste sequence
 - **Settings dialog**: tkinter on a separate thread, spawned on demand
 - **Wake word detector**: continuous background audio monitoring thread (hands-free mode)
@@ -97,7 +99,8 @@ STT, summarization, and TTS each use a `Protocol` class with a factory function:
 |--------|---------|
 | `main.py` | Entry point, `VoicePasteApp` orchestrator class, pipeline logic |
 | `audio.py` | Microphone recording via sounddevice (in-memory WAV buffer) |
-| `hotkey.py` | Global hotkey registration (keyboard on Win, pynput on Linux) |
+| `hotkey.py` | Global hotkey registration (keyboard on Windows, pynput on Linux X11, evdev on Linux Wayland) |
+| `evdev_hotkey.py` | Linux Wayland global hotkey support via evdev device monitoring |
 | `tray.py` | System tray icon/menu via pystray, state-colored icons |
 | `settings_dialog.py` | Tabbed tkinter Settings UI with sv_ttk dark theme |
 | `paste.py` | Windows clipboard + Ctrl+V simulation (ctypes) |
@@ -123,8 +126,8 @@ STT, summarization, and TTS each use a `Protocol` class with a factory function:
 - All pip dependency versions are pinned with `==` in `requirements.txt` for reproducible PyInstaller builds. Do not loosen to `>=` without re-testing the built binary.
 - onnxruntime has a known issue with PyInstaller `--onefile` bundles — VAD filter is auto-disabled in frozen builds (see `constants.py`).
 - `rthook_onnxruntime.py` is a PyInstaller runtime hook for onnxruntime DLL loading.
-- **Linux builds require `pynput`** in the build environment. `pynput` is the Linux hotkey backend but is NOT listed in `requirements.txt` (because it's Linux-only and the `keyboard` library is used on Windows). If pynput is missing during the PyInstaller build, the binary will start but immediately fail with `"No module named 'pynput'"` / `"Could not register the hotkey"`. The build script (`build_linux.sh`) now checks for this automatically.
-- **Use a venv for building** — system Python on modern Ubuntu (PEP 668) blocks global pip installs. The venv **must** use `--system-site-packages` so that PyGObject (`gi`) and AppIndicator3 are available — these are system packages that cannot be installed via pip. Without them, pystray falls back to the `_xorg` backend and the tray right-click menu does not work. Build recipe: `python3 -m venv --system-site-packages .venv && source .venv/bin/activate && pip install -r requirements.txt pyinstaller pynput`.
+- **Linux builds require `pynput` and `evdev`** in the build environment. `pynput` handles X11 hotkeys; `evdev` handles Wayland hotkeys. Both are NOT listed in `requirements.txt` (because they are Linux-only and the `keyboard` library is used on Windows). If pynput is missing, the binary fails with `"No module named 'pynput'"` / `"Could not register the hotkey"`. If evdev is missing, Wayland support is unavailable but X11 still works. The build script (`build_linux.sh`) now checks for pynput and warns if evdev is missing.
+- **Use a venv for building** — system Python on modern Ubuntu (PEP 668) blocks global pip installs. The venv **must** use `--system-site-packages` so that PyGObject (`gi`) and AppIndicator3 are available — these are system packages that cannot be installed via pip. Without them, pystray falls back to the `_xorg` backend and the tray right-click menu does not work. Build recipe: `python3 -m venv --system-site-packages .venv && source .venv/bin/activate && pip install -r requirements.txt pyinstaller pynput evdev`.
 
 ## Important Conventions
 

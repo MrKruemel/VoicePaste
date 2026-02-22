@@ -1664,6 +1664,14 @@ class VoicePasteApp:
         # Unregister hotkeys
         self._hotkey_manager.unregister()
 
+        # v1.3: Stop evdev monitor if running (Wayland)
+        if sys.platform == "linux":
+            try:
+                from evdev_hotkey import stop_monitor
+                stop_monitor()
+            except ImportError:
+                pass
+
         # Stop tray (this unblocks the main thread)
         self._tray_manager.stop()
 
@@ -1691,6 +1699,28 @@ class VoicePasteApp:
             "on" if self.config.audio_cues_enabled else "off",
         )
 
+        # v1.3: On Wayland, check evdev permissions before registering hotkeys
+        if (
+            sys.platform == "linux"
+            and os.environ.get("XDG_SESSION_TYPE", "").lower() == "wayland"
+        ):
+            try:
+                from evdev_hotkey import check_evdev_permissions
+                ok, msg = check_evdev_permissions()
+                if ok:
+                    logger.info("evdev permission check: %s", msg)
+                else:
+                    logger.error("evdev permission check failed: %s", msg)
+                    raise RuntimeError(msg)
+            except ImportError:
+                logger.error("evdev library not installed (required for Wayland).")
+                raise RuntimeError(
+                    "The 'evdev' Python library is required for global hotkeys "
+                    "on Wayland sessions but is not installed.\n\n"
+                    "Install it with:\n"
+                    "  pip install evdev"
+                )
+
         # Register hotkey (keyboard library runs its own listener thread).
         # On some Windows configurations, the keyboard library requires
         # Administrator privileges. If registration fails, we raise so
@@ -1699,6 +1729,19 @@ class VoicePasteApp:
             self._hotkey_manager.register(self._on_hotkey)
         except Exception as exc:
             logger.exception("Failed to register hotkey.")
+            if (
+                sys.platform == "linux"
+                and os.environ.get("XDG_SESSION_TYPE", "").lower() == "wayland"
+            ):
+                raise RuntimeError(
+                    f"Could not register the hotkey ({self.config.hotkey}).\n\n"
+                    f"On Wayland, VoicePaste uses evdev to read keyboard input.\n"
+                    f"Ensure the 'evdev' library is installed and your user is "
+                    f"in the 'input' group:\n"
+                    f"  sudo usermod -aG input $USER\n"
+                    f"Then log out and back in.\n\n"
+                    f"Technical detail: {exc}"
+                ) from exc
             raise RuntimeError(
                 f"Could not register the hotkey ({self.config.hotkey}).\n\n"
                 f"The 'keyboard' library may require Administrator privileges "
@@ -1851,11 +1894,19 @@ def main() -> None:
         except Exception as e:
             logger.warning("Could not determine keyboard library version: %s", e)
     else:
+        _session_type = os.environ.get("XDG_SESSION_TYPE", "unknown")
+        logger.info("Session type: %s", _session_type)
+        if _session_type == "wayland":
+            try:
+                import importlib.metadata as _meta
+                logger.info("evdev library version: %s", _meta.version("evdev"))
+            except Exception as e:
+                logger.warning("Could not determine evdev library version: %s", e)
         try:
             import importlib.metadata as _meta
             logger.info("pynput library version: %s", _meta.version("pynput"))
         except Exception as e:
-            logger.warning("Could not determine pynput library version: %s", e)
+            logger.debug("pynput not available: %s", e)
 
     # Log sounddevice/PortAudio version for debugging audio issues
     try:

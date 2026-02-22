@@ -19,12 +19,14 @@
 #     Build venv setup:
 #       python3 -m venv --system-site-packages .venv
 #       source .venv/bin/activate
-#       pip install -r requirements.txt pyinstaller pynput
+#       pip install -r requirements.txt pyinstaller pynput evdev
 #
-#   - pynput is the Linux hotkey backend. It is NOT in requirements.txt
+#   - pynput is the Linux hotkey backend for X11. It is NOT in requirements.txt
 #     (Windows uses the 'keyboard' library instead). If pynput is missing from
 #     the build environment, the binary will fail at startup with:
 #       "No module named 'pynput'" / "Could not register the hotkey"
+#   - evdev is the Linux hotkey backend for Wayland. It is NOT in requirements.txt.
+#     If missing, Wayland hotkey support will be unavailable, but X11 still works.
 #   - System packages:
 #       sudo apt install espeak-ng libportaudio2 xclip xdotool python3-tk
 #       sudo apt install python3-gi gir1.2-ayatanaappindicator3-0.1  # tray menu
@@ -100,16 +102,25 @@ if ! python3 -m PyInstaller --version &>/dev/null; then
 fi
 echo "[OK] PyInstaller $(python3 -m PyInstaller --version 2>&1)"
 
-# -- Check pynput (Linux hotkey backend, not in requirements.txt) --
+# -- Check pynput (Linux hotkey backend for X11, not in requirements.txt) --
 echo ""
 if ! python3 -c "import pynput" &>/dev/null; then
     echo "[ERROR] pynput not found in the Python environment."
-    echo "        pynput is the Linux hotkey backend and MUST be installed for the build."
+    echo "        pynput is the Linux hotkey backend (X11) and MUST be installed for the build."
     echo "        Install with: pip install pynput"
     echo ""
     exit 1
 fi
 echo "[OK] pynput $(python3 -c 'from importlib.metadata import version; print(version("pynput"))' 2>/dev/null || echo '(version unknown)')"
+
+# -- Check evdev (Linux hotkey backend for Wayland, not in requirements.txt) --
+if ! python3 -c "import evdev" &>/dev/null; then
+    echo "[INFO] evdev not found. Wayland hotkey support will NOT be available in the build."
+    echo "       To enable Wayland support, install with: pip install evdev"
+    echo ""
+else
+    echo "[OK] evdev $(python3 -c 'from importlib.metadata import version; print(version("evdev"))' 2>/dev/null || echo '(version unknown)')"
+fi
 
 # -- Check system dependencies --
 echo ""

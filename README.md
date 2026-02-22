@@ -44,7 +44,7 @@
 - **Python 3.11+**
 - **System packages**: `espeak-ng libportaudio2 xclip xdotool python3-tk python3-gi gir1.2-ayatanaappindicator3-0.1`
 - **GNOME tray icon** (optional): `gnome-shell-extension-appindicator`
-- **X11 session** (Wayland support planned for v1.2)
+- **X11 or Wayland**: Both supported. For Wayland, evdev hotkeys require membership in the `input` group (see setup below).
 
 ### All Platforms
 - **Microphone**: Connected and working (required only for recording modes)
@@ -65,7 +65,11 @@ pip install -r requirements.txt
 # Linux only: install system dependencies
 sudo apt install espeak-ng libportaudio2 xclip xdotool python3-tk
 sudo apt install python3-gi gir1.2-ayatanaappindicator3-0.1
-pip install pynput  # Linux hotkey library (not in requirements.txt)
+pip install pynput evdev  # Linux hotkey libraries (not in requirements.txt)
+
+# Wayland only: add your user to the 'input' group for evdev device access
+sudo usermod -aG input $USER
+# Then logout and login to apply the group membership
 ```
 
 ### 2. Create Configuration (Optional)

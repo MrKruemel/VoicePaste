@@ -396,7 +396,26 @@ def send_key(key: str) -> None:
 
 
 def register_key_press(key: str, callback, suppress: bool = False):
-    """Register a key-press hook via pynput. Returns a listener handle."""
+    """Register a key-press hook. Uses evdev on Wayland, pynput on X11.
+
+    Returns a handle — either a tagged tuple ("evdev", int) on Wayland
+    or a pynput Listener on X11.
+    """
+    session = _detect_session_type()
+    if session == "wayland":
+        try:
+            from evdev_hotkey import evdev_add_key_listener
+            # Wrap callback to match pynput signature (receives pressed_key)
+            handle = evdev_add_key_listener(key, lambda: callback(key))
+            return ("evdev", handle)
+        except ImportError:
+            logger.warning("evdev_hotkey not available. Key press hooks disabled.")
+            return None
+        except Exception as e:
+            logger.warning("evdev key listener failed: %s", e)
+            return None
+
+    # X11 / XWayland: use pynput
     try:
         from pynput import keyboard as pynput_kb
 
@@ -426,12 +445,22 @@ def register_key_press(key: str, callback, suppress: bool = False):
 
 
 def unregister_key_hook(hook) -> None:
-    """Stop a pynput listener."""
-    if hook is not None:
+    """Stop a key-press hook (evdev or pynput)."""
+    if hook is None:
+        return
+    # Evdev handles are tagged tuples
+    if isinstance(hook, tuple) and len(hook) == 2 and hook[0] == "evdev":
         try:
-            hook.stop()
+            from evdev_hotkey import evdev_remove_hotkey
+            evdev_remove_hotkey(hook[1])
         except Exception:
             pass
+        return
+    # pynput listener
+    try:
+        hook.stop()
+    except Exception:
+        pass
 
 
 # ---------------------------------------------------------------------------

@@ -7,7 +7,7 @@
 #
 # Key differences from the Windows spec (voice_paste.spec):
 #   - No Windows-specific hidden imports (keyboard, winsound, ctypes.wintypes)
-#   - Linux-specific hidden imports (pynput, pystray._appindicator)
+#   - Linux-specific hidden imports (pynput for X11, evdev for Wayland, pystray._appindicator)
 #   - No espeakng-loader bundling (uses system espeak-ng package)
 #   - No .ico icon (no Windows icon resource)
 #   - No UPX (rarely beneficial on Linux ELF binaries)
@@ -16,6 +16,10 @@
 # System dependencies (must be installed separately):
 #   sudo apt install espeak-ng libportaudio2 xclip xdotool
 #   sudo apt install gnome-shell-extension-appindicator  # for tray icon
+#
+# Build environment dependencies (for PyInstaller):
+#   pip install pynput evdev  # both required: X11 and Wayland hotkey support
+#   sudo usermod -aG input $USER  # for Wayland evdev device access (logout/login)
 #
 # Entry point:  src/main.py
 # App name:     VoicePaste
@@ -150,7 +154,7 @@ _hidden_imports = [
     'pystray._appindicator',
     'pystray._util',
 
-    # --- pynput (hotkeys on Linux) ---
+    # --- pynput (hotkeys on Linux/X11) ---
     'pynput',
     'pynput.keyboard',
     'pynput.keyboard._xorg',
@@ -158,6 +162,14 @@ _hidden_imports = [
     'pynput.mouse._xorg',
     'pynput._util.xorg',
     'pynput._util.xorg_keysyms',
+
+    # --- evdev (hotkeys on Linux/Wayland) ---
+    'evdev',
+    'evdev.ecodes',
+    'evdev.device',
+    'evdev.events',
+    'evdev.eventio',
+    'evdev.util',
 
     # --- Pillow (PIL) ---
     'PIL',

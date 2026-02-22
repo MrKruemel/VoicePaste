@@ -1,16 +1,19 @@
 """Global hotkey registration for the Voice-to-Summary Paste Tool.
 
 Uses the `keyboard` library on Windows and `pynput` on Linux for
-global hotkey hooks.
+global hotkey hooks.  On Wayland sessions, `evdev` is used instead
+of `pynput` because Wayland isolates input per-client.
 REQ-S15: Only hooks the specific hotkey combination, not blanket monitoring.
 
 v0.1: Ctrl+Win toggle hotkey.
 v0.2+: Escape cancel hotkey (active only during recording).
 v1.1: Linux support via pynput (X11/XWayland).
 v1.2: _HotkeySlot dataclass to eliminate 5x copy-paste pattern.
+v1.3: evdev backend for Wayland sessions.
 """
 
 import logging
+import os
 import sys
 import time
 import threading
@@ -36,7 +39,41 @@ logger = logging.getLogger(__name__)
 
 
 # ---------------------------------------------------------------------------
-# Linux pynput helpers
+# Wayland detection
+# ---------------------------------------------------------------------------
+
+def _is_wayland() -> bool:
+    """Return True if the current session is Wayland (not X11/XWayland)."""
+    return (
+        sys.platform == "linux"
+        and os.environ.get("XDG_SESSION_TYPE", "").lower() == "wayland"
+    )
+
+
+# ---------------------------------------------------------------------------
+# Linux evdev helpers (Wayland)
+# ---------------------------------------------------------------------------
+
+def _evdev_add_hotkey(combo: str, callback: Callable[[], None]):
+    """Register a global hotkey using evdev. Returns an integer handle."""
+    from evdev_hotkey import evdev_add_hotkey
+    return evdev_add_hotkey(combo, callback)
+
+
+def _evdev_add_key_listener(key_name: str, callback: Callable[[], None]):
+    """Register a single-key listener using evdev. Returns an integer handle."""
+    from evdev_hotkey import evdev_add_key_listener
+    return evdev_add_key_listener(key_name, callback)
+
+
+def _evdev_remove_hotkey(handle) -> None:
+    """Remove an evdev hotkey by handle."""
+    from evdev_hotkey import evdev_remove_hotkey
+    evdev_remove_hotkey(handle)
+
+
+# ---------------------------------------------------------------------------
+# Linux pynput helpers (X11)
 # ---------------------------------------------------------------------------
 
 def _hotkey_to_pynput(combo: str) -> str:
@@ -108,6 +145,8 @@ def _add_hotkey(combo: str, callback: Callable[[], None], suppress: bool = False
     """Register a global hotkey. Returns a handle for later removal."""
     if sys.platform == "win32":
         return kb.add_hotkey(combo, callback, suppress=suppress)
+    elif _is_wayland():
+        return _evdev_add_hotkey(combo, callback)
     else:
         return _pynput_add_hotkey(combo, callback)
 
@@ -116,6 +155,8 @@ def _add_single_key(key_name: str, callback: Callable[[], None], suppress: bool 
     """Register a single-key hotkey (e.g. Escape). Returns a handle."""
     if sys.platform == "win32":
         return kb.add_hotkey(key_name, callback, suppress=suppress)
+    elif _is_wayland():
+        return _evdev_add_key_listener(key_name, callback)
     else:
         return _pynput_add_key_listener(key_name, callback)
 
@@ -126,6 +167,8 @@ def _remove_hotkey(handle) -> None:
         return
     if sys.platform == "win32":
         kb.remove_hotkey(handle)
+    elif _is_wayland():
+        _evdev_remove_hotkey(handle)
     else:
         _pynput_remove_hotkey(handle)
 
@@ -134,6 +177,9 @@ def _parse_hotkey(combo: str):
     """Parse/validate a hotkey string. Raises on invalid format."""
     if sys.platform == "win32":
         return kb.parse_hotkey(combo)
+    elif _is_wayland():
+        from evdev_hotkey import _parse_combo
+        return _parse_combo(combo)
     else:
         # Basic validation: ensure non-empty and well-formed
         parts = combo.lower().split("+")
@@ -176,8 +222,8 @@ class HotkeyManager:
     REQ-S15: Only registers the specific configured hotkeys.
     Does not perform blanket keyboard monitoring.
 
-    On Windows uses the `keyboard` library. On Linux uses `pynput`
-    (X11/XWayland).
+    On Windows uses the `keyboard` library. On Linux/X11 uses `pynput`.
+    On Linux/Wayland uses `evdev` (reads /dev/input/* directly).
 
     Attributes:
         hotkey: The hotkey combination string.
