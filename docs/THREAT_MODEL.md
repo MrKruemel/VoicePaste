@@ -139,40 +139,23 @@ The tool handles **sensitive data** at every stage: voice recordings (biometric 
 
 **Threat**: The UInputController creates a virtual keyboard via /dev/uinput and can inject arbitrary keystrokes into the compositor.
 
-**Severity**: HIGH (if unrestricted)
+**Severity**: LOW (after SEC-082/SEC-083 remediation)
 
 **Analysis**:
-- `UInputController._ensure_device()` at line 644 creates the UInput device with **default capabilities** (`evdev.UInput(name=..., phys=...)`). By default, evdev.UInput allows ALL KEY_* and BTN_* codes.
-- `send_key()` accepts arbitrary key names from the `_KEY_CODES` dict (all alphanumeric + modifiers + function keys). It is NOT restricted to just Ctrl+V.
-- The public API `uinput_send_key()` is called from `_simulate_wayland_keystroke()` in `_linux.py` which passes `key_combo` from `paste_text()` -- this is either "ctrl+v" or "ctrl+shift+v".
-- However, `send_key()` could also be called with any key combination via the `send_key()` method on the `_linux.py::send_key()` function which accepts arbitrary key names.
+- `UInputController._ensure_device()` creates the UInput device with **restricted capabilities** -- only `KEY_LEFTCTRL` (29), `KEY_LEFTSHIFT` (42), and `KEY_V` (47) are registered via the `ecodes.EV_KEY` capability dict. The virtual keyboard cannot inject any other keystrokes.
+- The public API `uinput_send_key()` is called from `_simulate_wayland_keystroke()` in `_linux.py` which passes either "ctrl+v" or "ctrl+shift+v" for paste simulation.
+- `cleanup_uinput()` is called during `_shutdown()` to explicitly close the UInput file descriptor.
 
-**Current Mitigations**:
+**Mitigations**:
+- **SEC-082 (RESOLVED)**: UInput capabilities restricted to only 3 keycodes needed for paste simulation. The device physically cannot emit any other key events.
+- **SEC-083 (RESOLVED)**: `cleanup_uinput()` is called in `_shutdown()` after `stop_monitor()`, ensuring the UInput device is properly closed on exit.
 - The UInput device requires /dev/uinput write access (not granted by default).
 - Requires a custom udev rule: `KERNEL=="uinput", GROUP="input", MODE="0660"`.
 - The device is named "VoicePaste Virtual Keyboard" for identification.
 - UInput is write-only -- it cannot read other devices' keystrokes (SEC-081: confirmed, no privacy concern).
-- Kernel reclaims the device on process exit.
+- Kernel reclaims the device on process exit as a safety net.
 
-**FINDING (SEC-082, Medium)**: UInput device capabilities are unrestricted. The virtual keyboard can inject any keystroke, not just Ctrl+V. While the current code paths only use it for paste simulation, the API surface permits arbitrary injection. **Remediation**: Restrict capabilities to only the keycodes needed:
-
-```python
-# In _ensure_device():
-from evdev import ecodes
-allowed_keys = {
-    ecodes.KEY_LEFTCTRL, ecodes.KEY_LEFTSHIFT,
-    ecodes.KEY_V,  # paste
-}
-self._uinput = evdev.UInput(
-    events={ecodes.EV_KEY: list(allowed_keys)},
-    name="VoicePaste Virtual Keyboard",
-    phys="voicepaste/uinput",
-)
-```
-
-**FINDING (SEC-083, Low)**: `cleanup_uinput()` is not called during `_shutdown()`. While the kernel reclaims the device on process exit, explicit cleanup is better practice. The `stop_monitor()` call at line 1670 of `main.py` only stops the evdev keyboard monitor, not the UInput controller. **Remediation**: Add `cleanup_uinput()` call after `stop_monitor()` in `_shutdown()`.
-
-**Residual Risk**: LOW after remediation. UInput is inherently privileged but scoped, and requires explicit setup (udev rule).
+**Residual Risk**: LOW. UInput is inherently privileged but tightly scoped to 3 key codes, and requires explicit setup (udev rule + input group membership).
 
 ### T7: /dev/input/* Access (Evdev Device Monitoring) -- NEW in v1.3
 
@@ -328,7 +311,7 @@ self._uinput = evdev.UInput(
 | REQ-S25 | Log only safe data | T10 | MITIGATED |
 | REQ-S27 | Single-instance enforcement | T12 | MITIGATED |
 | REQ-S28 | No keystroke content logging (evdev) | T5/T7 | MITIGATED |
-| REQ-S29 | UInput capabilities should be restricted | T6 | OPEN |
+| REQ-S29 | UInput capabilities should be restricted | T6 | MITIGATED |
 
 ### Medium (Tracked)
 
@@ -461,7 +444,7 @@ Only the following outbound connections are made:
 - [x] No shell=True in subprocess calls
 - [x] Subprocess inputs via stdin pipe (not command arguments)
 - [x] config.toml created with 0600 permissions on Linux
-- [ ] UInput capabilities restricted to paste keys only (SEC-082)
-- [ ] cleanup_uinput() called during shutdown (SEC-083)
+- [x] UInput capabilities restricted to paste keys only (SEC-082) -- DONE
+- [x] cleanup_uinput() called during shutdown (SEC-083) -- DONE
 - [ ] TTS cache index.json does not store full user text (SEC-058)
 - [ ] pip-audit run against current requirements.txt

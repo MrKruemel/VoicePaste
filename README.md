@@ -57,79 +57,92 @@
 
 ## Quick Start
 
-### Windows Quick Start
+### Windows Quick Start (30 seconds)
+
+**Option 1: Downloaded Binary**
+
+1. Extract `VoicePaste.exe` to a folder
+2. Run `VoicePaste.exe` — the tray icon appears
+3. Right-click tray → **Settings** → **Credentials** → Add your OpenAI API key → **Save**
+4. Press **Ctrl+Alt+R** and speak!
+
+**Option 2: From Source**
 
 ```bash
-# 1. Install Python dependencies
+# 1. Install Python 3.11+, then install dependencies
 pip install -r requirements.txt
 
-# 2. Copy config template (optional, can configure in Settings dialog)
+# 2. (Optional) Copy config template
 copy config.example.toml config.toml
 
-# 3. Run the app
+# 3. Run
 python src/main.py
 ```
 
-The icon appears in your system tray. Right-click to open Settings or Quit.
+The tray icon appears in the bottom-right taskbar. If you don't see it, click **^** (arrow) on the taskbar to find it.
 
-### Linux Quick Start (Ubuntu 22.04 / 24.04)
+### Linux Quick Start (Ubuntu 22.04 / 24.04) — 2 minutes
 
-**Step 1: Install system packages**
-
-```bash
-# Core dependencies
-sudo apt install espeak-ng libportaudio2 xclip xdotool python3-tk
-
-# System tray icon support
-sudo apt install python3-gi gir1.2-ayatanaappindicator3-0.1
-
-# For GNOME desktop only (restarts GNOME Shell)
-sudo apt install gnome-shell-extension-appindicator
-
-# For Wayland clipboard (recommended)
-sudo apt install wl-clipboard
-```
-
-**Step 2: Configure access to input devices (Wayland only)**
-
-If you use **Wayland** (not X11), hotkeys require direct access to `/dev/input/*`:
+**Step 1: Install system packages** (one command)
 
 ```bash
-# Add your user to the 'input' group
-sudo usermod -aG input $USER
-
-# Create udev rule for paste simulation (evdev UInput)
-echo 'KERNEL=="uinput", GROUP="input", MODE="0660"' | sudo tee /etc/udev/rules.d/99-voicepaste-uinput.rules
-sudo udevadm control --reload-rules
-sudo udevadm trigger
-
-# Log out and log back in to apply group membership
+sudo apt install espeak-ng libportaudio2 xclip xdotool python3-tk python3-gi gir1.2-ayatanaappindicator3-0.1 wl-clipboard gnome-shell-extension-appindicator
 ```
 
-**Check your session type:**
+**Step 2: (Wayland only) Set up input device access**
+
+First, check your session type:
 
 ```bash
 echo $XDG_SESSION_TYPE
-# Output: "x11" or "wayland"
+```
+
+If output is **`wayland`**, run this setup (if output is `x11`, skip to Step 3):
+
+```bash
+# Add yourself to the 'input' group
+sudo usermod -aG input $USER
+
+# Create udev rule for paste simulation
+echo 'KERNEL=="uinput", GROUP="input", MODE="0660"' | sudo tee /etc/udev/rules.d/99-voicepaste-uinput.rules
+sudo udevadm control --reload-rules && sudo udevadm trigger
+
+# Log out and log back in (or restart)
 ```
 
 **Step 3: Install Python dependencies**
 
 ```bash
+# Create venv with system packages (required for PyGObject on modern Ubuntu)
+python3 -m venv --system-site-packages .venv
+source .venv/bin/activate
+
+# Install all dependencies
 pip install -r requirements.txt
 
 # Linux-only hotkey libraries (NOT in requirements.txt)
 pip install pynput evdev
 ```
 
-**Step 4: Copy config template and run**
+**Step 4: Run**
 
 ```bash
-cp config.example.toml config.toml    # Optional
 python src/main.py
 ```
 
-The tray icon appears. Proceed to "Set Up Your API Key" below.
+The tray icon appears. Right-click → **Settings** → add your API key.
+
+**Optional: Desktop Integration**
+
+To run from applications menu:
+
+```bash
+# Copy .desktop file
+cp voice_paste.desktop ~/.local/share/applications/
+
+# Edit to point to your binary location
+nano ~/.local/share/applications/voice_paste.desktop
+```
 
 ## Find the Tray Icon
 
@@ -138,19 +151,25 @@ The Voice Paste icon appears in your system tray. If you don't see it:
 1. **Windows**: Click **^** (arrow) in taskbar → find Voice Paste. Right-click taskbar → **Taskbar settings** → **Other system tray icons** → enable **VoicePaste** to pin it.
 2. **Linux (GNOME)**: Logout and log back in (or Alt+F2, type `r`, Enter) to apply the AppIndicator extension.
 
-## Set Up Your API Key
+## Add Your API Key (First Time Only)
 
-When you press Ctrl+Alt+R for the first time, the Settings dialog opens (or right-click tray → Settings). Add your OpenAI API key:
+When you press **Ctrl+Alt+R** for the first time, the Settings dialog opens automatically:
 
-1. Click **Credentials** tab
-2. Paste your API key in the OpenAI field
-3. Click **Save**
+1. Click the **Transcription** tab (default view)
+2. Ensure **Backend** is set to "Cloud" (for OpenAI Whisper API)
+3. In the **General** tab, click **Add Credentials**
+4. Paste your **OpenAI API key** (from https://platform.openai.com/api-keys)
+5. Click **Save**
 
-Your key is stored securely in the OS credential store (not in config.toml).
+Your key is encrypted and stored securely in:
+- **Windows**: Credential Manager
+- **Linux**: Secret Service (keyring)
 
-### 6. Start Recording
+Not in config.toml or logs.
 
-Press **Ctrl+Alt+R** to start recording. Speak into your microphone. Press **Ctrl+Alt+R** again to stop, transcribe, and paste.
+## Start Recording
+
+Press **Ctrl+Alt+R** to record. Speak clearly. Press **Ctrl+Alt+R** again to stop, transcribe, and paste.
 
 ## How It Works
 

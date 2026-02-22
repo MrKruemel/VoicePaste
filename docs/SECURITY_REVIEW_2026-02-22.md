@@ -29,9 +29,10 @@ Two new findings require attention before release. Neither is a release blocker,
 
 ## New Findings
 
-### SEC-082: UInput Device Capabilities Unrestricted
+### SEC-082: UInput Device Capabilities Unrestricted -- RESOLVED
 
-- **Severity**: Medium
+- **Severity**: Medium (was), now Low (after fix)
+- **Status**: **RESOLVED** -- UInput capabilities restricted to KEY_LEFTCTRL, KEY_LEFTSHIFT, KEY_V only
 - **Category**: Privilege Escalation / Input Injection
 - **Location**: `/home/mrkruemel/Projects/VoicePaste/VoicePaste/src/evdev_hotkey.py`, line 644
 - **Description**: The `UInputController._ensure_device()` method creates the virtual keyboard with default capabilities, which allows injection of ALL KEY_* and BTN_* event codes. The `send_key()` method (line 667) accepts arbitrary key names from the full `_KEY_CODES` dictionary, not just paste-related keys. While current call sites only use "ctrl+v" and "ctrl+shift+v", the API surface permits arbitrary keystroke injection. If an attacker gains code execution within the process (e.g., through a dependency vulnerability), they could use the existing UInput device to inject arbitrary keystrokes into any application.
@@ -77,9 +78,10 @@ Two new findings require attention before release. Neither is a release blocker,
 
 ---
 
-### SEC-083: UInput Device Not Cleaned Up on Shutdown
+### SEC-083: UInput Device Not Cleaned Up on Shutdown -- RESOLVED
 
 - **Severity**: Low
+- **Status**: **RESOLVED** -- `cleanup_uinput()` now called in `_shutdown()` after `stop_monitor()`
 - **Category**: Resource Management
 - **Location**: `/home/mrkruemel/Projects/VoicePaste/VoicePaste/src/main.py`, line 1667-1673
 - **Description**: The `_shutdown()` method calls `stop_monitor()` to stop the evdev keyboard monitor (line 1671), but does not call `cleanup_uinput()` to close the UInput virtual keyboard device. While the Linux kernel reclaims the device on process exit, explicit cleanup is preferable for:
@@ -168,7 +170,7 @@ Two new findings require attention before release. Neither is a release blocker,
 
 ### 1. `src/evdev_hotkey.py` -- Evdev Monitor + UInput Controller
 
-**Security Assessment: APPROVED with conditions (SEC-082, SEC-083)**
+**Security Assessment: APPROVED (SEC-082 and SEC-083 resolved)**
 
 Positive findings:
 - Per-keystroke debug logging explicitly removed (privacy fix documented in docstring).
@@ -271,7 +273,7 @@ Positive findings (lines 1882-1930):
 - No sensitive data in version logging output.
 - evdev monitor shutdown added at lines 1667-1673.
 
-Concern: SEC-083 -- `cleanup_uinput()` not called (see finding above).
+SEC-083 resolved: `cleanup_uinput()` now called after `stop_monitor()` in `_shutdown()`.
 
 ---
 
@@ -333,8 +335,8 @@ All 33 direct dependencies are pinned with `==`. Notable:
 
 | ID | Severity | Category | Description | Remediation |
 |----|----------|----------|-------------|-------------|
-| **SEC-082** | Medium | Input Injection | UInput capabilities unrestricted | Restrict to paste keycodes only |
-| **SEC-083** | Low | Resource Management | cleanup_uinput() not called on shutdown | Add to _shutdown() |
+| ~~SEC-082~~ | ~~Medium~~ | Input Injection | ~~UInput capabilities unrestricted~~ | **RESOLVED** -- restricted to 3 keycodes |
+| ~~SEC-083~~ | ~~Low~~ | Resource Management | ~~cleanup_uinput() not called on shutdown~~ | **RESOLVED** -- added to _shutdown() |
 | **SEC-078** | Low | Clipboard | Write return code not checked | Check returncode, log warning |
 | SEC-050 | Medium | API Security | CORS allows any localhost port | Restrict to configured port |
 | SEC-058 | Medium | GDPR | Full user text in TTS cache index.json | Store only preview/hash |
@@ -345,9 +347,9 @@ All 33 direct dependencies are pinned with `==`. Notable:
 
 ### By Priority
 
-1. **SEC-082** (Medium): Restrict UInput capabilities -- reduces blast radius if process is compromised.
+1. ~~**SEC-082** (Medium): Restrict UInput capabilities~~ -- **RESOLVED**
 2. **SEC-058/066** (Medium): TTS cache GDPR -- full user text persists on disk.
-3. **SEC-083** (Low): Add cleanup_uinput() to shutdown -- trivial fix.
+3. ~~**SEC-083** (Low): Add cleanup_uinput() to shutdown~~ -- **RESOLVED**
 4. **SEC-078** (Low): Check clipboard write return code -- improves reliability.
 5. SEC-050 (Medium, existing): CORS port restriction -- low practical risk.
 6. SEC-075/076/077 (Info): Track for future improvement.
@@ -356,10 +358,10 @@ All 33 direct dependencies are pinned with `==`. Notable:
 
 ## Release Recommendation
 
-**GO with conditions:**
+**GO (unconditional):**
 
-1. Fix SEC-082 (UInput capability restriction) and SEC-083 (cleanup_uinput) before release. Both are small, targeted changes.
+1. ~~Fix SEC-082 and SEC-083 before release~~ -- **BOTH RESOLVED**.
 2. Track SEC-058/066 (TTS cache GDPR) for the next release.
 3. All Critical and High severity requirements from the threat model are MITIGATED.
-4. No new Critical or High findings.
+4. No open Critical or High findings.
 5. Privacy compliance verified: no keystroke logging, audio stays in memory, API keys never logged, clipboard never logged, no telemetry.
