@@ -22,7 +22,7 @@ prompt_combination = "ctrl+alt+a"
 
 # TTS hotkeys (v0.6): only active when TTS is enabled in Settings
 # Read clipboard aloud via Text-to-Speech
-# Default: "ctrl+alt+t" (Windows), "ctrl+alt+s" (Linux — avoids GNOME Terminal shortcut)
+# Default: "ctrl+alt+t" (Windows), "ctrl+alt+s" (Linux — avoids GNOME Terminal's Ctrl+Alt+T)
 tts_combination = "ctrl+alt+t"
 # Ask AI a question and hear the answer via TTS (default: "ctrl+alt+y")
 tts_ask_combination = "ctrl+alt+y"

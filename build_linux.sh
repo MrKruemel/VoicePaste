@@ -31,6 +31,7 @@
 #       sudo apt install espeak-ng libportaudio2 xclip xdotool python3-tk
 #       sudo apt install python3-gi gir1.2-ayatanaappindicator3-0.1  # tray menu
 #       sudo apt install gnome-shell-extension-appindicator  # tray icon (GNOME)
+#       sudo apt install wl-clipboard  # Wayland clipboard (wl-copy/wl-paste)
 #
 # Output:
 #   dist/VoicePaste         (~80-140 MB portable binary)
@@ -148,6 +149,31 @@ else
     echo "       All system dependencies found."
 fi
 
+# Check wl-clipboard (for Wayland clipboard support)
+if [[ "${XDG_SESSION_TYPE:-}" == "wayland" ]] || true; then
+    if ! command -v wl-copy &>/dev/null; then
+        echo "[INFO] wl-clipboard not found. Install for native Wayland clipboard support:"
+        echo "       sudo apt install wl-clipboard"
+        echo "       (xclip will be used as XWayland fallback if available)"
+        echo ""
+    else
+        echo "[OK] wl-clipboard found (wl-copy / wl-paste)."
+    fi
+fi
+
+# Check /dev/uinput access (for Wayland paste simulation via evdev UInput)
+if [[ -e /dev/uinput ]]; then
+    if [[ -w /dev/uinput ]]; then
+        echo "[OK] /dev/uinput writable (evdev UInput paste available)."
+    else
+        echo "[INFO] /dev/uinput not writable. Wayland paste will fall back to ydotool/wtype."
+        echo "       For native paste support (no external tools needed), run:"
+        echo "       echo 'KERNEL==\"uinput\", GROUP=\"input\", MODE=\"0660\"' | sudo tee /etc/udev/rules.d/99-voicepaste-uinput.rules"
+        echo "       sudo udevadm control --reload-rules && sudo udevadm trigger"
+        echo ""
+    fi
+fi
+
 # -- Clean previous build --
 echo "[2/4] Cleaning previous build..."
 rm -rf build dist
@@ -175,14 +201,47 @@ if [[ ! -f dist/VoicePaste ]]; then
     exit 1
 fi
 
-# -- Copy config example --
-echo "[4/4] Copying config.example.toml to dist/..."
+# -- Copy config example and desktop integration files --
+echo "[4/4] Copying dist assets..."
 if [[ -f config.example.toml ]]; then
     cp config.example.toml dist/config.example.toml
     echo "       dist/config.example.toml copied."
 else
     echo "[WARN] config.example.toml not found. Skipping."
 fi
+
+# Copy app icon (PNG) for desktop integration
+if [[ -f assets/app.png ]]; then
+    cp assets/app.png dist/VoicePaste.png
+    echo "       dist/VoicePaste.png copied."
+else
+    echo "[WARN] assets/app.png not found. Generating..."
+    python3 -c "
+import sys; sys.path.insert(0, 'src')
+from icon_drawing import ICON_BADGE_COLOR, create_icon_image
+img = create_icon_image(size=256, color=(255,255,255), bg_color=ICON_BADGE_COLOR, mode='RGBA')
+img.save('dist/VoicePaste.png', format='PNG')
+print('       dist/VoicePaste.png generated.')
+" || echo "[WARN] Could not generate icon."
+fi
+
+# Create .desktop file with correct path
+DIST_DIR="$(cd dist && pwd)"
+cat > dist/VoicePaste.desktop <<DESKTOP_EOF
+[Desktop Entry]
+Version=1.0
+Type=Application
+Name=VoicePaste
+GenericName=Voice to Text
+Comment=Record speech, transcribe, summarize, and paste at cursor
+Exec=${DIST_DIR}/VoicePaste
+Icon=${DIST_DIR}/VoicePaste.png
+Terminal=false
+Categories=Audio;Utility;
+Keywords=voice;speech;transcription;whisper;paste;
+StartupNotify=false
+DESKTOP_EOF
+echo "       dist/VoicePaste.desktop created."
 
 # -- Report result --
 echo ""
@@ -195,14 +254,27 @@ if [[ "$SIZE_BYTES" != "?" ]]; then
 fi
 echo ""
 echo "  To use:"
-echo "    1. Copy dist/VoicePaste to your desired location."
+echo "    1. Copy dist/VoicePaste + dist/VoicePaste.png to your desired location."
 echo "    2. Copy dist/config.example.toml to config.toml next to the binary."
 echo "    3. Edit config.toml and add your API keys."
 echo "    4. chmod +x VoicePaste && ./VoicePaste"
+echo ""
+echo "  Desktop integration (optional):"
+echo "    cp dist/VoicePaste.desktop ~/.local/share/applications/"
+echo "    # Edit Exec= and Icon= paths in the .desktop file if you moved the binary"
 echo ""
 echo "  System dependencies:"
 echo "    sudo apt install espeak-ng libportaudio2 xclip xdotool python3-tk"
 echo "    sudo apt install python3-gi gir1.2-ayatanaappindicator3-0.1"
 echo "    sudo apt install gnome-shell-extension-appindicator  # GNOME only"
+echo "    sudo apt install wl-clipboard  # Wayland clipboard (wl-copy/wl-paste)"
+echo ""
+echo "  Wayland paste support (choose one):"
+echo "    Option 1 (recommended): evdev UInput (no extra packages)"
+echo "      sudo usermod -aG input \$USER  # then logout/login"
+echo "      echo 'KERNEL==\"uinput\", GROUP=\"input\", MODE=\"0660\"' | sudo tee /etc/udev/rules.d/99-voicepaste-uinput.rules"
+echo "      sudo udevadm control --reload-rules && sudo udevadm trigger"
+echo "    Option 2: ydotool"
+echo "      sudo apt install ydotool"
 echo "======================================================================"
 echo ""

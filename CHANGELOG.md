@@ -25,6 +25,9 @@ See [BACKLOG.md](docs/BACKLOG.md) for the complete v1.0 roadmap.
 
 ### Added
 - **Linux Platform Support**: Full cross-platform support for Ubuntu 22.04 and 24.04 alongside Windows. Platform abstraction layer (`src/platform_impl/`) handles clipboard, paste simulation, audio feedback, file paths, and single-instance locking per OS.
+- **Wayland & X11 Hotkey Support**: Auto-detects session type. X11 uses pynput GlobalHotKeys. Wayland uses evdev device monitoring daemon thread with auto-detected key codes from keyboard layout. No external hotkey daemons required.
+- **Wayland Paste Simulation**: evdev UInput for keystroke injection (preferred, no external tools, requires /dev/uinput writable), fallback to ydotool or wtype. Configurable paste delay via `[paste] delay_seconds`.
+- **Wayland Clipboard**: wl-copy/wl-paste (native, requires wl-clipboard package), fallback to xclip via XWayland.
 - **Terminal Paste Detection (Linux)**: Automatically detects 20+ terminal emulators (GNOME Terminal, Konsole, Alacritty, kitty, xterm, etc.) via X11 WM_CLASS and uses Ctrl+Shift+V instead of Ctrl+V for correct paste behavior.
 - **CUDA Safe Auto-Detection**: New `_resolve_device()` in local_stt.py pre-checks for NVIDIA GPU + cuDNN before allowing CUDA. Prevents CTranslate2 segfaults when CUDA libraries are partially installed. Frozen PyInstaller binaries always use CPU.
 - **TTS Speech Speed Setting**: New `[tts] speed` config field (default: 1.0, range: 0.25–4.0). Maps to Piper's `length_scale` parameter. Configurable via Settings dialog spinbox (0.5–2.0 UI range).
@@ -46,7 +49,7 @@ See [BACKLOG.md](docs/BACKLOG.md) for the complete v1.0 roadmap.
 - **Stuck modifier keys after hotkey**: xdotool `--clearmodifiers` flag prevents modifier keys from remaining held after a hotkey-triggered action.
 
 ### Security
-- test_security.py: Added `tray.py` to tempfile allowlist (uses tempfile for pystray icon PNG files, not audio data).
+- test_security.py: Added `tray.py` to tempfile allowlist (uses tempfile for pystray icon PNG files, not audio data). Both Windows and Linux builds verified secure.
 
 ---
 

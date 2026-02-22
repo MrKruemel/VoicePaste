@@ -57,49 +57,88 @@
 
 ## Quick Start
 
-### 1. Install Dependencies
+### Windows Quick Start
+
+```bash
+# 1. Install Python dependencies
+pip install -r requirements.txt
+
+# 2. Copy config template (optional, can configure in Settings dialog)
+copy config.example.toml config.toml
+
+# 3. Run the app
+python src/main.py
+```
+
+The icon appears in your system tray. Right-click to open Settings or Quit.
+
+### Linux Quick Start (Ubuntu 22.04 / 24.04)
+
+**Step 1: Install system packages**
+
+```bash
+# Core dependencies
+sudo apt install espeak-ng libportaudio2 xclip xdotool python3-tk
+
+# System tray icon support
+sudo apt install python3-gi gir1.2-ayatanaappindicator3-0.1
+
+# For GNOME desktop only (restarts GNOME Shell)
+sudo apt install gnome-shell-extension-appindicator
+
+# For Wayland clipboard (recommended)
+sudo apt install wl-clipboard
+```
+
+**Step 2: Configure access to input devices (Wayland only)**
+
+If you use **Wayland** (not X11), hotkeys require direct access to `/dev/input/*`:
+
+```bash
+# Add your user to the 'input' group
+sudo usermod -aG input $USER
+
+# Create udev rule for paste simulation (evdev UInput)
+echo 'KERNEL=="uinput", GROUP="input", MODE="0660"' | sudo tee /etc/udev/rules.d/99-voicepaste-uinput.rules
+sudo udevadm control --reload-rules
+sudo udevadm trigger
+
+# Log out and log back in to apply group membership
+```
+
+**Check your session type:**
+
+```bash
+echo $XDG_SESSION_TYPE
+# Output: "x11" or "wayland"
+```
+
+**Step 3: Install Python dependencies**
 
 ```bash
 pip install -r requirements.txt
 
-# Linux only: install system dependencies
-sudo apt install espeak-ng libportaudio2 xclip xdotool python3-tk
-sudo apt install python3-gi gir1.2-ayatanaappindicator3-0.1
-pip install pynput evdev  # Linux hotkey libraries (not in requirements.txt)
-
-# Wayland only: add your user to the 'input' group for evdev device access
-sudo usermod -aG input $USER
-# Then logout and login to apply the group membership
+# Linux-only hotkey libraries (NOT in requirements.txt)
+pip install pynput evdev
 ```
 
-### 2. Create Configuration (Optional)
-
-Copy `config.example.toml` to `config.toml` and customize if needed:
+**Step 4: Copy config template and run**
 
 ```bash
-cp config.example.toml config.toml    # Linux
-copy config.example.toml config.toml  # Windows
-```
-
-Edit `config.toml` in a text editor (optional — you can do this in the Settings dialog later).
-
-### 3. Run the Application
-
-```bash
+cp config.example.toml config.toml    # Optional
 python src/main.py
 ```
 
-The application starts in the system tray. You'll see a balloon notification: "Voice Paste is running!"
+The tray icon appears. Proceed to "Set Up Your API Key" below.
 
-### 4. Find the Tray Icon
+## Find the Tray Icon
 
-The Voice Paste icon appears in your system tray (bottom right of taskbar). If you don't see it immediately:
+The Voice Paste icon appears in your system tray. If you don't see it:
 
-1. **Check the overflow area**: Click the **^** (arrow) icon in the taskbar to reveal hidden system tray icons.
-2. **Pin the icon** (Windows 11): Right-click the taskbar → **Taskbar settings** → **Other system tray icons** → Turn on **VoicePaste**.
-3. **Linux (GNOME)**: Install `gnome-shell-extension-appindicator` and restart GNOME Shell (Alt+F2, type `r`, Enter) or log out and back in.
+1. **Windows**: Click **^** (arrow) in taskbar → find Voice Paste. Right-click taskbar → **Taskbar settings** → **Other system tray icons** → enable **VoicePaste** to pin it.
+2. **Linux (GNOME)**: Logout and log back in (or Alt+F2, type `r`, Enter) to apply the AppIndicator extension.
 
-### 5. Set Up Your API Key (First Run)
+## Set Up Your API Key
 
 When you press Ctrl+Alt+R for the first time, the Settings dialog opens (or right-click tray → Settings). Add your OpenAI API key:
 
@@ -355,11 +394,32 @@ If the app is running but the icon is missing, check `voice-paste.log` for tray 
 **Problem**: Your configured hotkey (default Ctrl+Alt+R) does nothing when you press it.
 
 **Solutions**:
-1. **Windows: Run as Administrator**: The `keyboard` library requires elevated permissions to register global hotkeys. Run Command Prompt as Administrator and start the tool from there. Without admin privileges, hotkeys may not work in elevated windows (like Administrator PowerShell or UAC prompts).
-2. **Linux: Check X11 session**: Hotkeys use pynput which requires an X11 session. Wayland is not yet supported (planned for v1.2). Run `echo $XDG_SESSION_TYPE` to check.
-3. **Verify the configuration**: Check `[hotkey] combination` in `config.toml` or Settings → Hotkey tab. Restart the tool after changing the hotkey.
-4. **Check for conflicts**: Your hotkey may conflict with other Windows shortcuts or applications. Try a different combination (e.g., `"ctrl+alt+v"` or `"windows+shift+r"`). See Windows Settings > Keyboard > Advanced > App Shortcuts.
-5. **Keyboard library issue**: Some Windows configurations have trouble with the `keyboard` library. Antivirus software may block it. See below.
+
+**Windows:**
+1. **Run as Administrator**: The `keyboard` library requires elevated permissions. Run Command Prompt as Administrator and start the tool from there. Without admin privileges, hotkeys may not work in elevated windows (like Administrator PowerShell or UAC prompts).
+2. **Antivirus blocking**: Antivirus software may flag the `keyboard` library (uses low-level Windows hooks). See "Windows Defender / Antivirus Blocking" below.
+
+**Linux (Both X11 and Wayland):**
+1. **Verify session type**: Run `echo $XDG_SESSION_TYPE` to confirm you're on X11 or Wayland.
+2. **X11 (pynput)**: Requires an X11 display server. If using X11, ensure no other application is holding the hotkey.
+3. **Wayland (evdev)**: Requires membership in the `input` group. Run `groups $USER` to verify. If missing, run:
+   ```bash
+   sudo usermod -aG input $USER && logout  # Then log back in
+   ```
+4. **Check Wayland input permissions**: Verify you can read input devices:
+   ```bash
+   ls -l /dev/input/event*
+   # Should show: ...input input...
+   ```
+   If not, check the udev rule was applied:
+   ```bash
+   cat /etc/udev/rules.d/99-voicepaste-uinput.rules
+   ```
+
+**All Platforms:**
+1. **Verify the configuration**: Check `[hotkey] combination` in `config.toml` or Settings. Restart the tool after changing the hotkey.
+2. **Check for conflicts**: Your hotkey may conflict with system shortcuts. Try a different combination (e.g., `"ctrl+alt+v"` or `"windows+shift+r"`).
+3. **Check the log file**: Open `voice-paste.log` and search for "hotkey" or "ERROR" to see what went wrong.
 
 **Windows Defender / Antivirus Blocking**
 
@@ -436,11 +496,33 @@ For details on VAD handling, see the [Troubleshooting](README.md#troubleshooting
 
 **Problem**: Text appears on clipboard but doesn't paste into a terminal window.
 
-**Cause**: Many terminal emulators use Ctrl+Shift+V for paste instead of Ctrl+V.
+**Cause**: Many terminal emulators use Ctrl+Shift+V for paste instead of Ctrl+V. On Wayland, paste simulation may fail if input device permissions are incorrect.
 
 **Solutions**:
-1. **Linux**: Voice Paste automatically detects terminal emulators (GNOME Terminal, Konsole, Alacritty, kitty, xterm, etc.) and uses Ctrl+Shift+V. If your terminal is not detected, please report it.
-2. **Windows**: Use Ctrl+Shift+V manually, right-click paste, or change terminal settings to use Ctrl+V.
+
+**Windows & Linux (X11):**
+- Voice Paste automatically detects terminal emulators (GNOME Terminal, Konsole, Alacritty, kitty, xterm, etc.) and uses Ctrl+Shift+V automatically.
+- If your terminal is not detected, try using right-click paste or manually pressing Ctrl+Shift+V.
+
+**Linux (Wayland only):**
+- Wayland paste uses evdev UInput for keystroke injection (preferred) or falls back to ydotool.
+- **If paste fails on Wayland**:
+  1. Verify you have write access to `/dev/uinput`:
+     ```bash
+     ls -l /dev/uinput
+     # Should show: ...input input...
+     ```
+  2. If not, re-run the udev rule setup:
+     ```bash
+     echo 'KERNEL=="uinput", GROUP="input", MODE="0660"' | sudo tee /etc/udev/rules.d/99-voicepaste-uinput.rules
+     sudo udevadm control --reload-rules && sudo udevadm trigger
+     sudo usermod -aG input $USER && logout  # Then log back in
+     ```
+  3. Check `voice-paste.log` for "UInput" or "ydotool" to see which paste method is being used.
+  4. If ydotool is being used and fails, install it:
+     ```bash
+     sudo apt install ydotool
+     ```
 
 ### Clipboard Contents Lost
 
@@ -529,22 +611,50 @@ build.bat
 
 ### Linux Build
 
+VoicePaste compiles to a portable binary on Linux using PyInstaller. Binary size is ~241 MB.
+
+**Step 1: Install system dependencies**
+
 ```bash
-# Install dependencies
 sudo apt install espeak-ng libportaudio2 xclip xdotool python3-tk
 sudo apt install python3-gi gir1.2-ayatanaappindicator3-0.1
-pip install -r requirements.txt pyinstaller pynput
-
-# Build
-./build_linux.sh
-
-# Output: dist/VoicePaste (~80–140 MB portable binary)
+sudo apt install wl-clipboard  # Optional, for Wayland clipboard support
 ```
 
-**Requirements**:
-- PyInstaller must be able to find your Python installation
-- All dependencies must be installed in the current environment (pip install -r requirements.txt)
-- Antivirus software may flag the .exe temporarily (common for newly built executables; it's safe)
+**Step 2: Create a virtual environment with system packages**
+
+Modern Ubuntu enforces PEP 668, which blocks pip installs globally. You must use `--system-site-packages` so PyGObject and AppIndicator3 (required for tray icon) are available:
+
+```bash
+python3 -m venv --system-site-packages .venv
+source .venv/bin/activate
+```
+
+**Step 3: Install Python dependencies and build tools**
+
+```bash
+pip install -r requirements.txt pyinstaller
+
+# Linux-only hotkey libraries (required for both X11 and Wayland support)
+pip install pynput evdev
+```
+
+**Step 4: Build the binary**
+
+```bash
+./build_linux.sh
+# Output: dist/VoicePaste (~241 MB portable binary)
+```
+
+The script automatically checks for `pynput`. If `evdev` is missing, Wayland support is unavailable but X11 still works.
+
+**Testing the binary:**
+
+```bash
+./dist/VoicePaste
+```
+
+The binary can be moved anywhere and run directly.
 
 ### Build Troubleshooting
 

@@ -1898,15 +1898,23 @@ def main() -> None:
         logger.info("Session type: %s", _session_type)
         if _session_type == "wayland":
             try:
-                import importlib.metadata as _meta
-                logger.info("evdev library version: %s", _meta.version("evdev"))
-            except Exception as e:
-                logger.warning("Could not determine evdev library version: %s", e)
+                import evdev as _evdev_diag  # noqa: F401 -- availability check
+                try:
+                    import importlib.metadata as _meta
+                    logger.info("evdev library version: %s", _meta.version("evdev"))
+                except Exception:
+                    logger.info("evdev: available (version unknown in frozen build)")
+            except ImportError:
+                logger.debug("evdev not available (Wayland hotkeys will not work)")
         try:
-            import importlib.metadata as _meta
-            logger.info("pynput library version: %s", _meta.version("pynput"))
-        except Exception as e:
-            logger.debug("pynput not available: %s", e)
+            import pynput as _pynput_diag  # noqa: F401 -- availability check
+            try:
+                import importlib.metadata as _meta
+                logger.info("pynput library version: %s", _meta.version("pynput"))
+            except Exception:
+                logger.info("pynput: available (version unknown in frozen build)")
+        except ImportError:
+            logger.debug("pynput not available (X11 hotkeys will not work)")
 
     # Log sounddevice/PortAudio version for debugging audio issues
     try:

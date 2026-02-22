@@ -85,7 +85,7 @@ def _hotkey_to_pynput(combo: str) -> str:
     converted = []
     for part in parts:
         p = part.strip()
-        if p in ("ctrl", "alt", "shift", "cmd", "super"):
+        if p in ("ctrl", "alt", "shift", "cmd", "super", "win", "meta"):
             converted.append(f"<{p}>")
         else:
             converted.append(p)

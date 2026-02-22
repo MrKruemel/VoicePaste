@@ -11,7 +11,9 @@
 #   - No espeakng-loader bundling (uses system espeak-ng package)
 #   - No .ico icon (no Windows icon resource)
 #   - No UPX (rarely beneficial on Linux ELF binaries)
-#   - Runtime hook still sets OMP_NUM_THREADS for onnxruntime stability
+#   - Runtime hook rthook_av_stub.py blocks `av` import early (before any
+#     code can transitively pull in PyAV, which is excluded from the bundle)
+#   - Runtime hook rthook_onnxruntime.py sets OMP_NUM_THREADS for onnxruntime stability
 #
 # System dependencies (must be installed separately):
 #   sudo apt install espeak-ng libportaudio2 xclip xdotool
@@ -347,6 +349,93 @@ _excludes = [
     'pystray._win32',
     'pystray._util.win32',
     'keyring.backends.Windows',
+
+    # -----------------------------------------------------------------------
+    # SIZE OPTIMIZATION: Packages pulled in by dependencies or leaked via
+    # --system-site-packages that VoicePaste does NOT use at runtime.
+    # Added 2026-02-22 -- saves ~120-150 MB in the final binary.
+    # -----------------------------------------------------------------------
+
+    # --- PyAV / FFmpeg (~119 MB uncompressed) ---
+    # faster-whisper declares 'av' as a pip dependency, but VoicePaste
+    # records raw PCM via sounddevice and never calls faster_whisper.audio's
+    # av-based decode_audio(). Excluding this is the single biggest win.
+    'av',
+
+    # --- espeakng_loader (~21 MB: .so + espeak-ng-data/) ---
+    # Redundant on Linux where espeak-ng is a system package.
+    # local_tts.py checks for system libespeak-ng.so.1 first; the loader
+    # is only needed on Windows. The system .so is still bundled as a
+    # BINARY dependency automatically.
+    'espeakng_loader',
+
+    # --- Cython (pulled in transitively by av) ---
+    'Cython',
+
+    # --- System packages leaked via --system-site-packages ---
+    # The venv uses --system-site-packages so PyGObject (gi) and
+    # AppIndicator3 are available. This exposes all system-installed
+    # packages to PyInstaller's import analysis. None of the following
+    # are imported by VoicePaste source code.
+
+    # Syntax highlighting / rich terminal (not used by VoicePaste)
+    'pygments',
+    'rich',
+    'markdown_it',
+    'mdurl',
+
+    # Web frameworks and servers (not used by VoicePaste)
+    'werkzeug',
+    'flask', 'Flask',
+    'gunicorn',
+    'click',       # only an optional extra of httpx ('cli'), not runtime
+
+    # SSH / remote access (not used by VoicePaste)
+    'paramiko',
+    'nacl', 'PyNaCl',
+    'bcrypt',
+
+    # Async HTTP (not used by VoicePaste -- httpx uses httpcore)
+    'aiohttp', 'aiosignal', 'frozenlist', 'multidict', 'yarl',
+
+    # XML / HTML parsing (not used by VoicePaste)
+    'lxml',
+    'html5lib',
+    'bs4', 'beautifulsoup4', 'soupsieve',
+
+    # Task runner / automation (not used by VoicePaste)
+    'invoke',
+
+    # Encoding detection (requests uses charset_normalizer, not chardet)
+    'chardet',
+
+    # JSON alternatives (VoicePaste uses stdlib json + jiter)
+    'simplejson',
+
+    # Docker (not used by VoicePaste)
+    'docker', 'dockerpty',
+
+    # System monitoring (not used by VoicePaste)
+    'psutil',
+
+    # ASN.1 parsing (not used by VoicePaste)
+    'pyasn1', 'pyasn1_modules',
+
+    # Template engines (not used by VoicePaste)
+    'jinja2', 'Jinja2', 'MarkupSafe',
+
+    # Serialization formats (not used by VoicePaste)
+    'flatbuffers', 'protobuf', 'google.protobuf',
+
+    # Crash reporting (Ubuntu system package, not used by VoicePaste)
+    'apport',
+
+    # Data structure libraries (not used by VoicePaste)
+    'attr', 'attrs',
+    'jsonschema', 'pyrsistent',
+
+    # Internationalization (not used by VoicePaste)
+    'babel', 'Babel',
 ]
 
 # ---------------------------------------------------------------------------
@@ -362,7 +451,10 @@ a = Analysis(
     hiddenimports=_hidden_imports,
     hookspath=[],
     hooksconfig={},
-    runtime_hooks=[os.path.join(SPECPATH, 'rthook_onnxruntime.py')],
+    runtime_hooks=[
+        os.path.join(SPECPATH, 'rthook_av_stub.py'),
+        os.path.join(SPECPATH, 'rthook_onnxruntime.py'),
+    ],
     excludes=_excludes,
     noarchive=_debug_mode,
 )

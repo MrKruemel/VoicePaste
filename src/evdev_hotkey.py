@@ -1,4 +1,4 @@
-"""Evdev-based global hotkey backend for Wayland sessions.
+"""Evdev-based global hotkey backend and keystroke injection for Wayland.
 
 On Wayland, pynput (X11/Xlib) cannot capture keyboard events from native
 Wayland windows because Wayland isolates input per-client for security.
@@ -6,19 +6,33 @@ This module reads /dev/input/event* directly via the ``evdev`` library,
 which works regardless of display server but requires the user to be a
 member of the ``input`` group.
 
-Public API mirrors the pynput helpers in hotkey.py:
-    evdev_add_hotkey(combo, callback) -> int
-    evdev_add_key_listener(key_name, callback) -> int
-    evdev_remove_hotkey(handle)
-    stop_monitor()
+Keystroke injection (for paste simulation) uses evdev.UInput to create a
+virtual keyboard device via /dev/uinput. This requires write access to
+/dev/uinput, typically granted via a udev rule for the ``input`` group.
+
+Public API:
+    Hotkey monitoring:
+        evdev_add_hotkey(combo, callback) -> int
+        evdev_add_key_listener(key_name, callback) -> int
+        evdev_remove_hotkey(handle)
+        stop_monitor()
+
+    Keystroke injection:
+        uinput_is_available() -> bool
+        uinput_send_key(key_name) -> bool
+        get_uinput_controller() -> UInputController
+        cleanup_uinput()
 
 v1.3: Initial implementation for Wayland hotkey support.
+v1.4: Added UInputController for native Wayland paste simulation.
+      Removed per-keystroke debug logging (privacy fix).
 """
 
 import grp
 import logging
 import os
 import select
+import time
 import threading
 from typing import Callable, Optional
 
@@ -127,6 +141,12 @@ def check_evdev_permissions() -> tuple[bool, str]:
         (ok, message): ok is True if access is likely to work.
         message contains guidance if ok is False.
     """
+    if evdev is None:
+        raise ImportError(
+            "The 'evdev' library is not installed. "
+            "Install with: pip install evdev"
+        )
+
     # Root always has access
     if os.geteuid() == 0:
         return True, "Running as root — evdev access granted."
@@ -159,6 +179,7 @@ def check_evdev_permissions() -> tuple[bool, str]:
         )
 
     # User is in group — quick probe of actual device access
+    devices: list = []
     try:
         devices = [evdev.InputDevice(p) for p in evdev.list_devices()]
         keyboards = [d for d in devices if _is_keyboard(d)]
@@ -179,6 +200,12 @@ def check_evdev_permissions() -> tuple[bool, str]:
         )
     except Exception as e:
         return False, f"Error probing /dev/input/* devices: {e}"
+    finally:
+        for d in devices:
+            try:
+                d.close()
+            except Exception:
+                pass
 
 
 def _is_keyboard(device) -> bool:
@@ -326,6 +353,19 @@ class EvdevKeyboardMonitor:
             except (PermissionError, OSError) as e:
                 logger.debug("Cannot open %s: %s", path, e)
 
+        # Remove disconnected devices
+        removed_paths = current_paths - all_paths
+        for path in removed_paths:
+            dev = self._devices.pop(path, None)
+            if dev:
+                try:
+                    dev.close()
+                except Exception:
+                    pass
+                logger.debug("evdev device removed (no longer listed): %s", path)
+        if removed_paths:
+            self._held_keys.clear()  # Clear held keys when device topology changes
+
     def _close_devices(self) -> None:
         """Close all open device file descriptors."""
         for dev in self._devices.values():
@@ -341,7 +381,6 @@ class EvdevKeyboardMonitor:
 
         while self._running:
             # Periodic device rescan (hotplug support)
-            import time
             now = time.monotonic()
             if now - last_scan > self._RESCAN_INTERVAL:
                 self._scan_devices()
@@ -349,7 +388,6 @@ class EvdevKeyboardMonitor:
 
             if not self._devices:
                 # No keyboards found — sleep and retry
-                import time
                 time.sleep(1.0)
                 continue
 
@@ -392,10 +430,10 @@ class EvdevKeyboardMonitor:
                         if event.type != 1:
                             continue
                         # value: 0=up, 1=down, 2=repeat
-                        if event.value == 1:
+                        if event.value == 1:  # key down
                             self._held_keys.add(event.code)
                             self._check_combos(event.code)
-                        elif event.value == 0:
+                        elif event.value == 0:  # key up
                             self._held_keys.discard(event.code)
                 except OSError:
                     # Device disconnected
@@ -407,6 +445,7 @@ class EvdevKeyboardMonitor:
                     except Exception:
                         pass
                     self._devices.pop(dev.path, None)
+                    self._held_keys.clear()  # Prevent phantom modifier state
 
     def _remove_stale_devices(self) -> None:
         """Remove devices with invalid file descriptors."""
@@ -426,6 +465,23 @@ class EvdevKeyboardMonitor:
                     pass
             logger.debug("Removed stale evdev device: %s", path)
 
+    def _get_relevant_keycodes(self) -> set[int]:
+        """Build the set of keycodes that are part of any registered combo.
+
+        Includes both the main trigger key and all modifier variant keycodes
+        for each registered combo. Used to filter debug logging so that only
+        hotkey-relevant key events are logged (never regular typing).
+        """
+        with self._lock:
+            combos = list(self._combos.values())
+
+        relevant: set[int] = set()
+        for modifiers, keycode, _callback in combos:
+            relevant.add(keycode)
+            for mod_name in modifiers:
+                relevant.update(_MODIFIER_CODES.get(mod_name, set()))
+        return relevant
+
     def _check_combos(self, pressed_code: int) -> None:
         """Check if any registered combo matches the current key state."""
         with self._lock:
@@ -437,7 +493,11 @@ class EvdevKeyboardMonitor:
             # Check all required modifiers are held
             if not self._modifiers_match(modifiers):
                 continue
-            # Match! Fire callback in a separate thread to avoid blocking
+            # Match! Log once and fire callback in a separate thread.
+            mod_str = "+".join(sorted(modifiers))
+            key_name = ecodes.KEY.get(keycode, str(keycode))
+            combo_str = f"{mod_str}+{key_name}" if mod_str else str(key_name)
+            logger.info("Hotkey matched: %s", combo_str)
             threading.Thread(
                 target=self._fire_callback,
                 args=(callback,),
@@ -472,6 +532,11 @@ _monitor_lock = threading.Lock()
 
 def _get_monitor() -> EvdevKeyboardMonitor:
     """Get or create the singleton EvdevKeyboardMonitor."""
+    if evdev is None:
+        raise ImportError(
+            "The 'evdev' library is not installed. "
+            "Install with: pip install evdev"
+        )
     global _monitor
     with _monitor_lock:
         if _monitor is None:
@@ -509,3 +574,254 @@ def stop_monitor() -> None:
         if _monitor is not None:
             _monitor.stop()
             _monitor = None
+
+
+# ---------------------------------------------------------------------------
+# UInputController — virtual keyboard for keystroke injection on Wayland
+# ---------------------------------------------------------------------------
+
+# Canonical modifier name -> left-hand keycode for UInput injection.
+# We always inject the left variant for consistency.
+_MODIFIER_INJECT_CODES: dict[str, int] = {
+    "ctrl": 29,     # KEY_LEFTCTRL
+    "alt": 56,      # KEY_LEFTALT
+    "shift": 42,    # KEY_LEFTSHIFT
+    "super": 125,   # KEY_LEFTMETA
+    "cmd": 125,
+    "win": 125,
+    "meta": 125,
+}
+
+
+class UInputController:
+    """Virtual keyboard device for injecting keystrokes via /dev/uinput.
+
+    This provides Wayland-native keystroke simulation without requiring
+    external tools like ydotool or wtype. It uses the same evdev library
+    that is already required for hotkey monitoring.
+
+    Requirements:
+        - The ``evdev`` library must be installed.
+        - The user must have write access to ``/dev/uinput``.  This is
+          typically granted via a udev rule for the ``input`` group::
+
+              # /etc/udev/rules.d/99-voicepaste-uinput.rules
+              KERNEL=="uinput", GROUP="input", MODE="0660"
+
+    The virtual device is created lazily on first use and reused for all
+    subsequent injections.  It is cleaned up when ``close()`` is called
+    or when the process exits (daemon thread ensures the fd is closed).
+    """
+
+    # Small delay between key events for compositor to process them
+    _KEY_DELAY_SECONDS = 0.02
+
+    def __init__(self) -> None:
+        self._uinput: Optional["evdev.UInput"] = None
+        self._lock = threading.Lock()
+
+    def _ensure_device(self) -> "evdev.UInput":
+        """Create the virtual keyboard device if not already created.
+
+        Returns:
+            The evdev.UInput instance.
+
+        Raises:
+            evdev.uinput.UInputError: If /dev/uinput is not writable.
+            ImportError: If evdev is not installed.
+        """
+        if self._uinput is not None:
+            return self._uinput
+
+        if evdev is None:
+            raise ImportError(
+                "The 'evdev' library is not installed. "
+                "Install with: pip install evdev"
+            )
+
+        # Create a virtual keyboard that supports all standard keys.
+        # By default, evdev.UInput allows all KEY_* and BTN_* codes.
+        self._uinput = evdev.UInput(
+            name="VoicePaste Virtual Keyboard",
+            phys="voicepaste/uinput",
+        )
+        logger.info(
+            "UInput virtual keyboard created: %s",
+            self._uinput.device,
+        )
+        return self._uinput
+
+    def is_available(self) -> bool:
+        """Check whether /dev/uinput is writable.
+
+        Returns True if a UInput device can be created, False otherwise.
+        Does not create the device (to avoid side effects during probing).
+        """
+        if evdev is None:
+            return False
+        try:
+            return os.access("/dev/uinput", os.W_OK)
+        except Exception:
+            return False
+
+    def send_key(self, key_name: str) -> bool:
+        """Simulate a single key press-and-release.
+
+        Supports key names from the _KEY_CODES dict (e.g. "enter",
+        "escape", "v") and combo strings like "ctrl+v" or
+        "ctrl+shift+v".
+
+        Args:
+            key_name: Key name or combo string.
+
+        Returns:
+            True if the keystroke was injected successfully.
+        """
+        parts = [p.strip().lower() for p in key_name.split("+")]
+
+        # Separate modifiers from the main key
+        mod_codes: list[int] = []
+        main_code: Optional[int] = None
+
+        for part in parts:
+            canonical = part
+            if part in ("cmd", "win", "meta", "super"):
+                canonical = "super"
+
+            if canonical in _MODIFIER_INJECT_CODES:
+                mod_codes.append(_MODIFIER_INJECT_CODES[canonical])
+            elif part in _KEY_CODES:
+                main_code = _KEY_CODES[part]
+            else:
+                logger.warning("UInput: unknown key '%s' in '%s'.", part, key_name)
+                return False
+
+        if main_code is None:
+            logger.warning("UInput: no main key found in '%s'.", key_name)
+            return False
+
+        try:
+            with self._lock:
+                ui = self._ensure_device()
+                self._inject_combo(ui, mod_codes, main_code)
+            return True
+        except Exception as e:
+            logger.error("UInput keystroke injection failed: %s", e)
+            return False
+
+    def _inject_combo(
+        self,
+        ui: "evdev.UInput",
+        mod_codes: list[int],
+        main_code: int,
+    ) -> None:
+        """Inject a key combo: press modifiers, press+release main key,
+        release modifiers.
+
+        Args:
+            ui: The UInput device.
+            mod_codes: List of modifier keycodes to hold.
+            main_code: The main key to press and release.
+        """
+        # Press modifiers (down)
+        for code in mod_codes:
+            ui.write(ecodes.EV_KEY, code, 1)
+            ui.syn()
+
+        # Small delay for compositor to register modifier state
+        if mod_codes:
+            time.sleep(self._KEY_DELAY_SECONDS)
+
+        # Press and release main key
+        ui.write(ecodes.EV_KEY, main_code, 1)
+        ui.syn()
+        time.sleep(self._KEY_DELAY_SECONDS)
+        ui.write(ecodes.EV_KEY, main_code, 0)
+        ui.syn()
+
+        # Release modifiers (up, reverse order)
+        if mod_codes:
+            time.sleep(self._KEY_DELAY_SECONDS)
+            for code in reversed(mod_codes):
+                ui.write(ecodes.EV_KEY, code, 0)
+                ui.syn()
+
+    def close(self) -> None:
+        """Close the virtual keyboard device."""
+        with self._lock:
+            if self._uinput is not None:
+                try:
+                    self._uinput.close()
+                except Exception:
+                    pass
+                self._uinput = None
+                logger.debug("UInput virtual keyboard closed.")
+
+
+# ---------------------------------------------------------------------------
+# Singleton UInputController
+# ---------------------------------------------------------------------------
+
+_uinput_controller: Optional[UInputController] = None
+_uinput_lock = threading.Lock()
+
+
+def get_uinput_controller() -> UInputController:
+    """Get or create the singleton UInputController.
+
+    Returns:
+        The shared UInputController instance.
+
+    Raises:
+        ImportError: If evdev is not installed.
+    """
+    if evdev is None:
+        raise ImportError(
+            "The 'evdev' library is not installed. "
+            "Install with: pip install evdev"
+        )
+    global _uinput_controller
+    with _uinput_lock:
+        if _uinput_controller is None:
+            _uinput_controller = UInputController()
+        return _uinput_controller
+
+
+def uinput_is_available() -> bool:
+    """Check if evdev UInput is available for keystroke injection.
+
+    Returns True if evdev is installed and /dev/uinput is writable.
+    """
+    if evdev is None:
+        return False
+    try:
+        controller = get_uinput_controller()
+        return controller.is_available()
+    except ImportError:
+        return False
+
+
+def uinput_send_key(key_name: str) -> bool:
+    """Send a keystroke via UInput. Returns True on success.
+
+    Args:
+        key_name: Key name or combo string (e.g. "enter", "ctrl+v").
+    """
+    try:
+        controller = get_uinput_controller()
+        return controller.send_key(key_name)
+    except ImportError:
+        logger.debug("UInput not available (evdev not installed).")
+        return False
+    except Exception as e:
+        logger.error("UInput send_key failed: %s", e)
+        return False
+
+
+def cleanup_uinput() -> None:
+    """Close the UInput controller. Safe to call if not created."""
+    global _uinput_controller
+    with _uinput_lock:
+        if _uinput_controller is not None:
+            _uinput_controller.close()
+            _uinput_controller = None

@@ -1,8 +1,12 @@
 """Linux platform implementations for VoicePaste.
 
 Provides clipboard (xclip/wl-clipboard), keystroke simulation
-(xdotool/ydotool), single-instance locking (fcntl), error dialogs
-(zenity/tkinter), and audio beeps (sounddevice sine waves).
+(evdev UInput/xdotool/ydotool/wtype), single-instance locking (fcntl),
+error dialogs (zenity/tkinter), and audio beeps (sounddevice sine waves).
+
+On Wayland, keystroke simulation uses evdev UInput as the preferred
+method (no external tools needed), falling back to ydotool or wtype.
+On X11, xdotool is used.
 
 This module is only imported on Linux (sys.platform == "linux").
 Target: Ubuntu 22.04 LTS and 24.04 LTS.
@@ -35,35 +39,184 @@ def _detect_session_type() -> str:
 
 
 # ---------------------------------------------------------------------------
-# Clipboard
+# Clipboard tool detection (cached)
 # ---------------------------------------------------------------------------
 
+# Module-level cache so tool lookup + fallback logging happens only once.
+_clipboard_read_cache: dict[str, tuple[list[str], str] | None] = {}
+_clipboard_write_cache: dict[str, tuple[list[str], str] | None] = {}
+
+
+def _find_clipboard_read_tool(session: str) -> tuple[list[str], str] | None:
+    """Find the best clipboard read command for the current session.
+
+    Results are cached per session type so fallback logging fires only once.
+
+    On Wayland, prefers wl-paste but falls back to xclip or xsel (via
+    XWayland). On X11, uses xclip or xsel.
+
+    Args:
+        session: Session type string ("wayland" or "x11").
+
+    Returns:
+        A tuple of (command_list, tool_name) or None if no tool is found.
+    """
+    if session in _clipboard_read_cache:
+        return _clipboard_read_cache[session]
+
+    result = _detect_clipboard_read_tool(session)
+    _clipboard_read_cache[session] = result
+    return result
+
+
+def _detect_clipboard_read_tool(session: str) -> tuple[list[str], str] | None:
+    """Perform the actual clipboard read tool detection (uncached).
+
+    Args:
+        session: Session type string ("wayland" or "x11").
+
+    Returns:
+        A tuple of (command_list, tool_name) or None if no tool is found.
+    """
+    if session == "wayland":
+        tool = shutil.which("wl-paste")
+        if tool:
+            logger.info("Clipboard read tool: wl-paste (native Wayland).")
+            return ([tool, "--no-newline"], "wl-paste")
+        # Fallback: xclip via XWayland
+        tool = shutil.which("xclip")
+        if tool:
+            logger.info(
+                "wl-paste not found; falling back to xclip via XWayland. "
+                "Install wl-clipboard for native Wayland clipboard support: "
+                "sudo apt install wl-clipboard"
+            )
+            return ([tool, "-selection", "clipboard", "-o"], "xclip (XWayland fallback)")
+        tool = shutil.which("xsel")
+        if tool:
+            logger.info(
+                "wl-paste not found; falling back to xsel via XWayland. "
+                "Install wl-clipboard for native Wayland clipboard support: "
+                "sudo apt install wl-clipboard"
+            )
+            return ([tool, "--clipboard", "-o"], "xsel (XWayland fallback)")
+        logger.warning(
+            "No clipboard read tool found. Install wl-clipboard (Wayland) "
+            "or xclip (X11/XWayland): sudo apt install wl-clipboard xclip"
+        )
+        return None
+    else:
+        tool = shutil.which("xclip")
+        if tool:
+            return ([tool, "-selection", "clipboard", "-o"], "xclip")
+        tool = shutil.which("xsel")
+        if tool:
+            logger.info("xclip not found; using xsel for clipboard read.")
+            return ([tool, "--clipboard", "-o"], "xsel")
+        logger.warning(
+            "No clipboard read tool found. "
+            "Install xclip or xsel: sudo apt install xclip"
+        )
+        return None
+
+
+def _find_clipboard_write_tool(session: str) -> tuple[list[str], str] | None:
+    """Find the best clipboard write command for the current session.
+
+    Results are cached per session type so fallback logging fires only once.
+
+    On Wayland, prefers wl-copy but falls back to xclip or xsel (via
+    XWayland). On X11, uses xclip or xsel.
+
+    Args:
+        session: Session type string ("wayland" or "x11").
+
+    Returns:
+        A tuple of (command_list, tool_name) or None if no tool is found.
+    """
+    if session in _clipboard_write_cache:
+        return _clipboard_write_cache[session]
+
+    result = _detect_clipboard_write_tool(session)
+    _clipboard_write_cache[session] = result
+    return result
+
+
+def _detect_clipboard_write_tool(session: str) -> tuple[list[str], str] | None:
+    """Perform the actual clipboard write tool detection (uncached).
+
+    Args:
+        session: Session type string ("wayland" or "x11").
+
+    Returns:
+        A tuple of (command_list, tool_name) or None if no tool is found.
+    """
+    if session == "wayland":
+        tool = shutil.which("wl-copy")
+        if tool:
+            logger.info("Clipboard write tool: wl-copy (native Wayland).")
+            return ([tool], "wl-copy")
+        # Fallback: xclip via XWayland
+        tool = shutil.which("xclip")
+        if tool:
+            logger.info(
+                "wl-copy not found; falling back to xclip via XWayland. "
+                "Install wl-clipboard for native Wayland clipboard support: "
+                "sudo apt install wl-clipboard"
+            )
+            return (
+                [tool, "-selection", "clipboard", "-i"],
+                "xclip (XWayland fallback)",
+            )
+        # Fallback: xsel via XWayland
+        tool = shutil.which("xsel")
+        if tool:
+            logger.info(
+                "wl-copy not found; falling back to xsel via XWayland. "
+                "Install wl-clipboard for native Wayland clipboard support: "
+                "sudo apt install wl-clipboard"
+            )
+            return (
+                [tool, "--clipboard", "-i"],
+                "xsel (XWayland fallback)",
+            )
+        logger.warning(
+            "No clipboard write tool found. Install wl-clipboard (Wayland) "
+            "or xclip (X11/XWayland): sudo apt install wl-clipboard xclip"
+        )
+        return None
+    else:
+        tool = shutil.which("xclip")
+        if tool:
+            return ([tool, "-selection", "clipboard", "-i"], "xclip")
+        # Fallback: xsel
+        tool = shutil.which("xsel")
+        if tool:
+            logger.info("xclip not found; using xsel for clipboard write.")
+            return ([tool, "--clipboard", "-i"], "xsel")
+        logger.error(
+            "No clipboard write tool found. "
+            "Install xclip or xsel: sudo apt install xclip"
+        )
+        return None
+
+
 def clipboard_backup() -> str | None:
-    """Read clipboard text via xclip (X11) or wl-paste (Wayland)."""
+    """Read clipboard text via xclip (X11) or wl-paste (Wayland).
+
+    On Wayland, falls back to xclip via XWayland if wl-paste is not
+    installed.
+    """
     session = _detect_session_type()
     content = None
     try:
-        if session == "wayland":
-            tool = shutil.which("wl-paste")
-            if not tool:
-                logger.debug("wl-paste not found.")
-                return None
-            result = subprocess.run(
-                [tool, "--no-newline"],
-                capture_output=True, text=True, timeout=2,
-            )
-            content = result.stdout if result.returncode == 0 else None
-        else:
-            tool = shutil.which("xclip") or shutil.which("xsel")
-            if not tool:
-                logger.debug("xclip/xsel not found.")
-                return None
-            if "xclip" in tool:
-                cmd = [tool, "-selection", "clipboard", "-o"]
-            else:
-                cmd = [tool, "--clipboard", "-o"]
-            result = subprocess.run(cmd, capture_output=True, text=True, timeout=2)
-            content = result.stdout if result.returncode == 0 else None
+        found = _find_clipboard_read_tool(session)
+        if not found:
+            return None
+        cmd, tool_name = found
+        logger.debug("Clipboard backup using %s.", tool_name)
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=2)
+        content = result.stdout if result.returncode == 0 else None
     except subprocess.TimeoutExpired:
         logger.warning("Clipboard backup timed out.")
         return None
@@ -83,23 +236,23 @@ def clipboard_backup() -> str | None:
 
 
 def clipboard_restore(backup: str | None) -> None:
-    """Write text back to clipboard."""
+    """Write text back to clipboard.
+
+    On Wayland, falls back to xclip via XWayland if wl-copy is not
+    installed.
+    """
     if backup is None:
         logger.debug("No clipboard backup to restore.")
         return
     session = _detect_session_type()
     try:
-        if session == "wayland":
-            tool = shutil.which("wl-copy")
-            if tool:
-                subprocess.run([tool], input=backup, text=True, timeout=2)
-        else:
-            tool = shutil.which("xclip")
-            if tool:
-                subprocess.run(
-                    [tool, "-selection", "clipboard", "-i"],
-                    input=backup, text=True, timeout=2,
-                )
+        found = _find_clipboard_write_tool(session)
+        if not found:
+            logger.debug("No clipboard write tool; cannot restore.")
+            return
+        cmd, tool_name = found
+        logger.debug("Clipboard restore using %s.", tool_name)
+        subprocess.run(cmd, input=backup, text=True, timeout=2)
     except subprocess.TimeoutExpired:
         logger.warning("Clipboard restore timed out.")
     except Exception:
@@ -156,11 +309,160 @@ def _is_terminal_focused() -> bool:
         return False
 
 
+def _simulate_wayland_keystroke(key_combo: str) -> bool:
+    """Simulate a keystroke on Wayland, trying methods in priority order.
+
+    Priority:
+        1. evdev UInput -- native, no external tools, uses existing
+           input group permissions + /dev/uinput write access.
+        2. ydotool -- requires ydotoold daemon and /dev/uinput.
+        3. wtype -- works on wlroots compositors.
+
+    Args:
+        key_combo: Key combo string like "ctrl+v" or "ctrl+shift+v".
+
+    Returns:
+        True if the keystroke was simulated, False otherwise.
+    """
+    # --- Method 1: evdev UInput (preferred) ---
+    try:
+        from evdev_hotkey import uinput_is_available, uinput_send_key
+        if uinput_is_available():
+            if uinput_send_key(key_combo):
+                logger.info(
+                    "Keystroke simulated via evdev UInput: %s", key_combo,
+                )
+                return True
+            logger.warning("evdev UInput send_key returned False.")
+    except ImportError:
+        logger.debug("evdev_hotkey not available for UInput.")
+    except Exception as e:
+        logger.warning("evdev UInput failed: %s", e)
+
+    # --- Method 2: ydotool ---
+    ydotool = shutil.which("ydotool")
+    if ydotool:
+        # Build ydotool scancode sequence from combo string
+        ydotool_args = _combo_to_ydotool_args(key_combo)
+        if ydotool_args:
+            try:
+                subprocess.run(
+                    [ydotool, "key"] + ydotool_args,
+                    timeout=2,
+                )
+                logger.info(
+                    "Keystroke simulated via ydotool: %s", key_combo,
+                )
+                return True
+            except subprocess.TimeoutExpired:
+                logger.warning("ydotool timed out.")
+            except Exception as e:
+                logger.warning("ydotool failed: %s", e)
+
+    # --- Method 3: wtype ---
+    wtype = shutil.which("wtype")
+    if wtype:
+        wtype_args = _combo_to_wtype_args(key_combo)
+        if wtype_args:
+            try:
+                subprocess.run(
+                    [wtype] + wtype_args,
+                    timeout=2,
+                )
+                logger.info(
+                    "Keystroke simulated via wtype: %s", key_combo,
+                )
+                return True
+            except subprocess.TimeoutExpired:
+                logger.warning("wtype timed out.")
+            except Exception as e:
+                logger.warning("wtype failed: %s", e)
+
+    return False
+
+
+# ydotool scancode mapping (Linux input event codes)
+_YDOTOOL_SCANCODES: dict[str, int] = {
+    "ctrl": 29, "alt": 56, "shift": 42, "super": 125,
+    "a": 30, "b": 48, "c": 46, "d": 32, "e": 18, "f": 33,
+    "g": 34, "h": 35, "i": 23, "j": 36, "k": 37, "l": 38,
+    "m": 50, "n": 49, "o": 24, "p": 25, "q": 16, "r": 19,
+    "s": 31, "t": 20, "u": 22, "v": 47, "w": 17, "x": 45,
+    "y": 21, "z": 44,
+    "enter": 28, "return": 28, "escape": 1, "tab": 15,
+    "space": 57, "backspace": 14, "delete": 111,
+}
+
+
+def _combo_to_ydotool_args(combo: str) -> list[str]:
+    """Convert a combo string to ydotool key arguments.
+
+    E.g. "ctrl+v" -> ["29:1", "47:1", "47:0", "29:0"]
+    """
+    parts = [p.strip().lower() for p in combo.split("+")]
+    codes: list[int] = []
+    for part in parts:
+        code = _YDOTOOL_SCANCODES.get(part)
+        if code is None:
+            logger.debug("Unknown key for ydotool: '%s'", part)
+            return []
+        codes.append(code)
+
+    if not codes:
+        return []
+
+    # Press all in order, release in reverse
+    args: list[str] = []
+    for code in codes:
+        args.append(f"{code}:1")
+    for code in reversed(codes):
+        args.append(f"{code}:0")
+    return args
+
+
+def _combo_to_wtype_args(combo: str) -> list[str]:
+    """Convert a combo string to wtype arguments.
+
+    E.g. "ctrl+v" -> ["-M", "ctrl", "v", "-m", "ctrl"]
+    """
+    parts = [p.strip().lower() for p in combo.split("+")]
+    if not parts:
+        return []
+
+    modifiers = []
+    main_key = None
+    mod_names = {"ctrl", "alt", "shift", "super"}
+
+    for part in parts:
+        if part in mod_names:
+            modifiers.append(part)
+        else:
+            main_key = part
+
+    if main_key is None:
+        return []
+
+    args: list[str] = []
+    for mod in modifiers:
+        args.extend(["-M", mod])
+    args.append(main_key)
+    for mod in reversed(modifiers):
+        args.extend(["-m", mod])
+    return args
+
+
 def paste_text(text: str) -> bool:
     """Write text to clipboard and simulate paste keystroke.
 
     Detects terminal emulators and uses Ctrl+Shift+V (the standard
     terminal paste shortcut) instead of Ctrl+V.
+
+    On Wayland, keystroke simulation uses (in priority order):
+    1. evdev UInput -- native, no external tools needed
+    2. ydotool -- requires ydotoold daemon
+    3. wtype -- works on wlroots compositors
+
+    On X11, uses xdotool.
     """
     if not text or not text.strip():
         logger.info("Empty text, nothing to paste.")
@@ -171,63 +473,55 @@ def paste_text(text: str) -> bool:
 
     # Write to clipboard
     try:
-        if session == "wayland":
-            tool = shutil.which("wl-copy")
-            if not tool:
-                logger.error("wl-copy not found. Install wl-clipboard.")
-                return False
-            subprocess.run([tool], input=text, text=True, timeout=2)
-        else:
-            tool = shutil.which("xclip")
-            if not tool:
-                logger.error("xclip not found. Install xclip.")
-                return False
-            subprocess.run(
-                [tool, "-selection", "clipboard", "-i"],
-                input=text, text=True, timeout=2,
+        found = _find_clipboard_write_tool(session)
+        if not found:
+            logger.error(
+                "No clipboard write tool found. "
+                "Install wl-clipboard (Wayland) or xclip (X11)."
             )
+            return False
+        cmd, tool_name = found
+        logger.debug("Paste: clipboard write using %s.", tool_name)
+        subprocess.run(cmd, input=text, text=True, timeout=2)
     except subprocess.TimeoutExpired:
         logger.error("Clipboard write timed out.")
         return False
 
-    # Give xclip time to register the clipboard content.
+    # Give clipboard tool time to register the content.
     # X11 clipboard works asynchronously (xclip forks a background process
     # that serves the selection). 150ms is a safe margin.
     time.sleep(0.15)
 
     # Detect terminal for correct paste shortcut
     is_terminal = _is_terminal_focused()
+    paste_key = "ctrl+shift+v" if is_terminal else "ctrl+v"
 
     # Simulate paste keystroke
     try:
         if session == "wayland":
-            ydotool = shutil.which("ydotool")
-            if ydotool:
-                # ydotool key scancodes: 29=LCtrl, 47=V
-                subprocess.run(
-                    [ydotool, "key", "29:1", "47:1", "47:0", "29:0"],
-                    timeout=2,
-                )
+            if _simulate_wayland_keystroke(paste_key):
                 time.sleep(PASTE_DELAY_MS / 1000.0)
-                logger.info("Paste complete (ydotool/Wayland).")
                 return True
-            wtype = shutil.which("wtype")
-            if wtype:
-                subprocess.run(
-                    [wtype, "-M", "ctrl", "v", "-m", "ctrl"],
-                    timeout=2,
-                )
-                time.sleep(PASTE_DELAY_MS / 1000.0)
-                logger.info("Paste complete (wtype/Wayland).")
-                return True
-            logger.error("No Wayland keystroke tool. Install ydotool or wtype.")
+            logger.error(
+                "No Wayland keystroke simulation method available.\n"
+                "Options (in order of preference):\n"
+                "  1. Add udev rule for /dev/uinput access:\n"
+                "     echo 'KERNEL==\"uinput\", GROUP=\"input\", "
+                "MODE=\"0660\"' | sudo tee "
+                "/etc/udev/rules.d/99-voicepaste-uinput.rules\n"
+                "     sudo udevadm control --reload-rules && "
+                "sudo udevadm trigger\n"
+                "  2. Install ydotool: sudo apt install ydotool\n"
+                "  3. Install wtype (wlroots compositors only)\n\n"
+                "Text was written to clipboard -- "
+                "paste manually with Ctrl+V."
+            )
             return False
         else:
             xdotool = shutil.which("xdotool")
             if not xdotool:
                 logger.error("xdotool not found. Install xdotool.")
                 return False
-            paste_key = "ctrl+shift+v" if is_terminal else "ctrl+v"
             subprocess.run([xdotool, "key", paste_key], timeout=2)
             time.sleep(PASTE_DELAY_MS / 1000.0)
             logger.info(
@@ -365,26 +659,19 @@ _XDOTOOL_KEY_MAP = {
 
 
 def send_key(key: str) -> None:
-    """Send a keystroke via xdotool (X11) or ydotool (Wayland).
+    """Send a keystroke via the best available method.
 
-    Uses --clearmodifiers to release any held modifier keys (e.g. after
-    a hotkey combo) before sending the keystroke.
+    On Wayland: evdev UInput (preferred), ydotool, or wtype.
+    On X11: xdotool with --clearmodifiers.
     """
     session = _detect_session_type()
     if session == "wayland":
-        ydotool = shutil.which("ydotool")
-        if ydotool:
-            # Map common keys to ydotool scancodes
-            scancode_map = {
-                "enter": "28:1 28:0",
-                "escape": "1:1 1:0",
-                "ctrl+v": "29:1 47:1 47:0 29:0",
-            }
-            codes = scancode_map.get(key.lower(), "")
-            if codes:
-                subprocess.run(
-                    [ydotool, "key"] + codes.split(), timeout=2,
-                )
+        if not _simulate_wayland_keystroke(key):
+            logger.warning(
+                "Could not simulate keystroke '%s' on Wayland. "
+                "See paste_text() error for setup instructions.",
+                key,
+            )
     else:
         xdotool = shutil.which("xdotool")
         if xdotool:

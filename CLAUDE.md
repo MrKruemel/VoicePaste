@@ -45,9 +45,13 @@ build.bat clean          # remove build artifacts
 sudo apt install espeak-ng libportaudio2 xclip xdotool python3-tk
 sudo apt install python3-gi gir1.2-ayatanaappindicator3-0.1
 sudo apt install gnome-shell-extension-appindicator  # GNOME tray icon
+sudo apt install wl-clipboard  # Wayland clipboard (wl-copy/wl-paste)
 pip install pynput evdev  # not in requirements.txt, Linux-only hotkey libraries
 # For Wayland: ensure you are in the 'input' group (for evdev device access)
 sudo usermod -aG input $USER  # then logout and login
+# For Wayland paste: grant input group write access to /dev/uinput
+echo 'KERNEL=="uinput", GROUP="input", MODE="0660"' | sudo tee /etc/udev/rules.d/99-voicepaste-uinput.rules
+sudo udevadm control --reload-rules && sudo udevadm trigger
 ```
 
 ## Architecture
@@ -76,6 +80,34 @@ IDLE → RECORDING → PROCESSING → PASTING → IDLE
 
 `platform_impl/__init__.py` detects OS at import time and re-exports from `_windows.py` or `_linux.py`. All platform-specific operations (clipboard, paste simulation, beeps, single-instance lock, file paths) go through this layer. Never import `_windows.py` or `_linux.py` directly.
 
+**Clipboard Operations:**
+- **Windows**: ctypes WinAPI (OpenClipboard, GetClipboardData, SetClipboardData)
+- **X11**: xclip via subprocess (preferred), falls back to xsel
+- **Wayland**: wl-copy/wl-paste (native), falls back to xclip via XWayland
+
+**Paste Simulation (Ctrl+V):**
+- **Windows**: ctypes keyboard_event (VK_CONTROL + VK_V)
+- **X11**: xdotool key ctrl+v (with --clearmodifiers flag to release stuck modifier keys)
+- **Wayland**: evdev UInput (preferred, no external tools, requires /dev/uinput), falls back to ydotool, final fallback to wtype
+
+**Hotkey Registration:**
+- **Windows**: `keyboard` library with low-level Windows hooks
+- **X11**: `pynput` GlobalHotKeys via XLib
+- **Wayland**: `evdev` device monitoring daemon thread (reads /dev/input/event* directly), auto-detects key codes from current keyboard layout
+
+**Audio Feedback:**
+- **Windows**: `winsound` module
+- **Linux**: `sounddevice` for tone synthesis (works on both X11 and Wayland)
+
+**Single-Instance Lock:**
+- **Windows**: Win32 named mutex
+- **Linux**: file lock on `/tmp/voicepaste.lock`
+
+**File Paths:**
+- **Config**: `~/.config/voicepaste/` (Linux), `%APPDATA%\VoicePaste\` (Windows)
+- **Cache**: `~/.cache/voicepaste/` (Linux), `%LOCALAPPDATA%\VoicePaste\` (Windows)
+- **Logs**: `./voice-paste.log` (cwd)
+
 ### Backend Protocols
 
 STT, summarization, and TTS each use a `Protocol` class with a factory function:
@@ -99,11 +131,12 @@ STT, summarization, and TTS each use a `Protocol` class with a factory function:
 |--------|---------|
 | `main.py` | Entry point, `VoicePasteApp` orchestrator class, pipeline logic |
 | `audio.py` | Microphone recording via sounddevice (in-memory WAV buffer) |
-| `hotkey.py` | Global hotkey registration (keyboard on Windows, pynput on Linux X11, evdev on Linux Wayland) |
-| `evdev_hotkey.py` | Linux Wayland global hotkey support via evdev device monitoring |
+| `hotkey.py` | Global hotkey dispatcher (keyboard on Windows, pynput on Linux X11, evdev on Linux Wayland) |
+| `evdev_hotkey.py` | Linux Wayland hotkey support. Monitors /dev/input/* for keypresses via evdev, spawns daemon listener thread. Auto-detects key codes via keyboard layout. |
 | `tray.py` | System tray icon/menu via pystray, state-colored icons |
 | `settings_dialog.py` | Tabbed tkinter Settings UI with sv_ttk dark theme |
-| `paste.py` | Windows clipboard + Ctrl+V simulation (ctypes) |
+| `platform_impl/_windows.py` | Windows clipboard (ctypes), Ctrl+V paste simulation (ctypes), audio beeps (winsound), single-instance lock (Win32 mutex) |
+| `platform_impl/_linux.py` | Linux clipboard (xclip/wl-copy), Ctrl+V paste simulation (xdotool/evdev UInput/ydotool), audio beeps (sounddevice), file paths (/tmp locks) |
 | `notifications.py` | Audio cue functions (beep patterns for start/stop/cancel/error) |
 | `api_server.py` | Localhost HTTP API for external control |
 | `wake_word.py` | Continuous wake-phrase detection for hands-free mode |
@@ -122,12 +155,30 @@ STT, summarization, and TTS each use a `Protocol` class with a factory function:
 
 ## Build Notes
 
-- PyInstaller builds use `.spec` files: `voice_paste.spec` (Windows), `voice_paste_linux.spec` (Linux).
-- All pip dependency versions are pinned with `==` in `requirements.txt` for reproducible PyInstaller builds. Do not loosen to `>=` without re-testing the built binary.
-- onnxruntime has a known issue with PyInstaller `--onefile` bundles — VAD filter is auto-disabled in frozen builds (see `constants.py`).
+### Windows
+- PyInstaller spec: `voice_paste.spec`
+- Build script: `build.bat` (supports `release`, `debug`, `clean` modes)
+- All pip dependency versions pinned with `==` in `requirements.txt` for reproducibility
+- onnxruntime has a known issue with PyInstaller `--onefile` — VAD filter auto-disabled in frozen builds. See `src/constants.py` line 138.
 - `rthook_onnxruntime.py` is a PyInstaller runtime hook for onnxruntime DLL loading.
-- **Linux builds require `pynput` and `evdev`** in the build environment. `pynput` handles X11 hotkeys; `evdev` handles Wayland hotkeys. Both are NOT listed in `requirements.txt` (because they are Linux-only and the `keyboard` library is used on Windows). If pynput is missing, the binary fails with `"No module named 'pynput'"` / `"Could not register the hotkey"`. If evdev is missing, Wayland support is unavailable but X11 still works. The build script (`build_linux.sh`) now checks for pynput and warns if evdev is missing.
-- **Use a venv for building** — system Python on modern Ubuntu (PEP 668) blocks global pip installs. The venv **must** use `--system-site-packages` so that PyGObject (`gi`) and AppIndicator3 are available — these are system packages that cannot be installed via pip. Without them, pystray falls back to the `_xorg` backend and the tray right-click menu does not work. Build recipe: `python3 -m venv --system-site-packages .venv && source .venv/bin/activate && pip install -r requirements.txt pyinstaller pynput evdev`.
+
+### Linux
+- PyInstaller spec: `voice_paste_linux.spec`
+- Build script: `build_linux.sh` (supports `debug`, `clean` modes; release is default)
+- **CRITICAL: Venv must use `--system-site-packages`**. Modern Ubuntu enforces PEP 668, blocking pip installs globally. PyGObject (`gi`) and AppIndicator3 are system packages required by pystray; without them the tray right-click menu doesn't work.
+- **Build recipe**:
+  ```bash
+  python3 -m venv --system-site-packages .venv
+  source .venv/bin/activate
+  pip install -r requirements.txt pyinstaller pynput evdev
+  ./build_linux.sh
+  ```
+- **Linux-specific build dependencies** (not in `requirements.txt` because they are Linux-only):
+  - `pynput`: Required. Handles X11 hotkey registration via GlobalHotKeys. Without it: `ModuleNotFoundError: No module named 'pynput'`.
+  - `evdev`: Required for Wayland hotkey support. Without it, X11 still works but Wayland support is unavailable.
+  - Build script checks for `pynput` and warns if `evdev` is missing.
+- Binary size: ~241 MB (optimized; excludes PyAV 119MB, espeakng_loader 21MB, system package leaks).
+- PNG icon and `.desktop` file included for desktop integration.
 
 ## Important Conventions
 

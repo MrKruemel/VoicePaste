@@ -488,6 +488,13 @@ _excludes = [
     'onnxruntime.transformers',
     'onnxruntime.tools',
     'onnxruntime.backend',
+
+    # --- PyAV / FFmpeg (~119 MB uncompressed) ---
+    # faster-whisper declares 'av' as a pip dependency, but VoicePaste
+    # records raw PCM via sounddevice and never calls faster_whisper.audio's
+    # av-based decode_audio().  The rthook_av_stub.py runtime hook injects
+    # a lightweight stub so faster-whisper's import succeeds without it.
+    'av',
 ]
 
 # ---------------------------------------------------------------------------
@@ -503,10 +510,15 @@ a = Analysis(
     hiddenimports=_hidden_imports,
     hookspath=[],
     hooksconfig={},
-    # Runtime hook to configure DLL search paths and OpenMP before any
-    # user code runs.  This prevents native segfaults when onnxruntime
-    # tries to load from the _MEI* temp directory.
-    runtime_hooks=[os.path.join(SPECPATH, 'rthook_onnxruntime.py')],
+    # Runtime hooks run BEFORE any user code.
+    # 1. rthook_av_stub: Stub out PyAV so faster-whisper imports without
+    #    the real ~119 MB av package (VoicePaste uses raw PCM, not av).
+    # 2. rthook_onnxruntime: Configure DLL search paths and OpenMP to
+    #    prevent native segfaults when onnxruntime loads from _MEI* dir.
+    runtime_hooks=[
+        os.path.join(SPECPATH, 'rthook_av_stub.py'),
+        os.path.join(SPECPATH, 'rthook_onnxruntime.py'),
+    ],
     excludes=_excludes,
     noarchive=_debug_mode,
 )

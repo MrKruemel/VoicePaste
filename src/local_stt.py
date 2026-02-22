@@ -39,6 +39,35 @@ from stt import STTError
 
 logger = logging.getLogger(__name__)
 
+# ---------------------------------------------------------------------------
+# Stub out PyAV (av) so faster-whisper can import without the real package.
+#
+# faster_whisper.__init__ does ``from faster_whisper.audio import decode_audio``
+# which triggers a top-level ``import av`` inside audio.py.  PyAV bundles the
+# FFmpeg native libraries and adds ~119 MB to a PyInstaller build, but
+# VoicePaste never calls decode_audio() -- we feed pre-decoded PCM float32
+# arrays (via _wav_bytes_to_float32) directly to WhisperModel.transcribe().
+#
+# By inserting a lightweight dummy module into sys.modules we let
+# faster_whisper.audio import without error while keeping the binary small.
+# If ``av`` IS genuinely installed (e.g. running from source), we leave it
+# alone.
+# ---------------------------------------------------------------------------
+if "av" not in sys.modules:
+    try:
+        import av  # noqa: F401 -- real package present, nothing to do
+    except ImportError:
+        import types
+
+        _dummy_av = types.ModuleType("av")
+        _dummy_av.__version__ = "0.0.0-stub"  # type: ignore[attr-defined]
+        _dummy_av.__path__ = []  # type: ignore[attr-defined]  # mark as package
+        sys.modules["av"] = _dummy_av
+        logger.debug(
+            "Injected dummy 'av' module -- PyAV is not installed. "
+            "This is expected; VoicePaste does not use decode_audio()."
+        )
+
 # Sentinel to track whether faster-whisper is available
 _faster_whisper_available: Optional[bool] = None
 
