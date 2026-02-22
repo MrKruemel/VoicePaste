@@ -151,7 +151,7 @@ HANDSFREE_PIPELINES = ("ask_tts", "summary", "prompt", "claude_code")
 # Adaptive silence detection calibration
 DEFAULT_HANDSFREE_SILENCE_THRESHOLD_RMS = 0.0  # 0 = adaptive (auto-calibrate)
 ADAPTIVE_CALIBRATION_SECONDS = 0.5             # Calibration window duration
-ADAPTIVE_THRESHOLD_MULTIPLIER = 2.5            # threshold = baseline_rms * multiplier
+ADAPTIVE_THRESHOLD_MULTIPLIER = 1.5            # threshold = baseline_rms * multiplier
 ADAPTIVE_MIN_THRESHOLD = 100.0                 # Floor: never go below this
 ADAPTIVE_MAX_THRESHOLD = 5000.0                # Ceiling: reject pathologically loud environments
 
