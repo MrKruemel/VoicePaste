@@ -30,6 +30,7 @@ from constants import (
     DEFAULT_CLAUDE_CODE_HOTKEY,
     DEFAULT_HOTKEY,
     DEFAULT_PROMPT_HOTKEY,
+    DEFAULT_TERMINAL_MODE_HOTKEY,
     DEFAULT_TTS_ASK_HOTKEY,
     DEFAULT_TTS_HOTKEY,
     HOTKEY_DEBOUNCE_MS,
@@ -237,6 +238,7 @@ class HotkeyManager:
         tts_hotkey: str = DEFAULT_TTS_HOTKEY,
         tts_ask_hotkey: str = DEFAULT_TTS_ASK_HOTKEY,
         claude_code_hotkey: str = DEFAULT_CLAUDE_CODE_HOTKEY,
+        terminal_mode_hotkey: str = DEFAULT_TERMINAL_MODE_HOTKEY,
         debounce_ms: int = HOTKEY_DEBOUNCE_MS,
     ) -> None:
         """Initialize the hotkey manager.
@@ -247,6 +249,7 @@ class HotkeyManager:
             tts_hotkey: TTS clipboard readout hotkey (v0.6).
             tts_ask_hotkey: TTS Ask AI + readout hotkey (v0.6).
             claude_code_hotkey: Claude Code voice input hotkey (v1.2).
+            terminal_mode_hotkey: Terminal Mode toggle hotkey (v1.3).
             debounce_ms: Debounce window in milliseconds.
         """
         self.hotkey = hotkey
@@ -254,6 +257,7 @@ class HotkeyManager:
         self.tts_hotkey = tts_hotkey
         self.tts_ask_hotkey = tts_ask_hotkey
         self.claude_code_hotkey = claude_code_hotkey
+        self.terminal_mode_hotkey = terminal_mode_hotkey
         self.debounce_ms = debounce_ms
         self._lock = threading.Lock()
 
@@ -265,6 +269,9 @@ class HotkeyManager:
             "tts_ask": _HotkeySlot(label="TTS Ask", combo=tts_ask_hotkey),
             "claude_code": _HotkeySlot(
                 label="Claude Code", combo=claude_code_hotkey, validate=True,
+            ),
+            "terminal_mode": _HotkeySlot(
+                label="Terminal Mode", combo=terminal_mode_hotkey, validate=True,
             ),
             "cancel": _HotkeySlot(
                 label="Cancel", combo=CANCEL_HOTKEY,
@@ -481,15 +488,28 @@ class HotkeyManager:
         """Unregister the Claude Code hotkey. Safe to call if not registered."""
         self._unregister_slot("claude_code")
 
+    def register_terminal_mode(self, callback: Callable[[], None]) -> None:
+        """Register the Terminal Mode toggle hotkey (v1.3).
+
+        Args:
+            callback: Function to call when the terminal mode hotkey is pressed.
+        """
+        self._register_slot("terminal_mode", callback)
+
+    def unregister_terminal_mode(self) -> None:
+        """Unregister the Terminal Mode toggle hotkey. Safe if not registered."""
+        self._unregister_slot("terminal_mode")
+
     def unregister_tts(self) -> None:
         """Unregister TTS hotkeys. Safe to call even if not registered."""
         self._unregister_slot("tts")
         self._unregister_slot("tts_ask")
 
     def unregister(self) -> None:
-        """Unregister all hotkeys (main + prompt + cancel + TTS + Claude Code)."""
+        """Unregister all hotkeys (main + prompt + cancel + TTS + Claude Code + Terminal Mode)."""
         self.unregister_cancel()
         self.unregister_tts()
         self.unregister_claude_code()
+        self.unregister_terminal_mode()
         self._unregister_slot("prompt")
         self._unregister_slot("main")

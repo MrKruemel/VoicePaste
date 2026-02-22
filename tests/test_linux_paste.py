@@ -423,16 +423,16 @@ class TestIsTerminalFocusedWayland:
         assert result is False
 
     def test_returns_false_when_gdbus_not_found(self):
-        """Returns False when gdbus binary is not installed."""
+        """Returns False (GUI-safe default) when gdbus binary is not installed."""
         mod = _import_linux()
 
         with patch("platform_impl._linux.shutil.which", return_value=None):
             result = mod._is_terminal_focused_wayland()
 
-        assert result is False
+        assert result is False  # GUI-safe default: Ctrl+V
 
     def test_returns_false_on_gdbus_timeout(self):
-        """Returns False when gdbus subprocess times out."""
+        """Returns False (GUI-safe default) when gdbus subprocess times out."""
         mod = _import_linux()
 
         with (
@@ -444,10 +444,10 @@ class TestIsTerminalFocusedWayland:
         ):
             result = mod._is_terminal_focused_wayland()
 
-        assert result is False
+        assert result is False  # GUI-safe default: Ctrl+V
 
     def test_returns_false_on_gdbus_nonzero_exit(self):
-        """Returns False when gdbus returns non-zero (e.g. non-GNOME compositor)."""
+        """Returns False (GUI-safe default) when gdbus returns non-zero (e.g. non-GNOME compositor)."""
         mod = _import_linux()
 
         mock_result = MagicMock()
@@ -460,10 +460,26 @@ class TestIsTerminalFocusedWayland:
         ):
             result = mod._is_terminal_focused_wayland()
 
-        assert result is False
+        assert result is False  # GUI-safe default: Ctrl+V
+
+    def test_returns_false_on_shell_eval_disabled(self):
+        """Returns False (GUI-safe default) when Shell.Eval is disabled (GNOME 41+)."""
+        mod = _import_linux()
+
+        mock_result = MagicMock()
+        mock_result.returncode = 0
+        mock_result.stdout = "(false, '')"
+
+        with (
+            patch("platform_impl._linux.shutil.which", return_value="/usr/bin/gdbus"),
+            patch("platform_impl._linux.subprocess.run", return_value=mock_result),
+        ):
+            result = mod._is_terminal_focused_wayland()
+
+        assert result is False  # GUI-safe default: Ctrl+V
 
     def test_returns_false_on_unexpected_exception(self):
-        """Returns False on any unexpected error from gdbus."""
+        """Returns False (GUI-safe default) on any unexpected error from gdbus."""
         mod = _import_linux()
 
         with (
@@ -475,7 +491,7 @@ class TestIsTerminalFocusedWayland:
         ):
             result = mod._is_terminal_focused_wayland()
 
-        assert result is False
+        assert result is False  # GUI-safe default: Ctrl+V
 
     def test_gdbus_called_with_correct_args(self):
         """Verify the exact gdbus command used for GNOME Shell Eval."""

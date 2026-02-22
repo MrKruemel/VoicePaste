@@ -1286,6 +1286,15 @@ class SettingsDialog:
         self._tts_ask_hotkey_label = ttk.Label(tts_ask_hotkey_row, text="", font=("", 9, "bold"))
         self._tts_ask_hotkey_label.pack(side=tk.LEFT, padx=(4, 0))
 
+        # Terminal Mode hotkey display (v1.3)
+        terminal_mode_row = ttk.Frame(parent)
+        terminal_mode_row.pack(fill=tk.X, pady=(0, 2))
+
+        ttk.Label(terminal_mode_row, text="Term. Mode:", width=10, anchor=tk.W).pack(side=tk.LEFT)
+        self._terminal_mode_hotkey_label = ttk.Label(
+            terminal_mode_row, text="", font=("", 9, "bold"))
+        self._terminal_mode_hotkey_label.pack(side=tk.LEFT, padx=(4, 0))
+
         hotkey_hint = ttk.Label(
             parent,
             text="Change in config.toml (requires restart)",
@@ -1927,6 +1936,7 @@ class SettingsDialog:
         self._prompt_hotkey_label.config(text=config.prompt_hotkey)
         self._tts_hotkey_label.config(text=config.tts_hotkey)
         self._tts_ask_hotkey_label.config(text=config.tts_ask_hotkey)
+        self._terminal_mode_hotkey_label.config(text=config.terminal_mode_hotkey)
 
         # Audio cues
         self._audio_cues_var.set(config.audio_cues_enabled)

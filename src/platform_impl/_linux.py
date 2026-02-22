@@ -342,20 +342,26 @@ def _is_terminal_focused_wayland() -> bool:
     """Check if the focused Wayland window is a terminal emulator.
 
     Queries GNOME Shell's D-Bus interface via gdbus to get the WM_CLASS
-    of the currently focused window. This works on GNOME-based Wayland
-    sessions (Ubuntu default). On non-GNOME compositors (sway, wlroots),
-    this will fail gracefully and return False.
+    of the currently focused window.
+
+    On modern GNOME (41+), Shell.Eval is disabled for security. When
+    detection fails, this returns False (Ctrl+V default for GUI apps).
+    Users who paste into terminals should use the Terminal Mode toggle
+    (Ctrl+Alt+M) to switch to Ctrl+Shift+V, or set
+    paste_shortcut="ctrl+shift+v" in config.toml.
 
     Returns:
         True if the focused window is a known terminal emulator.
+        False if detection is unavailable (safe default for GUI apps).
     """
     gdbus = shutil.which("gdbus")
     if not gdbus:
         logger.debug(
-            "gdbus not found; cannot detect terminal on Wayland. "
-            "Install glib2 utilities if terminal paste detection is needed."
+            "gdbus not found; defaulting to Ctrl+V on Wayland. "
+            "Use Terminal Mode toggle or set paste_shortcut in config.toml."
         )
-        return False
+        return False  # GUI-safe default: Ctrl+V works in most apps
+
     try:
         result = subprocess.run(
             [
@@ -368,27 +374,34 @@ def _is_terminal_focused_wayland() -> bool:
             ],
             capture_output=True, text=True, timeout=2,
         )
-        if result.returncode != 0:
-            logger.debug(
-                "gdbus GNOME Shell query failed (rc=%d). "
-                "Non-GNOME compositor or Shell.Eval disabled.",
-                result.returncode,
-            )
-            return False
 
-        # gdbus output format: (true, 'gnome-terminal-server')
-        output = result.stdout.lower()
+        # Check if Shell.Eval is available (GNOME < 41 or enabled via extension)
+        output = result.stdout.strip()
+        if result.returncode != 0 or output.startswith("(false"):
+            logger.debug(
+                "GNOME Shell.Eval unavailable (GNOME 41+ security policy). "
+                "Defaulting to Ctrl+V. Use Terminal Mode toggle (Ctrl+Alt+M) "
+                "or set paste_shortcut='ctrl+shift+v' in config.toml.",
+            )
+            return False  # GUI-safe default
+
+        # Shell.Eval succeeded — check WM_CLASS against known terminals
+        output_lower = output.lower()
         for tc in _TERMINAL_CLASSES:
-            if tc in output:
+            if tc in output_lower:
                 logger.debug("Terminal detected (Wayland/gdbus): %s", tc)
                 return True
+
+        # Non-terminal app detected via Shell.Eval — use Ctrl+V
+        logger.debug("Non-terminal focused (Wayland/gdbus): %s", output)
         return False
+
     except subprocess.TimeoutExpired:
-        logger.debug("gdbus terminal detection timed out.")
-        return False
+        logger.debug("gdbus terminal detection timed out; defaulting to Ctrl+V.")
+        return False  # GUI-safe default
     except Exception as e:
-        logger.debug("gdbus terminal detection failed: %s", e)
-        return False
+        logger.debug("gdbus terminal detection failed: %s; defaulting to Ctrl+V.", e)
+        return False  # GUI-safe default
 
 
 def _simulate_wayland_keystroke(key_combo: str) -> bool:

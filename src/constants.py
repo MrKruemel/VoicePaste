@@ -477,6 +477,11 @@ PIPER_VOICE_MODELS: dict[str, dict[str, Any]] = {
     },
 }
 
+# --- v1.3: Terminal Mode toggle hotkey ---
+# Toggles paste shortcut between Ctrl+V (GUI) and Ctrl+Shift+V (terminal).
+# Useful on Wayland where auto-detection of the focused window is unreliable.
+DEFAULT_TERMINAL_MODE_HOTKEY = "ctrl+alt+m"
+
 # --- v1.2: Claude Code CLI integration ---
 DEFAULT_CLAUDE_CODE_ENABLED = False
 DEFAULT_CLAUDE_CODE_HOTKEY = "ctrl+alt+c"

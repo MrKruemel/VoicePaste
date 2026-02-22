@@ -19,6 +19,7 @@ from constants import (
     DEFAULT_AUDIO_DEVICE_INDEX,
     DEFAULT_CLAUDE_CODE_CONTINUE_CONVERSATION,
     DEFAULT_CLAUDE_CODE_ENABLED,
+    DEFAULT_TERMINAL_MODE_HOTKEY,
     DEFAULT_CLAUDE_CODE_HOTKEY,
     DEFAULT_CLAUDE_CODE_RESPONSE_MODE,
     DEFAULT_CLAUDE_CODE_SKIP_PERMISSIONS,
@@ -108,6 +109,10 @@ api_port = 18923
 combination = "ctrl+alt+r"
 # Voice Prompt hotkey: record speech, send as prompt to LLM, paste answer (default: "ctrl+alt+a")
 prompt_combination = "ctrl+alt+a"
+
+# Terminal Mode toggle: switch paste between Ctrl+V (GUI) and Ctrl+Shift+V (terminal)
+# Useful on Wayland where auto-detection of the focused window is unreliable.
+# terminal_mode_combination = "ctrl+alt+m"
 
 [transcription]
 # Backend: "cloud" (OpenAI Whisper API) or "local" (faster-whisper, offline)
@@ -294,6 +299,9 @@ class AppConfig:
     tts_export_enabled: bool = DEFAULT_TTS_EXPORT_ENABLED
     tts_export_path: str = DEFAULT_TTS_EXPORT_PATH
 
+    # --- v1.3: Terminal Mode toggle hotkey ---
+    terminal_mode_hotkey: str = DEFAULT_TERMINAL_MODE_HOTKEY
+
     # --- v1.2: Claude Code CLI integration ---
     claude_code_enabled: bool = DEFAULT_CLAUDE_CODE_ENABLED
     claude_code_hotkey: str = DEFAULT_CLAUDE_CODE_HOTKEY
@@ -403,6 +411,8 @@ prompt_combination = "{esc(self.prompt_hotkey)}"
 # TTS hotkeys (v0.6): read clipboard aloud / ask AI + TTS
 tts_combination = "{esc(self.tts_hotkey)}"
 tts_ask_combination = "{esc(self.tts_ask_hotkey)}"
+# Terminal Mode toggle: switch paste shortcut between Ctrl+V and Ctrl+Shift+V
+terminal_mode_combination = "{esc(self.terminal_mode_hotkey)}"
 
 [transcription]
 # Backend: "cloud" (OpenAI Whisper API) or "local" (faster-whisper, offline)
@@ -873,6 +883,23 @@ def load_config() -> Optional[AppConfig]:
     else:
         claude_code_hotkey = DEFAULT_CLAUDE_CODE_HOTKEY
 
+    # --- v1.3: Terminal Mode toggle hotkey ---
+    terminal_mode_hotkey = hotkey_section.get(
+        "terminal_mode_combination", DEFAULT_TERMINAL_MODE_HOTKEY)
+    if terminal_mode_hotkey and terminal_mode_hotkey.strip():
+        terminal_mode_hotkey = terminal_mode_hotkey.strip()
+        try:
+            _parse_hotkey(terminal_mode_hotkey)
+            logger.info("Terminal Mode hotkey configured: '%s'", terminal_mode_hotkey)
+        except Exception as e:
+            logger.warning(
+                "Invalid Terminal Mode hotkey '%s': %s. Falling back to '%s'.",
+                terminal_mode_hotkey, e, DEFAULT_TERMINAL_MODE_HOTKEY,
+            )
+            terminal_mode_hotkey = DEFAULT_TERMINAL_MODE_HOTKEY
+    else:
+        terminal_mode_hotkey = DEFAULT_TERMINAL_MODE_HOTKEY
+
     # --- v0.9: Hands-Free Mode ---
     handsfree_section = data.get("handsfree", {})
     handsfree_enabled = bool(handsfree_section.get("enabled", DEFAULT_HANDSFREE_ENABLED))
@@ -1006,6 +1033,8 @@ def load_config() -> Optional[AppConfig]:
         # v1.0: TTS Audio Export
         tts_export_enabled=tts_export_enabled,
         tts_export_path=tts_export_path,
+        # v1.3: Terminal Mode toggle hotkey
+        terminal_mode_hotkey=terminal_mode_hotkey,
         # v1.2: Claude Code CLI
         claude_code_enabled=claude_code_enabled,
         claude_code_hotkey=claude_code_hotkey,

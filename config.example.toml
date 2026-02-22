@@ -28,6 +28,12 @@ tts_combination = "ctrl+alt+t"
 tts_ask_combination = "ctrl+alt+y"
 # Note: These hotkeys only work when TTS is enabled. Disable TTS to free up these hotkeys.
 
+# Terminal Mode toggle (v1.3): switch paste between Ctrl+V (GUI) and Ctrl+Shift+V (terminal)
+# Useful on Wayland where auto-detection of the focused window is unreliable.
+# Press this hotkey to toggle between GUI paste (Ctrl+V) and terminal paste (Ctrl+Shift+V).
+# The toggle state resets on restart. Set paste_shortcut in [paste] for a persistent override.
+terminal_mode_combination = "ctrl+alt+m"
+
 # Hands-Free hotkey (v0.9): say wake phrase to start recording, silence auto-stops (default: disabled)
 # Set to a hotkey like "ctrl+alt+o" to enable, or leave empty to disable.
 # Requires microphone and local STT (faster-whisper). Can work with any STT + summarization pipeline.

@@ -208,6 +208,7 @@ class VoicePasteApp:
             tts_hotkey=config.tts_hotkey,
             tts_ask_hotkey=config.tts_ask_hotkey,
             claude_code_hotkey=config.claude_code_hotkey,
+            terminal_mode_hotkey=config.terminal_mode_hotkey,
         )
 
         # v1.2: Claude Code CLI backend
@@ -236,6 +237,9 @@ class VoicePasteApp:
             claude_code_hotkey_label=config.claude_code_hotkey,
             get_claude_code_available=lambda: self._claude_code is not None,
             on_claude_new_conversation=self._on_claude_new_conversation,
+            on_terminal_mode_toggle=self._toggle_terminal_mode,
+            get_terminal_mode_active=lambda: self._terminal_mode,
+            terminal_mode_hotkey_label=config.terminal_mode_hotkey,
         )
 
         # v1.2: TTS orchestrator (extracted from main.py)
@@ -252,6 +256,9 @@ class VoicePasteApp:
             show_error=self._show_error,
         )
         self._tts_orchestrator.on_cancel = self._on_cancel
+
+        # v1.3: Terminal Mode toggle (runtime-only, not persisted)
+        self._terminal_mode: bool = False
 
         self._shutdown_event = threading.Event()
         self._pipeline_thread: threading.Thread | None = None
@@ -750,6 +757,41 @@ class VoicePasteApp:
         logger.info("Silence auto-stop triggered (Hands-Free mode).")
         self._tray_manager.notify(APP_NAME, "Silence detected — processing...")
         self._stop_recording_and_process()
+
+    def _get_effective_paste_shortcut(self) -> str:
+        """Determine the effective paste shortcut considering terminal mode.
+
+        Terminal Mode (runtime toggle) overrides the config's paste_shortcut.
+        When Terminal Mode is active, always uses Ctrl+Shift+V.
+        Otherwise, uses the config setting (auto/ctrl+v/ctrl+shift+v).
+
+        Returns:
+            Paste shortcut string: "ctrl+shift+v", "ctrl+v", or "auto".
+        """
+        if self._terminal_mode:
+            return "ctrl+shift+v"
+        if self.config.paste_shortcut != "auto":
+            return self.config.paste_shortcut
+        return "auto"
+
+    def _toggle_terminal_mode(self) -> None:
+        """Toggle terminal paste mode (Ctrl+Shift+V vs Ctrl+V).
+
+        This is a runtime toggle that overrides the paste_shortcut config.
+        When enabled, all paste operations use Ctrl+Shift+V (terminal shortcut).
+        When disabled, the config's paste_shortcut setting is used.
+        The state does NOT persist to config.toml -- it resets on restart.
+
+        Useful on Wayland where auto-detection of the focused window is unreliable.
+        """
+        self._terminal_mode = not self._terminal_mode
+        mode_label = "Terminal (Ctrl+Shift+V)" if self._terminal_mode else "GUI (Ctrl+V)"
+        logger.info("Paste mode toggled: %s", mode_label)
+        # Update tray menu to reflect new check state
+        if hasattr(self, '_tray_manager'):
+            self._tray_manager.refresh_menu()
+        # Show notification
+        self._tray_manager.notify(APP_NAME, f"Paste: {mode_label}")
 
     def _open_settings(self) -> None:
         """Open the settings dialog. Called from tray menu (pystray thread)."""
@@ -1520,7 +1562,8 @@ class VoicePasteApp:
                 return
 
             self._set_state(AppState.PASTING)
-            success = paste_text(summary, paste_shortcut=self.config.paste_shortcut)
+            _paste_shortcut = self._get_effective_paste_shortcut()
+            success = paste_text(summary, paste_shortcut=_paste_shortcut)
 
             if success:
                 # v0.9: Auto-Enter after paste (e.g. execute command in terminal)
@@ -1793,14 +1836,26 @@ class VoicePasteApp:
                     self.config.claude_code_hotkey, exc,
                 )
 
+        # v1.3: Register Terminal Mode toggle hotkey (non-fatal)
+        try:
+            self._hotkey_manager.register_terminal_mode(
+                self._toggle_terminal_mode
+            )
+        except Exception as exc:
+            logger.warning(
+                "Failed to register Terminal Mode hotkey '%s': %s",
+                self.config.terminal_mode_hotkey, exc,
+            )
+
         logger.info(
             "Hotkeys registered: summary='%s', prompt='%s', tts='%s', tts_ask='%s', "
-            "claude_code='%s'. Waiting for user input.",
+            "claude_code='%s', terminal_mode='%s'. Waiting for user input.",
             self.config.hotkey,
             self.config.prompt_hotkey,
             self.config.tts_hotkey if self.config.tts_enabled else "(disabled)",
             self.config.tts_ask_hotkey if self.config.tts_enabled else "(disabled)",
             self.config.claude_code_hotkey if self.config.claude_code_enabled else "(disabled)",
+            self.config.terminal_mode_hotkey,
         )
 
         # v1.0: Run startup cache eviction on a deferred thread

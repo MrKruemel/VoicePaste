@@ -133,6 +133,9 @@ class TrayManager:
         claude_code_hotkey_label: str = "Ctrl+Alt+C",
         get_claude_code_available: Optional[Callable[[], bool]] = None,
         on_claude_new_conversation: Optional[Callable[[], None]] = None,
+        on_terminal_mode_toggle: Optional[Callable[[], None]] = None,
+        get_terminal_mode_active: Optional[Callable[[], bool]] = None,
+        terminal_mode_hotkey_label: str = "Ctrl+Alt+M",
     ) -> None:
         """Initialize the tray manager.
 
@@ -151,6 +154,9 @@ class TrayManager:
             get_handsfree_active: Callable returning current Hands-Free state.
             on_language_changed: Callback when user selects a language from tray menu.
             get_current_language: Callable returning current language code.
+            on_terminal_mode_toggle: Callback for the Terminal Mode toggle (v1.3).
+            get_terminal_mode_active: Callable returning current Terminal Mode state.
+            terminal_mode_hotkey_label: Human-readable hotkey string for Terminal Mode.
         """
         self._on_quit = on_quit
         self._on_settings = on_settings
@@ -171,6 +177,9 @@ class TrayManager:
         self._claude_code_hotkey_label = claude_code_hotkey_label
         self._get_claude_code_available = get_claude_code_available
         self._on_claude_new_conversation = on_claude_new_conversation
+        self._on_terminal_mode_toggle = on_terminal_mode_toggle
+        self._get_terminal_mode_active = get_terminal_mode_active
+        self._terminal_mode_hotkey_label = terminal_mode_hotkey_label
         self._icon: Optional[pystray.Icon] = None
         self._running = False
         self._current_state = AppState.IDLE
@@ -291,6 +300,20 @@ class TrayManager:
                 ),
                 visible=lambda _: self._claude_code_enabled,
             ),
+            # v1.3: Terminal Mode toggle (paste Ctrl+Shift+V vs Ctrl+V)
+            pystray.MenuItem(
+                lambda _: (
+                    f"Terminal Mode: ON ({self._terminal_mode_hotkey_label})"
+                    if self._get_terminal_mode_active
+                    and self._get_terminal_mode_active()
+                    else f"Terminal Mode: OFF ({self._terminal_mode_hotkey_label})"
+                ),
+                self._handle_terminal_mode_toggle,
+                checked=lambda _: (
+                    self._get_terminal_mode_active
+                    and self._get_terminal_mode_active()
+                ),
+            ),
             # v0.9: Hands-Free toggle
             pystray.MenuItem(
                 lambda _: (
@@ -389,6 +412,19 @@ class TrayManager:
             item: The menu item that was clicked.
         """
         logger.debug("Tray icon default action triggered (no-op).")
+
+    def _handle_terminal_mode_toggle(
+        self, icon: pystray.Icon, item: pystray.MenuItem
+    ) -> None:
+        """Handle the Terminal Mode toggle menu action (v1.3).
+
+        Args:
+            icon: The pystray Icon instance.
+            item: The menu item that was clicked.
+        """
+        logger.info("Terminal Mode toggle requested from tray menu.")
+        if self._on_terminal_mode_toggle:
+            self._on_terminal_mode_toggle()
 
     def _handle_handsfree_toggle(
         self, icon: pystray.Icon, item: pystray.MenuItem
@@ -593,6 +629,20 @@ class TrayManager:
             logger.info("Startup notification shown (tts_enabled=%s).", self._tts_enabled)
         except Exception:
             logger.debug("Failed to show startup notification.")
+
+    def refresh_menu(self) -> None:
+        """Force a menu refresh so dynamic labels and checkmarks update.
+
+        Thread-safe. Called after state changes that affect menu items
+        (e.g., Terminal Mode toggle).
+        """
+        if not self._icon or not self._running:
+            return
+        try:
+            self._icon.update_menu()
+            logger.debug("Tray menu refreshed.")
+        except Exception:
+            logger.debug("Failed to refresh tray menu (non-fatal).")
 
     def stop(self) -> None:
         """Stop the system tray icon."""
