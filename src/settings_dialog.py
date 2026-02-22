@@ -1568,13 +1568,31 @@ class SettingsDialog:
         ).pack(side=tk.LEFT, padx=(4, 0))
         ttk.Label(cooldown_row, text="seconds").pack(side=tk.LEFT, padx=(4, 0))
 
+        # Wake word model size
+        model_row = ttk.Frame(parent)
+        model_row.pack(fill=tk.X, pady=(4, 4))
+        ttk.Label(model_row, text="Wake model:", width=16, anchor=tk.W).pack(side=tk.LEFT)
+        self._hf_wake_model_var = tk.StringVar(value="base")
+        ttk.Combobox(
+            model_row, textvariable=self._hf_wake_model_var,
+            values=["tiny", "base", "small"], state="readonly", width=8,
+        ).pack(side=tk.LEFT, padx=(4, 0))
+
+        ttk.Label(
+            parent,
+            text="tiny (~75 MB, fast, less accurate in noise)  |  "
+                 "base (~145 MB, recommended)  |  small (~480 MB, best accuracy)",
+            foreground="#999999",
+            font=("", 8),
+        ).pack(fill=tk.X, pady=(0, 4))
+
         ttk.Separator(parent, orient=tk.HORIZONTAL).pack(fill=tk.X, pady=(8, 8))
         ttk.Label(
             parent,
             text="Requirements:\n"
                  "- faster-whisper must be installed (Local STT build)\n"
-                 "- The 'tiny' Whisper model will be loaded for detection\n"
-                 "  (~75 MB RAM, minimal CPU when no speech detected)",
+                 "- The selected model will be downloaded on first use\n"
+                 "  (minimal CPU when no speech detected)",
             foreground="#999999",
             wraplength=480,
             font=("", 8),
@@ -2003,6 +2021,7 @@ class SettingsDialog:
         self._hf_silence_threshold_var.set(str(int(config.handsfree_silence_threshold_rms)))
         self._hf_max_recording_var.set(str(config.handsfree_max_recording_seconds))
         self._hf_cooldown_var.set(str(config.handsfree_cooldown_seconds))
+        self._hf_wake_model_var.set(config.handsfree_wake_model_size)
 
         # v1.2: Claude Code tab
         self._claude_code_enabled_var.set(config.claude_code_enabled)
@@ -3391,6 +3410,11 @@ class SettingsDialog:
         if new_silence_threshold != config.handsfree_silence_threshold_rms:
             changed_fields["handsfree_silence_threshold_rms"] = new_silence_threshold
             config.handsfree_silence_threshold_rms = new_silence_threshold
+
+        new_wake_model = self._hf_wake_model_var.get().strip().lower()
+        if new_wake_model in ("tiny", "base", "small") and new_wake_model != config.handsfree_wake_model_size:
+            changed_fields["handsfree_wake_model_size"] = new_wake_model
+            config.handsfree_wake_model_size = new_wake_model
 
         try:
             new_hf_max = int(float(self._hf_max_recording_var.get()))
