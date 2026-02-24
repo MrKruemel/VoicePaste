@@ -59,6 +59,7 @@ from constants import (
     DEFAULT_TTS_MODEL_ID,
     DEFAULT_TTS_OUTPUT_FORMAT,
     DEFAULT_TTS_PROVIDER,
+    DEFAULT_TTS_SENTENCE_PAUSE_MS,
     DEFAULT_TTS_VOICE_ID,
     DEFAULT_OPENAI_TTS_FORMAT,
     DEFAULT_OPENAI_TTS_MODEL,
@@ -282,7 +283,8 @@ class AppConfig:
 
     # --- v0.7: Local TTS (Piper) fields ---
     tts_local_voice: str = DEFAULT_PIPER_VOICE
-    tts_speed: float = 1.3  # Piper length_scale: <1.0 = faster, >1.0 = slower
+    tts_speed: float = 1.0  # Piper length_scale: <1.0 = faster, >1.0 = slower
+    tts_sentence_pause_ms: int = DEFAULT_TTS_SENTENCE_PAUSE_MS
 
     # --- v0.9: HTTP API ---
     api_enabled: bool = DEFAULT_API_ENABLED
@@ -473,6 +475,9 @@ openai_instructions = "{esc(self.tts_openai_instructions)}"
 local_voice = "{esc(self.tts_local_voice)}"
 # Speech speed: 0.5 = double speed, 1.0 = normal, 2.0 = half speed
 speed = {self.tts_speed}
+# Silence gap between sentences in milliseconds (0 = disabled).
+# Improves readability for longer text. Default: 350.
+sentence_pause_ms = {self.tts_sentence_pause_ms}
 
 [paste]
 # Confirm before pasting: show a preview notification and wait for Enter.
@@ -870,8 +875,14 @@ def load_config() -> Optional[AppConfig]:
         tts_local_voice = DEFAULT_PIPER_VOICE
 
     # v1.1: TTS speed (Piper length_scale)
-    tts_speed = float(tts_section.get("speed", 1.3))
+    tts_speed = float(tts_section.get("speed", 1.0))
     tts_speed = max(0.25, min(tts_speed, 4.0))  # clamp to sane range
+
+    # v1.2: Sentence pause for Piper (silence gap between sentences)
+    tts_sentence_pause_ms = int(
+        tts_section.get("sentence_pause_ms", DEFAULT_TTS_SENTENCE_PAUSE_MS)
+    )
+    tts_sentence_pause_ms = max(0, min(tts_sentence_pause_ms, 2000))
 
     # --- v1.0: TTS Audio Cache ---
     tts_cache_section = data.get("tts_cache", {})
@@ -1078,6 +1089,7 @@ def load_config() -> Optional[AppConfig]:
         # v0.7: Local TTS (Piper)
         tts_local_voice=tts_local_voice,
         tts_speed=tts_speed,
+        tts_sentence_pause_ms=tts_sentence_pause_ms,
         # v0.9: HTTP API
         api_enabled=api_enabled,
         api_port=api_port,

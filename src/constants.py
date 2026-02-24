@@ -333,6 +333,7 @@ TTS_MAX_TEXT_LENGTH = 10000
 
 # --- v0.7: Piper local TTS configuration ---
 DEFAULT_PIPER_VOICE = "de_DE-thorsten-medium"
+DEFAULT_TTS_SENTENCE_PAUSE_MS = 350  # silence between sentences (ms)
 
 # Piper voice model registry.
 # Each entry maps a voice name to its Hugging Face repo path and metadata.

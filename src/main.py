@@ -376,6 +376,7 @@ class VoicePasteApp:
             output_format=config.tts_output_format,
             local_voice=config.tts_local_voice,
             speed=config.tts_speed,
+            sentence_pause_ms=config.tts_sentence_pause_ms,
             openai_tts_voice=config.tts_openai_voice,
             openai_tts_model=config.tts_openai_model,
             openai_tts_format=config.tts_openai_format,

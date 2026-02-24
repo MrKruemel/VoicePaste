@@ -1155,7 +1155,7 @@ class SettingsDialog:
         tts_speed_row = ttk.Frame(self._tts_local_frame)
         tts_speed_row.pack(fill=tk.X, pady=(4, 4))
         ttk.Label(tts_speed_row, text="Speed:", width=10, anchor=tk.W).pack(side=tk.LEFT)
-        self._tts_speed_var = tk.StringVar(value="1.3")
+        self._tts_speed_var = tk.StringVar(value="1.0")
         ttk.Spinbox(
             tts_speed_row, from_=0.5, to=2.0, increment=0.1, width=6,
             textvariable=self._tts_speed_var,

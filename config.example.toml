@@ -214,8 +214,14 @@ local_voice = "de_DE-thorsten-medium"
 # Controls the length_scale parameter: lower = faster, higher = slower.
 # 0.5 = fast (double speed), 1.0 = normal, 2.0 = slow (half speed)
 # Valid range: 0.25 to 4.0. Only used when provider = "piper".
-# Default 1.3 for better readability with German compound words.
-speed = 1.3
+# Default 1.0 (normal speed). Sentence pauses handle readability.
+speed = 1.0
+
+# Silence gap between sentences in milliseconds (0 = disabled).
+# Piper synthesizes all text in one shot with no natural pauses.
+# This splits text into sentences and inserts silence gaps for readability.
+# Valid range: 0 to 2000. Default: 350.
+sentence_pause_ms = 350
 
 [feedback]
 # Play audio cues on recording start/stop (default: true)
