@@ -360,14 +360,27 @@ class VoicePasteApp:
             logger.info("TTS disabled.")
             return
 
+        # Select the correct API key based on TTS provider
+        if config.tts_provider == "openai":
+            tts_api_key = config.openai_api_key
+        elif config.tts_provider == "elevenlabs":
+            tts_api_key = config.elevenlabs_api_key
+        else:
+            tts_api_key = ""  # Piper needs no key
+
         self._tts = create_tts_backend(
-            api_key=config.elevenlabs_api_key,
+            api_key=tts_api_key,
             provider=config.tts_provider,
             voice_id=config.tts_voice_id,
             model_id=config.tts_model_id,
             output_format=config.tts_output_format,
             local_voice=config.tts_local_voice,
             speed=config.tts_speed,
+            sentence_pause_ms=config.tts_sentence_pause_ms,
+            openai_tts_voice=config.tts_openai_voice,
+            openai_tts_model=config.tts_openai_model,
+            openai_tts_format=config.tts_openai_format,
+            openai_tts_instructions=config.tts_openai_instructions,
         )
         if self._tts is not None:
             logger.info("TTS backend ready: %s", config.tts_provider)

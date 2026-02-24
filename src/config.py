@@ -59,7 +59,13 @@ from constants import (
     DEFAULT_TTS_MODEL_ID,
     DEFAULT_TTS_OUTPUT_FORMAT,
     DEFAULT_TTS_PROVIDER,
+    DEFAULT_TTS_SENTENCE_PAUSE_MS,
     DEFAULT_TTS_VOICE_ID,
+    DEFAULT_OPENAI_TTS_FORMAT,
+    DEFAULT_OPENAI_TTS_MODEL,
+    DEFAULT_OPENAI_TTS_VOICE,
+    OPENAI_TTS_MODELS,
+    OPENAI_TTS_VOICE_PRESETS,
     DEFAULT_WAKE_PHRASE,
     DEFAULT_WAKE_PHRASE_MATCH_MODE,
     HANDSFREE_PIPELINES,
@@ -269,9 +275,16 @@ class AppConfig:
     tts_hotkey: str = DEFAULT_TTS_HOTKEY
     tts_ask_hotkey: str = DEFAULT_TTS_ASK_HOTKEY
 
+    # --- OpenAI TTS fields ---
+    tts_openai_voice: str = DEFAULT_OPENAI_TTS_VOICE
+    tts_openai_model: str = DEFAULT_OPENAI_TTS_MODEL
+    tts_openai_format: str = DEFAULT_OPENAI_TTS_FORMAT
+    tts_openai_instructions: str = ""
+
     # --- v0.7: Local TTS (Piper) fields ---
     tts_local_voice: str = DEFAULT_PIPER_VOICE
     tts_speed: float = 1.0  # Piper length_scale: <1.0 = faster, >1.0 = slower
+    tts_sentence_pause_ms: int = DEFAULT_TTS_SENTENCE_PAUSE_MS
 
     # --- v0.9: HTTP API ---
     api_enabled: bool = DEFAULT_API_ENABLED
@@ -444,19 +457,27 @@ base_url = "{esc(self.summarization_base_url)}"
 custom_prompt = "{esc(self.summarization_custom_prompt)}"
 
 [tts]
-# Text-to-Speech: "elevenlabs" (cloud) or "piper" (local, offline)
+# Text-to-Speech: "elevenlabs" (cloud), "openai" (cloud), or "piper" (local, offline)
 enabled = {str(self.tts_enabled).lower()}
 provider = "{esc(self.tts_provider)}"
 # --- Cloud (ElevenLabs) fields ---
 voice_id = "{esc(self.tts_voice_id)}"
 model_id = "{esc(self.tts_model_id)}"
 output_format = "{esc(self.tts_output_format)}"
+# --- Cloud (OpenAI) fields ---
+openai_voice = "{esc(self.tts_openai_voice)}"
+openai_model = "{esc(self.tts_openai_model)}"
+openai_format = "{esc(self.tts_openai_format)}"
+openai_instructions = "{esc(self.tts_openai_instructions)}"
 # --- Local (Piper) fields (v0.7) ---
 # Voice model name. Available: de_DE-thorsten-medium, de_DE-thorsten-high,
 # en_US-lessac-medium, en_US-amy-medium. Download via Settings dialog.
 local_voice = "{esc(self.tts_local_voice)}"
 # Speech speed: 0.5 = double speed, 1.0 = normal, 2.0 = half speed
 speed = {self.tts_speed}
+# Silence gap between sentences in milliseconds (0 = disabled).
+# Improves readability for longer text. Default: 350.
+sentence_pause_ms = {self.tts_sentence_pause_ms}
 
 [paste]
 # Confirm before pasting: show a preview notification and wait for Enter.
@@ -825,6 +846,24 @@ def load_config() -> Optional[AppConfig]:
     tts_model_id = tts_section.get("model_id", DEFAULT_TTS_MODEL_ID)
     tts_output_format = tts_section.get("output_format", DEFAULT_TTS_OUTPUT_FORMAT)
 
+    # OpenAI TTS fields
+    tts_openai_voice = tts_section.get("openai_voice", DEFAULT_OPENAI_TTS_VOICE)
+    if tts_openai_voice not in OPENAI_TTS_VOICE_PRESETS:
+        logger.warning(
+            "Unknown OpenAI TTS voice '%s'. Falling back to '%s'.",
+            tts_openai_voice, DEFAULT_OPENAI_TTS_VOICE,
+        )
+        tts_openai_voice = DEFAULT_OPENAI_TTS_VOICE
+    tts_openai_model = tts_section.get("openai_model", DEFAULT_OPENAI_TTS_MODEL)
+    if tts_openai_model not in OPENAI_TTS_MODELS:
+        logger.warning(
+            "Unknown OpenAI TTS model '%s'. Falling back to '%s'.",
+            tts_openai_model, DEFAULT_OPENAI_TTS_MODEL,
+        )
+        tts_openai_model = DEFAULT_OPENAI_TTS_MODEL
+    tts_openai_format = tts_section.get("openai_format", DEFAULT_OPENAI_TTS_FORMAT)
+    tts_openai_instructions = str(tts_section.get("openai_instructions", ""))
+
     # v0.7: Local TTS (Piper) voice name
     tts_local_voice = tts_section.get("local_voice", DEFAULT_PIPER_VOICE)
     if tts_local_voice not in PIPER_VOICE_MODELS:
@@ -838,6 +877,12 @@ def load_config() -> Optional[AppConfig]:
     # v1.1: TTS speed (Piper length_scale)
     tts_speed = float(tts_section.get("speed", 1.0))
     tts_speed = max(0.25, min(tts_speed, 4.0))  # clamp to sane range
+
+    # v1.2: Sentence pause for Piper (silence gap between sentences)
+    tts_sentence_pause_ms = int(
+        tts_section.get("sentence_pause_ms", DEFAULT_TTS_SENTENCE_PAUSE_MS)
+    )
+    tts_sentence_pause_ms = max(0, min(tts_sentence_pause_ms, 2000))
 
     # --- v1.0: TTS Audio Cache ---
     tts_cache_section = data.get("tts_cache", {})
@@ -1036,9 +1081,15 @@ def load_config() -> Optional[AppConfig]:
         tts_output_format=tts_output_format,
         tts_hotkey=tts_hotkey,
         tts_ask_hotkey=tts_ask_hotkey,
+        # OpenAI TTS
+        tts_openai_voice=tts_openai_voice,
+        tts_openai_model=tts_openai_model,
+        tts_openai_format=tts_openai_format,
+        tts_openai_instructions=tts_openai_instructions,
         # v0.7: Local TTS (Piper)
         tts_local_voice=tts_local_voice,
         tts_speed=tts_speed,
+        tts_sentence_pause_ms=tts_sentence_pause_ms,
         # v0.9: HTTP API
         api_enabled=api_enabled,
         api_port=api_port,

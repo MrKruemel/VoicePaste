@@ -919,7 +919,7 @@ class SettingsDialog:
         self._tts_backend_combo = ttk.Combobox(
             tts_backend_row,
             textvariable=self._tts_backend_var,
-            values=["Cloud (ElevenLabs API)", "Local (Piper, offline)"],
+            values=["Cloud (OpenAI)", "Cloud (ElevenLabs API)", "Local (Piper, offline)"],
             state="readonly",
             width=35,
         )
@@ -1010,6 +1010,82 @@ class SettingsDialog:
         )
         self._tts_model_combo.pack(side=tk.LEFT, padx=(4, 0))
 
+        # --- TTS OpenAI sub-frame (shown when backend = Cloud (OpenAI)) ---
+        self._tts_openai_frame = ttk.Frame(parent)
+
+        # OpenAI API key hint (reuses OpenAI key from Transcription tab)
+        tts_openai_key_hint = ttk.Label(
+            self._tts_openai_frame,
+            text="Uses your OpenAI API key from the Transcription tab.",
+            foreground="#66CC66",
+            font=("", 8),
+        )
+        tts_openai_key_hint.pack(fill=tk.X, pady=(0, 4))
+
+        # OpenAI Voice row
+        tts_openai_voice_row = ttk.Frame(self._tts_openai_frame)
+        tts_openai_voice_row.pack(fill=tk.X, pady=(0, 4))
+
+        ttk.Label(tts_openai_voice_row, text="Voice:", width=10, anchor=tk.W).pack(side=tk.LEFT)
+
+        from constants import OPENAI_TTS_VOICE_PRESETS
+        openai_voice_display = [
+            f"{info['name']} ({info['description']})"
+            for info in OPENAI_TTS_VOICE_PRESETS.values()
+        ]
+        self._tts_openai_voice_var = tk.StringVar()
+        self._tts_openai_voice_combo = ttk.Combobox(
+            tts_openai_voice_row,
+            textvariable=self._tts_openai_voice_var,
+            values=openai_voice_display,
+            state="readonly",
+            width=35,
+        )
+        self._tts_openai_voice_combo.pack(side=tk.LEFT, padx=(4, 0))
+
+        # OpenAI Model row
+        tts_openai_model_row = ttk.Frame(self._tts_openai_frame)
+        tts_openai_model_row.pack(fill=tk.X, pady=(0, 4))
+
+        ttk.Label(tts_openai_model_row, text="Model:", width=10, anchor=tk.W).pack(side=tk.LEFT)
+
+        from constants import OPENAI_TTS_MODELS
+        openai_model_display = [
+            info["label"] for info in OPENAI_TTS_MODELS.values()
+        ]
+        self._tts_openai_model_var = tk.StringVar()
+        self._tts_openai_model_combo = ttk.Combobox(
+            tts_openai_model_row,
+            textvariable=self._tts_openai_model_var,
+            values=openai_model_display,
+            state="readonly",
+            width=35,
+        )
+        self._tts_openai_model_combo.pack(side=tk.LEFT, padx=(4, 0))
+        self._tts_openai_model_combo.bind(
+            "<<ComboboxSelected>>", self._on_openai_tts_model_changed
+        )
+
+        # OpenAI Instructions row
+        tts_openai_instr_row = ttk.Frame(self._tts_openai_frame)
+        tts_openai_instr_row.pack(fill=tk.X, pady=(0, 4))
+
+        ttk.Label(tts_openai_instr_row, text="Instructions:", width=10, anchor=tk.W).pack(side=tk.LEFT)
+
+        self._tts_openai_instructions_var = tk.StringVar()
+        self._tts_openai_instructions_entry = ttk.Entry(
+            tts_openai_instr_row, textvariable=self._tts_openai_instructions_var, width=45
+        )
+        self._tts_openai_instructions_entry.pack(side=tk.LEFT, padx=(4, 0))
+
+        tts_openai_instr_hint = ttk.Label(
+            self._tts_openai_frame,
+            text="Optional tone/style (gpt-4o-mini-tts only). E.g. 'Speak calmly and clearly.'",
+            foreground="#999999",
+            font=("", 8),
+        )
+        tts_openai_instr_hint.pack(fill=tk.X, pady=(0, 4))
+
         # --- TTS Local sub-frame (Piper, shown when backend = local) ---
         self._tts_local_frame = ttk.Frame(parent)
 
@@ -1084,7 +1160,7 @@ class SettingsDialog:
             tts_speed_row, from_=0.5, to=2.0, increment=0.1, width=6,
             textvariable=self._tts_speed_var,
         ).pack(side=tk.LEFT, padx=(4, 0))
-        ttk.Label(tts_speed_row, text="(0.5 = slow, 1.0 = normal, 2.0 = fast)").pack(
+        ttk.Label(tts_speed_row, text="(0.5 = fast, 1.0 = normal, 2.0 = slow)").pack(
             side=tk.LEFT, padx=(4, 0)
         )
 
@@ -1227,6 +1303,9 @@ class SettingsDialog:
             self._tts_voice_combo,
             self._tts_voice_id_entry,
             self._tts_model_combo,
+            self._tts_openai_voice_combo,
+            self._tts_openai_model_combo,
+            self._tts_openai_instructions_entry,
             self._tts_piper_voice_combo,
             self._tts_download_btn,
             self._tts_delete_btn,
@@ -1897,8 +1976,32 @@ class SettingsDialog:
         # v0.7: TTS backend selector
         if config.tts_provider == "piper":
             self._tts_backend_var.set("Local (Piper, offline)")
+        elif config.tts_provider == "openai":
+            self._tts_backend_var.set("Cloud (OpenAI)")
         else:
             self._tts_backend_var.set("Cloud (ElevenLabs API)")
+
+        # OpenAI TTS fields
+        from constants import OPENAI_TTS_VOICE_PRESETS as _oai_voices
+        from constants import OPENAI_TTS_MODELS as _oai_models
+        oai_voice_info = _oai_voices.get(config.tts_openai_voice, {})
+        if oai_voice_info:
+            self._tts_openai_voice_var.set(
+                f"{oai_voice_info['name']} ({oai_voice_info['description']})"
+            )
+        else:
+            # Fallback to first voice
+            first_info = next(iter(_oai_voices.values()))
+            self._tts_openai_voice_var.set(
+                f"{first_info['name']} ({first_info['description']})"
+            )
+        oai_model_info = _oai_models.get(config.tts_openai_model, {})
+        if oai_model_info:
+            self._tts_openai_model_var.set(oai_model_info["label"])
+        else:
+            first_model_info = next(iter(_oai_models.values()))
+            self._tts_openai_model_var.set(first_model_info["label"])
+        self._tts_openai_instructions_var.set(config.tts_openai_instructions)
 
         # ElevenLabs API key
         if config.elevenlabs_api_key:
@@ -2459,6 +2562,8 @@ class SettingsDialog:
                         self._tts_backend_combo,
                         self._tts_voice_combo,
                         self._tts_model_combo,
+                        self._tts_openai_voice_combo,
+                        self._tts_openai_model_combo,
                         self._tts_piper_voice_combo,
                     ):
                         widget.config(state="readonly")
@@ -2506,6 +2611,38 @@ class SettingsDialog:
                 self._tts_voice_id_entry.config(state="readonly")
                 return
 
+    def _on_openai_tts_model_changed(self, event=None) -> None:
+        """Handle OpenAI TTS model change. Filter voices for legacy models."""
+        from constants import OPENAI_TTS_LEGACY_VOICES, OPENAI_TTS_MODELS, OPENAI_TTS_VOICE_PRESETS
+
+        selected_display = self._tts_openai_model_var.get()
+        # Find the model key from display label
+        model_key = ""
+        for key, info in OPENAI_TTS_MODELS.items():
+            if info["label"] == selected_display:
+                model_key = key
+                break
+
+        # Filter voices: legacy models support only 9 voices
+        if model_key in ("tts-1", "tts-1-hd"):
+            voice_display = [
+                f"{info['name']} ({info['description']})"
+                for key, info in OPENAI_TTS_VOICE_PRESETS.items()
+                if key in OPENAI_TTS_LEGACY_VOICES
+            ]
+        else:
+            voice_display = [
+                f"{info['name']} ({info['description']})"
+                for info in OPENAI_TTS_VOICE_PRESETS.values()
+            ]
+
+        self._tts_openai_voice_combo.config(values=voice_display)
+
+        # If current voice is not in the filtered list, reset to first
+        if self._tts_openai_voice_var.get() not in voice_display:
+            if voice_display:
+                self._tts_openai_voice_var.set(voice_display[0])
+
     def _toggle_elevenlabs_key_edit(self) -> None:
         """Toggle between showing masked ElevenLabs key and editing."""
         if self._elevenlabs_key_editing:
@@ -2536,8 +2673,14 @@ class SettingsDialog:
 
         if "Local" in backend:
             self._tts_cloud_frame.pack_forget()
+            self._tts_openai_frame.pack_forget()
             self._tts_local_frame.pack(fill=tk.X, pady=(4, 0))
-        else:
+        elif "OpenAI" in backend:
+            self._tts_cloud_frame.pack_forget()
+            self._tts_local_frame.pack_forget()
+            self._tts_openai_frame.pack(fill=tk.X, pady=(4, 0))
+        else:  # ElevenLabs
+            self._tts_openai_frame.pack_forget()
             self._tts_local_frame.pack_forget()
             self._tts_cloud_frame.pack(fill=tk.X, pady=(4, 0))
 
@@ -3197,10 +3340,14 @@ class SettingsDialog:
             changed_fields["tts_enabled"] = new_tts_enabled
             config.tts_enabled = new_tts_enabled
 
-        # v0.7: TTS provider (cloud = elevenlabs, local = piper)
-        new_tts_provider = (
-            "piper" if "Local" in self._tts_backend_var.get() else "elevenlabs"
-        )
+        # TTS provider (cloud openai, cloud elevenlabs, or local piper)
+        backend_str = self._tts_backend_var.get()
+        if "Local" in backend_str:
+            new_tts_provider = "piper"
+        elif "OpenAI" in backend_str:
+            new_tts_provider = "openai"
+        else:
+            new_tts_provider = "elevenlabs"
         if new_tts_provider != config.tts_provider:
             changed_fields["tts_provider"] = new_tts_provider
             config.tts_provider = new_tts_provider
@@ -3233,6 +3380,33 @@ class SettingsDialog:
         if new_model_id != config.tts_model_id:
             changed_fields["tts_model_id"] = new_model_id
             config.tts_model_id = new_model_id
+
+        # OpenAI TTS fields
+        from constants import OPENAI_TTS_VOICE_PRESETS as _oai_vp, OPENAI_TTS_MODELS as _oai_mp
+        new_openai_voice_display = self._tts_openai_voice_var.get()
+        new_openai_voice = ""
+        for vkey, vinfo in _oai_vp.items():
+            if f"{vinfo['name']} ({vinfo['description']})" == new_openai_voice_display:
+                new_openai_voice = vkey
+                break
+        if new_openai_voice and new_openai_voice != config.tts_openai_voice:
+            changed_fields["tts_openai_voice"] = new_openai_voice
+            config.tts_openai_voice = new_openai_voice
+
+        new_openai_model_display = self._tts_openai_model_var.get()
+        new_openai_model = ""
+        for mkey, minfo in _oai_mp.items():
+            if minfo["label"] == new_openai_model_display:
+                new_openai_model = mkey
+                break
+        if new_openai_model and new_openai_model != config.tts_openai_model:
+            changed_fields["tts_openai_model"] = new_openai_model
+            config.tts_openai_model = new_openai_model
+
+        new_openai_instructions = self._tts_openai_instructions_var.get().strip()
+        if new_openai_instructions != config.tts_openai_instructions:
+            changed_fields["tts_openai_instructions"] = new_openai_instructions
+            config.tts_openai_instructions = new_openai_instructions
 
         # v0.7: Local TTS voice (Piper)
         new_tts_local_voice = self._get_selected_tts_voice_key()

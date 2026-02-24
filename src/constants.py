@@ -279,7 +279,7 @@ LOCAL_MODEL_DISPLAY: dict[str, dict[str, str]] = {
 
 # --- v0.6: TTS (Text-to-Speech) configuration ---
 # v0.7: Added "piper" for local offline TTS
-TTS_PROVIDERS = ("elevenlabs", "piper")
+TTS_PROVIDERS = ("elevenlabs", "openai", "piper")
 DEFAULT_TTS_PROVIDER = "elevenlabs"
 DEFAULT_TTS_VOICE_ID = "pFZP5JQG7iQjIQuC4Bku"  # Lily — ElevenLabs default
 DEFAULT_TTS_MODEL_ID = "eleven_flash_v2_5"        # Low-latency flash model
@@ -294,6 +294,36 @@ ELEVENLABS_VOICE_PRESETS: dict[str, dict[str, str]] = {
     "onwK4e9ZLuTAKqWW03F9": {"name": "Daniel", "description": "Male, authoritative, EN/DE"},
 }
 
+# --- OpenAI TTS configuration ---
+DEFAULT_OPENAI_TTS_MODEL = "gpt-4o-mini-tts"
+DEFAULT_OPENAI_TTS_VOICE = "coral"
+DEFAULT_OPENAI_TTS_FORMAT = "mp3"
+
+OPENAI_TTS_MODELS: dict[str, dict[str, str]] = {
+    "gpt-4o-mini-tts": {"label": "GPT-4o Mini TTS (best, all voices)", "voices": "13"},
+    "tts-1": {"label": "TTS-1 (fast, 9 voices)", "voices": "9"},
+    "tts-1-hd": {"label": "TTS-1 HD (high quality, 9 voices)", "voices": "9"},
+}
+
+OPENAI_TTS_VOICE_PRESETS: dict[str, dict[str, str]] = {
+    "alloy": {"name": "Alloy", "description": "Neutral, balanced"},
+    "ash": {"name": "Ash", "description": "Warm, clear"},
+    "ballad": {"name": "Ballad", "description": "Soft, gentle"},
+    "coral": {"name": "Coral", "description": "Clear, engaging"},
+    "echo": {"name": "Echo", "description": "Warm, smooth"},
+    "fable": {"name": "Fable", "description": "Expressive, storytelling"},
+    "nova": {"name": "Nova", "description": "Friendly, upbeat"},
+    "onyx": {"name": "Onyx", "description": "Deep, authoritative"},
+    "sage": {"name": "Sage", "description": "Calm, composed"},
+    "shimmer": {"name": "Shimmer", "description": "Bright, optimistic"},
+    "verse": {"name": "Verse", "description": "Versatile, adaptive"},
+    "marin": {"name": "Marin", "description": "Modern, recommended"},
+    "cedar": {"name": "Cedar", "description": "Natural, recommended"},
+}
+
+# Voices supported by tts-1 and tts-1-hd (subset of all 13)
+OPENAI_TTS_LEGACY_VOICES = ("alloy", "ash", "coral", "echo", "fable", "nova", "onyx", "sage", "shimmer")
+
 # TTS audio cue: confirmation tone when TTS stops (660 Hz -> 440 Hz, 75ms each)
 AUDIO_CUE_TTS_STOP_FREQS = (660, 440)
 AUDIO_CUE_TTS_STOP_DURATION_MS = 75
@@ -303,6 +333,7 @@ TTS_MAX_TEXT_LENGTH = 10000
 
 # --- v0.7: Piper local TTS configuration ---
 DEFAULT_PIPER_VOICE = "de_DE-thorsten-medium"
+DEFAULT_TTS_SENTENCE_PAUSE_MS = 350  # silence between sentences (ms)
 
 # Piper voice model registry.
 # Each entry maps a voice name to its Hugging Face repo path and metadata.

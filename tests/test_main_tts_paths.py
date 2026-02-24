@@ -944,6 +944,35 @@ class TestTtsCacheKeyHelpers:
 
         assert label == "unknown-custom-voice-id"
 
+    def test_cache_key_openai(self, tts_app):
+        """OpenAI provider should use tts_openai_voice in cache key."""
+        tts_app.config.tts_provider = "openai"
+        tts_app.config.tts_openai_voice = "marin"
+
+        key = tts_app._get_tts_cache_key("Hello")
+
+        assert key.provider == "openai"
+        assert key.voice_id == "marin"
+        assert key.text == "Hello"
+
+    def test_voice_label_openai_known(self, tts_app):
+        """OpenAI voice label should return preset name for known voices."""
+        tts_app.config.tts_provider = "openai"
+        tts_app.config.tts_openai_voice = "coral"
+
+        label = tts_app._get_tts_voice_label()
+
+        assert label == "Coral"
+
+    def test_voice_label_openai_unknown(self, tts_app):
+        """OpenAI voice label should return raw voice string for unknown voices."""
+        tts_app.config.tts_provider = "openai"
+        tts_app.config.tts_openai_voice = "custom-voice-xyz"
+
+        label = tts_app._get_tts_voice_label()
+
+        assert label == "custom-voice-xyz"
+
 
 # ---------------------------------------------------------------------------
 # TTS export pipeline (_run_tts_export_pipeline)

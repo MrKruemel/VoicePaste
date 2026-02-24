@@ -29,6 +29,7 @@ import ctypes
 import io
 import json
 import logging
+import re
 import sys
 import threading
 import time
@@ -398,6 +399,7 @@ class PiperLocalTTS:
         voice_name: str,
         model_dir: Optional[Path] = None,
         speed: float = 1.0,
+        sentence_pause_ms: int = 350,
     ) -> None:
         """Initialize the Piper local TTS backend.
 
@@ -412,10 +414,13 @@ class PiperLocalTTS:
                 the standard cache directory.
             speed: Speech speed multiplier (length_scale). Values < 1.0
                 make speech faster, > 1.0 makes it slower. Default 1.0.
+            sentence_pause_ms: Milliseconds of silence between sentences.
+                Set to 0 to disable sentence-level synthesis. Default 350.
         """
         self._voice_name = voice_name
         self._model_dir = model_dir
         self._speed = speed
+        self._sentence_pause_ms = sentence_pause_ms
         self._session: Optional[object] = None  # ort.InferenceSession
         self._config: Optional[dict] = None
         self._phoneme_id_map: Optional[dict[str, list[int]]] = None
@@ -427,10 +432,12 @@ class PiperLocalTTS:
         self._phonemizer = EspeakPhonemizer()
 
         logger.info(
-            "PiperLocalTTS initialized: voice=%s, model_dir=%s, speed=%.2f",
+            "PiperLocalTTS initialized: voice=%s, model_dir=%s, speed=%.2f, "
+            "sentence_pause=%dms",
             voice_name,
             model_dir or "(auto/cache)",
             speed,
+            sentence_pause_ms,
         )
 
     @property
@@ -580,6 +587,10 @@ class PiperLocalTTS:
         header) that can be decoded by miniaudio or any standard WAV
         decoder.
 
+        For multi-sentence text, each sentence is synthesized separately
+        and silence gaps are inserted between them. This produces natural
+        pauses that Piper's single-shot synthesis otherwise omits.
+
         Args:
             text: Text to synthesize.
 
@@ -599,33 +610,37 @@ class PiperLocalTTS:
         t0 = time.monotonic()
 
         try:
-            # Step 1: Determine language from voice name
             language = self._get_language()
+            sentences = self._split_sentences(text)
 
-            # Step 2: Phonemize text
-            phonemes = self._phonemizer.phonemize(text, language=language)
-            if not phonemes.strip():
-                raise TTSError(
-                    "Phonemization returned empty result. "
-                    "The text may contain only unsupported characters."
+            if len(sentences) <= 1 or self._sentence_pause_ms <= 0:
+                # Single sentence or pauses disabled — original code path
+                pcm_float32 = self._synthesize_segment(
+                    text.strip(), language
                 )
+            else:
+                # Multi-sentence: synthesize each with silence gaps
+                silence = self._generate_silence(
+                    self._sample_rate, self._sentence_pause_ms
+                )
+                pcm_chunks: list[np.ndarray] = []
+                for i, sentence in enumerate(sentences):
+                    chunk = self._synthesize_segment(sentence, language)
+                    pcm_chunks.append(chunk)
+                    if i < len(sentences) - 1:
+                        pcm_chunks.append(silence)
+                pcm_float32 = np.concatenate(pcm_chunks)
 
-            # Step 3: Convert phonemes to integer IDs
-            phoneme_ids = self._phonemes_to_ids(phonemes)
-
-            # Step 4: Run ONNX inference
-            pcm_float32 = self._infer(phoneme_ids)
-
-            # Step 5: Convert to WAV bytes
             wav_bytes = self._pcm_to_wav(pcm_float32, self._sample_rate)
 
             elapsed = time.monotonic() - t0
             audio_duration = len(pcm_float32) / self._sample_rate
 
             logger.info(
-                "Piper TTS: %d chars -> %.1fs audio in %.2fs "
+                "Piper TTS: %d chars (%d segments) -> %.1fs audio in %.2fs "
                 "(%.1fx realtime), %d bytes WAV",
                 len(text),
+                len(sentences),
                 audio_duration,
                 elapsed,
                 audio_duration / max(elapsed, 0.001),
@@ -648,6 +663,86 @@ class PiperLocalTTS:
             raise TTSError(
                 f"Local TTS synthesis failed: {type(e).__name__}: {e}"
             ) from e
+
+    def _synthesize_segment(self, text: str, language: str) -> np.ndarray:
+        """Synthesize a single text segment to float32 PCM.
+
+        Runs the full pipeline: phonemize → phoneme IDs → ONNX infer.
+
+        Args:
+            text: Text segment to synthesize (typically one sentence).
+            language: Language code for phonemization.
+
+        Returns:
+            1-D numpy array of float32 PCM samples.
+
+        Raises:
+            TTSError: If phonemization or inference fails.
+        """
+        phonemes = self._phonemizer.phonemize(text, language=language)
+        if not phonemes.strip():
+            raise TTSError(
+                "Phonemization returned empty result. "
+                "The text may contain only unsupported characters."
+            )
+        phoneme_ids = self._phonemes_to_ids(phonemes)
+        return self._infer(phoneme_ids)
+
+    @staticmethod
+    def _split_sentences(text: str) -> list[str]:
+        """Split text into sentences for segment-level synthesis.
+
+        Splits on sentence-ending punctuation (.!?;) followed by
+        whitespace. Fragments that look like abbreviations (short,
+        end with period, no spaces) are coalesced with the next
+        segment to handle z.B., Dr., Nr., d.h., usw., etc.
+
+        Args:
+            text: Input text to split.
+
+        Returns:
+            List of sentence strings. Always contains at least one
+            element for non-empty input.
+        """
+        text = text.strip()
+        if not text:
+            return []
+
+        # Split on sentence-ending punctuation followed by whitespace
+        parts = re.split(r"(?<=[.!?;])\s+", text)
+
+        # Coalesce abbreviation-like fragments with their successor.
+        # Abbreviations: short, end with period, contain no spaces
+        # (e.g., "z.B.", "Dr.", "Nr.", "d.h.")
+        result: list[str] = []
+        for part in parts:
+            prev = result[-1] if result else ""
+            is_abbreviation = (
+                prev
+                and len(prev) < 15
+                and prev.endswith(".")
+                and " " not in prev
+            )
+            if is_abbreviation:
+                result[-1] = prev + " " + part
+            else:
+                result.append(part)
+
+        return [s for s in result if s.strip()]
+
+    @staticmethod
+    def _generate_silence(sample_rate: int, duration_ms: int) -> np.ndarray:
+        """Generate a silence gap as float32 PCM zeros.
+
+        Args:
+            sample_rate: Audio sample rate in Hz.
+            duration_ms: Silence duration in milliseconds.
+
+        Returns:
+            1-D numpy array of float32 zeros.
+        """
+        num_samples = int(sample_rate * duration_ms / 1000)
+        return np.zeros(num_samples, dtype=np.float32)
 
     def _resolve_model_dir(self) -> Optional[Path]:
         """Resolve the model directory path.

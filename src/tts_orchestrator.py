@@ -79,6 +79,12 @@ class TTSOrchestrator:
                 voice_id=config.tts_local_voice,
                 text=text,
             )
+        if config.tts_provider == "openai":
+            return CacheKey(
+                provider="openai",
+                voice_id=config.tts_openai_voice,
+                text=text,
+            )
         return CacheKey(
             provider="elevenlabs",
             voice_id=config.tts_voice_id,
@@ -90,6 +96,10 @@ class TTSOrchestrator:
         config = self.config
         if config.tts_provider == "piper":
             return config.tts_local_voice
+        if config.tts_provider == "openai":
+            from constants import OPENAI_TTS_VOICE_PRESETS
+            preset = OPENAI_TTS_VOICE_PRESETS.get(config.tts_openai_voice, {})
+            return preset.get("name", config.tts_openai_voice)
         preset = ELEVENLABS_VOICE_PRESETS.get(config.tts_voice_id, {})
         return preset.get("name", config.tts_voice_id)
 
