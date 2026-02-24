@@ -1,4 +1,4 @@
-"""Tests for Piper TTS sentence splitting and silence generation."""
+"""Tests for Piper TTS sentence/clause splitting, normalization, and silence generation."""
 
 import numpy as np
 import pytest
@@ -6,7 +6,7 @@ from unittest.mock import MagicMock, patch, PropertyMock
 
 
 class TestSplitSentences:
-    """Tests for PiperLocalTTS._split_sentences()."""
+    """Tests for PiperLocalTTS._split_sentences() (legacy API)."""
 
     @staticmethod
     def _split(text: str) -> list[str]:
@@ -95,6 +95,187 @@ class TestSplitSentences:
         assert result[0] == "Nein!"
 
 
+class TestSplitClauses:
+    """Tests for PiperLocalTTS._split_clauses()."""
+
+    @staticmethod
+    def _split(text: str, pause_ms: int = 350) -> list[tuple[str, int]]:
+        from local_tts import PiperLocalTTS
+        return PiperLocalTTS._split_clauses(text, sentence_pause_ms=pause_ms)
+
+    def test_single_clause(self):
+        """Single clause returns one element with pause=0."""
+        result = self._split("Das ist ein Test")
+        assert len(result) == 1
+        assert result[0][0] == "Das ist ein Test"
+        assert result[0][1] == 0
+
+    def test_two_sentences(self):
+        """Two sentences get sentence-level pause between them."""
+        result = self._split("Erster Satz. Zweiter Satz.")
+        assert len(result) == 2
+        assert result[0][1] == 350  # sentence pause
+        assert result[1][1] == 0    # last element
+
+    def test_comma_with_conjunction_splits(self):
+        """Comma followed by a conjunction splits into clauses."""
+        result = self._split("Das ist gut, aber es fehlt noch etwas.")
+        assert len(result) >= 2
+        # First clause should end with comma
+        assert result[0][0].endswith(",")
+        assert result[0][1] == 150  # clause-boundary pause
+
+    def test_comma_without_conjunction_no_split(self):
+        """Comma without conjunction does NOT split (preserves lists)."""
+        result = self._split("Berlin, Hamburg und München")
+        assert len(result) == 1
+
+    def test_semicolon_gets_300ms(self):
+        """Semicolons get 300ms pause."""
+        result = self._split("Teil eins; Teil zwei")
+        assert len(result) == 2
+        assert result[0][1] == 300
+
+    def test_colon_gets_250ms(self):
+        """Colons get 250ms pause."""
+        result = self._split("Die Antwort: zweiundvierzig")
+        assert len(result) == 2
+        assert result[0][1] == 250
+
+    def test_em_dash_gets_200ms(self):
+        """Em/en dashes get 200ms pause."""
+        result = self._split("Das Ergebnis \u2014 erstaunlich gut")
+        assert len(result) == 2
+        assert result[0][1] == 200
+
+    def test_empty_string(self):
+        """Empty string returns empty list."""
+        assert self._split("") == []
+
+    def test_last_element_always_zero_pause(self):
+        """Last element always has pause_after_ms=0."""
+        result = self._split("Satz eins. Satz zwei. Satz drei.")
+        assert result[-1][1] == 0
+
+    def test_german_conjunction_weil(self):
+        """German conjunction 'weil' triggers clause split."""
+        result = self._split("Ich bin müde, weil ich schlecht geschlafen habe.")
+        assert len(result) >= 2
+        assert result[0][1] == 150
+
+    def test_english_conjunction_because(self):
+        """English conjunction 'because' triggers clause split."""
+        result = self._split("I stayed home, because it was raining.")
+        assert len(result) >= 2
+        assert result[0][1] == 150
+
+    def test_abbreviation_not_split(self):
+        """Abbreviation-like text (z.B.) is not split mid-abbreviation."""
+        result = self._split("z.B. in Berlin")
+        # Should be a single clause (abbreviation coalesced)
+        assert len(result) == 1
+
+    def test_custom_sentence_pause(self):
+        """Custom sentence_pause_ms is used for sentence boundaries."""
+        result = self._split("Satz eins. Satz zwei.", pause_ms=500)
+        assert result[0][1] == 500
+
+
+class TestNormalizeForTts:
+    """Tests for PiperLocalTTS._normalize_for_tts()."""
+
+    @staticmethod
+    def _normalize(text: str, language: str = "de") -> str:
+        from local_tts import PiperLocalTTS
+        return PiperLocalTTS._normalize_for_tts(text, language)
+
+    def test_german_zb(self):
+        """z.B. is expanded to 'zum Beispiel'."""
+        result = self._normalize("z.B. in Berlin", "de")
+        assert "zum Beispiel" in result
+        assert "z.B." not in result
+
+    def test_german_dh(self):
+        """d.h. is expanded to 'das heißt'."""
+        result = self._normalize("d.h. es funktioniert", "de")
+        assert "das heißt" in result
+
+    def test_german_usw(self):
+        """usw. is expanded to 'und so weiter'."""
+        result = self._normalize("und usw.", "de")
+        assert "und so weiter" in result
+
+    def test_german_bzw(self):
+        """bzw. is expanded to 'beziehungsweise'."""
+        result = self._normalize("A bzw. B", "de")
+        assert "beziehungsweise" in result
+
+    def test_german_dr(self):
+        """Dr. is expanded to 'Doktor'."""
+        result = self._normalize("Dr. Müller", "de")
+        assert "Doktor" in result
+
+    def test_german_euro(self):
+        """Euro sign is expanded."""
+        result = self._normalize("42€", "de")
+        assert "Euro" in result
+
+    def test_german_percent(self):
+        """Percent sign is expanded."""
+        result = self._normalize("42%", "de")
+        assert "Prozent" in result
+
+    def test_english_eg(self):
+        """e.g. is expanded to 'for example'."""
+        result = self._normalize("e.g. this one", "en")
+        assert "for example" in result
+
+    def test_english_ie(self):
+        """i.e. is expanded to 'that is'."""
+        result = self._normalize("i.e. the best", "en")
+        assert "that is" in result
+
+    def test_english_mr(self):
+        """Mr. is expanded to 'Mister'."""
+        result = self._normalize("Mr. Smith", "en")
+        assert "Mister" in result
+
+    def test_english_percent(self):
+        """Percent sign is expanded in English."""
+        result = self._normalize("42%", "en")
+        assert "percent" in result
+
+    def test_ellipsis_replaced(self):
+        """Ellipsis is replaced with period."""
+        result = self._normalize("Hmm... okay", "de")
+        assert "..." not in result
+        assert "." in result
+
+    def test_empty_text(self):
+        """Empty text returns empty."""
+        assert self._normalize("", "de") == ""
+
+    def test_language_code_with_region(self):
+        """Language code like 'de-DE' is handled correctly."""
+        result = self._normalize("z.B. hier", "de-DE")
+        assert "zum Beispiel" in result
+
+    def test_no_double_spaces(self):
+        """No double spaces in output."""
+        result = self._normalize("  a  b  c  ", "de")
+        assert "  " not in result
+
+    def test_german_ca(self):
+        """ca. is expanded to 'circa'."""
+        result = self._normalize("ca. 42 Grad", "de")
+        assert "circa" in result
+
+    def test_german_etc(self):
+        """etc. is expanded to 'et cetera'."""
+        result = self._normalize("A, B, etc.", "de")
+        assert "et cetera" in result
+
+
 class TestGenerateSilence:
     """Tests for PiperLocalTTS._generate_silence()."""
 
@@ -131,7 +312,7 @@ class TestGenerateSilence:
 
 
 class TestSentenceLevelSynthesis:
-    """Tests for the sentence-level synthesis path in PiperLocalTTS.synthesize()."""
+    """Tests for the clause-level synthesis path in PiperLocalTTS.synthesize()."""
 
     def _make_backend(self, sentence_pause_ms=350, speed=1.0):
         """Create a PiperLocalTTS with mocked internals."""
@@ -233,3 +414,81 @@ class TestSentencePauseConfig:
         from tts import create_tts_backend
         sig = inspect.signature(create_tts_backend)
         assert "sentence_pause_ms" in sig.parameters
+
+    def test_factory_accepts_noise_params(self):
+        """create_tts_backend accepts noise_scale and noise_w parameters."""
+        import inspect
+        from tts import create_tts_backend
+        sig = inspect.signature(create_tts_backend)
+        assert "noise_scale" in sig.parameters
+        assert "noise_w" in sig.parameters
+
+
+class TestNoiseParams:
+    """Tests for noise_scale and noise_w config and constructor."""
+
+    def test_config_defaults(self):
+        """AppConfig has correct defaults for noise params."""
+        from config import AppConfig
+        from constants import DEFAULT_TTS_NOISE_SCALE, DEFAULT_TTS_NOISE_W
+        cfg = AppConfig()
+        assert cfg.tts_noise_scale == DEFAULT_TTS_NOISE_SCALE
+        assert cfg.tts_noise_w == DEFAULT_TTS_NOISE_W
+
+    def test_constructor_stores_noise_params(self):
+        """PiperLocalTTS stores noise_scale and noise_w."""
+        from local_tts import PiperLocalTTS
+        tts = PiperLocalTTS(
+            voice_name="test-voice",
+            noise_scale=0.75,
+            noise_w=0.9,
+        )
+        assert tts._noise_scale == 0.75
+        assert tts._noise_w == 0.9
+
+    def test_constructor_defaults_to_none(self):
+        """PiperLocalTTS defaults noise params to None."""
+        from local_tts import PiperLocalTTS
+        tts = PiperLocalTTS(voice_name="test-voice")
+        assert tts._noise_scale is None
+        assert tts._noise_w is None
+
+
+class TestPreprocessConstants:
+    """Tests for TTS preprocessing constants."""
+
+    def test_presets_dict_exists(self):
+        """TTS_PREPROCESS_PRESETS exists and has expected keys."""
+        from constants import TTS_PREPROCESS_PRESETS
+        assert "clean" in TTS_PREPROCESS_PRESETS
+        assert "concise" in TTS_PREPROCESS_PRESETS
+        assert "professional" in TTS_PREPROCESS_PRESETS
+        assert "bullets_to_prose" in TTS_PREPROCESS_PRESETS
+
+    def test_presets_have_label_and_prompt(self):
+        """Each preset has 'label' and 'prompt' keys."""
+        from constants import TTS_PREPROCESS_PRESETS
+        for key, info in TTS_PREPROCESS_PRESETS.items():
+            assert "label" in info, f"Missing 'label' in preset '{key}'"
+            assert "prompt" in info, f"Missing 'prompt' in preset '{key}'"
+            assert len(info["prompt"]) > 20, f"Prompt too short in preset '{key}'"
+
+    def test_default_prompt_exists(self):
+        """TTS_PREPROCESS_DEFAULT_PROMPT exists and is non-empty."""
+        from constants import TTS_PREPROCESS_DEFAULT_PROMPT
+        assert len(TTS_PREPROCESS_DEFAULT_PROMPT) > 20
+
+    def test_config_defaults(self):
+        """AppConfig has correct defaults for preprocess fields."""
+        from config import AppConfig
+        cfg = AppConfig()
+        assert cfg.tts_preprocess_with_llm is False
+        assert cfg.tts_preprocess_prompt == ""
+
+    def test_clause_conjunctions_exist(self):
+        """Conjunction sets exist in constants."""
+        from constants import CLAUSE_CONJUNCTIONS_DE, CLAUSE_CONJUNCTIONS_EN
+        assert "aber" in CLAUSE_CONJUNCTIONS_DE
+        assert "weil" in CLAUSE_CONJUNCTIONS_DE
+        assert "but" in CLAUSE_CONJUNCTIONS_EN
+        assert "because" in CLAUSE_CONJUNCTIONS_EN

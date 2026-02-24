@@ -40,6 +40,7 @@ class TTSOrchestrator:
         register_cancel: Callable[[Callable], None],
         unregister_cancel: Callable[[], None],
         show_error: Callable[[str], None],
+        summarizer=None,
     ) -> None:
         self.config = config
         self.tts = tts_backend
@@ -51,6 +52,7 @@ class TTSOrchestrator:
         self._register_cancel = register_cancel
         self._unregister_cancel = unregister_cancel
         self._show_error = show_error
+        self.summarizer = summarizer
         # Cancel callback -- set by the app after construction
         self.on_cancel: Optional[Callable[[], None]] = None
 
@@ -67,6 +69,10 @@ class TTSOrchestrator:
     def update_exporter(self, tts_exporter) -> None:
         """Update TTS exporter reference after settings change."""
         self.tts_exporter = tts_exporter
+
+    def update_summarizer(self, summarizer) -> None:
+        """Update summarizer reference after settings change."""
+        self.summarizer = summarizer
 
     # -- Cache key / voice label helpers --
 
@@ -114,17 +120,60 @@ class TTSOrchestrator:
         except Exception:
             logger.exception("Error exporting TTS audio (non-fatal).")
 
+    # -- LLM preprocessing --
+
+    def _preprocess_text(self, text: str) -> str:
+        """Optionally preprocess text with LLM before TTS synthesis.
+
+        Used by the Ctrl+Alt+T readback pipeline. Rewrites messy
+        clipboard text (bullets, markdown, URLs) into natural spoken
+        prose via the summarizer.
+
+        Returns the original text if preprocessing is disabled or
+        if the summarizer is unavailable.
+        """
+        config = self.config
+        if not config.tts_preprocess_with_llm:
+            return text
+        if self.summarizer is None:
+            logger.debug("TTS preprocess enabled but no summarizer available.")
+            return text
+
+        # Determine the effective prompt
+        from constants import TTS_PREPROCESS_DEFAULT_PROMPT
+        prompt = config.tts_preprocess_prompt.strip()
+        if not prompt:
+            prompt = TTS_PREPROCESS_DEFAULT_PROMPT
+
+        try:
+            processed = self.summarizer.summarize(
+                text, system_prompt=prompt,
+            )
+            if processed and processed.strip():
+                logger.info(
+                    "TTS LLM preprocess: %d chars -> %d chars",
+                    len(text), len(processed),
+                )
+                return processed.strip()
+            logger.warning("TTS LLM preprocess returned empty; using original.")
+            return text
+        except Exception:
+            logger.exception("TTS LLM preprocess failed; using original text.")
+            return text
+
     # -- Synthesis pipelines --
 
     def synthesize_and_play(self, text: str) -> None:
         """Synthesize text and play audio. Runs in a worker thread.
 
         Uses cache-through: checks cache before synthesis, stores after.
+        Applies LLM preprocessing if enabled.
 
         Args:
             text: Text to synthesize and play.
         """
         try:
+            text = self._preprocess_text(text)
             cache_key = self.get_cache_key(text)
             audio_data = self.tts_cache.get(cache_key)
 
@@ -166,6 +215,7 @@ class TTSOrchestrator:
             filename_hint: Optional custom filename hint.
         """
         try:
+            text = self._preprocess_text(text)
             cache_key = self.get_cache_key(text)
             audio_data = self.tts_cache.get(cache_key)
 

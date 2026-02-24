@@ -335,6 +335,68 @@ TTS_MAX_TEXT_LENGTH = 10000
 DEFAULT_PIPER_VOICE = "de_DE-thorsten-medium"
 DEFAULT_TTS_SENTENCE_PAUSE_MS = 350  # silence between sentences (ms)
 
+# VITS expressiveness parameters (advanced, config.toml only)
+DEFAULT_TTS_NOISE_SCALE = 0.667  # phoneme noise (higher = more expressive)
+DEFAULT_TTS_NOISE_W = 0.8        # phoneme width noise (higher = more varied duration)
+
+# --- TTS LLM Preprocessing (Ctrl+Alt+T readback) ---
+DEFAULT_TTS_PREPROCESS_WITH_LLM = False
+
+TTS_PREPROCESS_DEFAULT_PROMPT = (
+    "Schreibe den Text als natuerliche gesprochene Sprache um. "
+    "Entferne Formatierung, URLs und Code. Expandiere Abkuerzungen. "
+    "Wandle Listen in fliessende Saetze um. Behalte dieselbe Sprache. "
+    "Antworte NUR mit dem umgeschriebenen Text."
+)
+
+TTS_PREPROCESS_PRESETS: dict[str, dict[str, str]] = {
+    "clean": {
+        "label": "Clean & Natural (Default)",
+        "prompt": (
+            "Schreibe den Text als natuerliche gesprochene Sprache um. "
+            "Entferne Formatierung, URLs und Code. Expandiere Abkuerzungen. "
+            "Wandle Listen in fliessende Saetze um. Behalte dieselbe Sprache. "
+            "Antworte NUR mit dem umgeschriebenen Text."
+        ),
+    },
+    "concise": {
+        "label": "Concise Summary",
+        "prompt": (
+            "Fasse den Text in 2-3 Saetzen zusammen, geeignet zum Vorlesen. "
+            "Behalte die wichtigsten Informationen. Behalte dieselbe Sprache. "
+            "Antworte NUR mit der Zusammenfassung."
+        ),
+    },
+    "professional": {
+        "label": "Professional / Formal",
+        "prompt": (
+            "Formuliere den Text in einem professionellen, formellen Stil um, "
+            "geeignet fuer Sprachsynthese. Korrigiere Grammatik, entferne "
+            "informelle Sprache. Behalte dieselbe Sprache. "
+            "Antworte NUR mit dem umgeschriebenen Text."
+        ),
+    },
+    "bullets_to_prose": {
+        "label": "Bullet Points to Prose",
+        "prompt": (
+            "Wandle die Aufzaehlung/Liste in einen fliessenden, natuerlich "
+            "klingenden Absatz um. Verwende Uebergangswoerter wie erstens, "
+            "zweitens, ausserdem, schliesslich. Behalte dieselbe Sprache. "
+            "Antworte NUR mit dem Absatz."
+        ),
+    },
+}
+
+# Clause-boundary conjunctions for graduated pause splitting
+CLAUSE_CONJUNCTIONS_DE = frozenset({
+    "aber", "und", "oder", "sondern", "denn", "weil", "dass", "ob",
+    "wenn", "obwohl", "da", "nachdem", "bevor",
+})
+CLAUSE_CONJUNCTIONS_EN = frozenset({
+    "but", "and", "or", "because", "although", "when", "while",
+    "if", "since", "after", "before",
+})
+
 # Piper voice model registry.
 # Each entry maps a voice name to its Hugging Face repo path and metadata.
 # Models are downloaded on demand by the user via Settings > TTS > Download.

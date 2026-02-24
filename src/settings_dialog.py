@@ -1183,6 +1183,77 @@ class SettingsDialog:
         self._tts_download_total: int = 0
         self._tts_download_poll_count: int = 0
 
+        # --- TTS LLM Preprocessing section ---
+        ttk.Separator(parent, orient=tk.HORIZONTAL).pack(fill=tk.X, pady=(8, 8))
+
+        ttk.Label(
+            parent, text="TTS Preprocessing", font=("", 9, "bold"),
+        ).pack(fill=tk.X, pady=(0, 4))
+
+        self._tts_preprocess_var = tk.BooleanVar()
+        self._tts_preprocess_checkbox = ttk.Checkbutton(
+            parent,
+            text="Preprocess text with LLM before speaking",
+            variable=self._tts_preprocess_var,
+        )
+        self._tts_preprocess_checkbox.pack(fill=tk.X, pady=(0, 4))
+
+        # Preset dropdown
+        preprocess_preset_row = ttk.Frame(parent)
+        preprocess_preset_row.pack(fill=tk.X, pady=(0, 2))
+        ttk.Label(preprocess_preset_row, text="Preset:", width=10, anchor=tk.W).pack(side=tk.LEFT)
+
+        from constants import TTS_PREPROCESS_PRESETS
+        self._tts_preprocess_preset_labels = [
+            info["label"] for info in TTS_PREPROCESS_PRESETS.values()
+        ]
+        self._tts_preprocess_preset_keys = list(TTS_PREPROCESS_PRESETS.keys())
+        preset_display = self._tts_preprocess_preset_labels + ["Custom"]
+
+        self._tts_preprocess_preset_var = tk.StringVar()
+        self._tts_preprocess_preset_combo = ttk.Combobox(
+            preprocess_preset_row,
+            textvariable=self._tts_preprocess_preset_var,
+            values=preset_display,
+            state="readonly",
+            width=35,
+        )
+        self._tts_preprocess_preset_combo.pack(side=tk.LEFT, padx=(4, 0))
+        self._tts_preprocess_preset_combo.bind(
+            "<<ComboboxSelected>>", self._on_tts_preprocess_preset_changed
+        )
+
+        # Prompt text box
+        preprocess_prompt_row = ttk.Frame(parent)
+        preprocess_prompt_row.pack(fill=tk.X, pady=(0, 4))
+        ttk.Label(preprocess_prompt_row, text="Prompt:", width=10, anchor=tk.W).pack(
+            side=tk.LEFT, anchor=tk.N,
+        )
+        self._tts_preprocess_prompt_text = tk.Text(
+            preprocess_prompt_row, height=3, width=45, wrap=tk.WORD,
+        )
+        self._tts_preprocess_prompt_text.pack(
+            side=tk.LEFT, fill=tk.X, expand=True, padx=(4, 0),
+        )
+        # Track edits to auto-switch preset to "Custom"
+        self._tts_preprocess_prompt_text.bind(
+            "<KeyRelease>", self._on_tts_preprocess_prompt_edited
+        )
+
+        ttk.Label(
+            parent,
+            text="Rewrites clipboard text into natural spoken prose before TTS. Requires summarization.",
+            foreground="#999999",
+            font=("", 8),
+        ).pack(fill=tk.X, pady=(0, 4))
+
+        # Add preprocess widgets to the enable/disable list
+        self._tts_widgets.extend([
+            self._tts_preprocess_checkbox,
+            self._tts_preprocess_preset_combo,
+            self._tts_preprocess_prompt_text,
+        ])
+
         # --- TTS Cache section ---
         ttk.Separator(parent, orient=tk.HORIZONTAL).pack(fill=tk.X, pady=(8, 8))
 
@@ -2050,6 +2121,33 @@ class SettingsDialog:
         # TTS speed
         self._tts_speed_var.set(str(config.tts_speed))
 
+        # TTS LLM Preprocessing
+        self._tts_preprocess_var.set(config.tts_preprocess_with_llm)
+        from constants import TTS_PREPROCESS_PRESETS, TTS_PREPROCESS_DEFAULT_PROMPT
+        current_prompt = config.tts_preprocess_prompt.strip()
+        # Find matching preset or set "Custom"
+        matched_preset = None
+        if not current_prompt:
+            # Empty = default preset ("Clean & Natural")
+            matched_preset = "clean"
+        else:
+            for key, info in TTS_PREPROCESS_PRESETS.items():
+                if current_prompt == info["prompt"].strip():
+                    matched_preset = key
+                    break
+        if matched_preset:
+            self._tts_preprocess_preset_var.set(
+                TTS_PREPROCESS_PRESETS[matched_preset]["label"]
+            )
+            self._tts_preprocess_prompt_text.delete("1.0", self._tk.END)
+            self._tts_preprocess_prompt_text.insert(
+                "1.0", TTS_PREPROCESS_PRESETS[matched_preset]["prompt"]
+            )
+        else:
+            self._tts_preprocess_preset_var.set("Custom")
+            self._tts_preprocess_prompt_text.delete("1.0", self._tk.END)
+            self._tts_preprocess_prompt_text.insert("1.0", current_prompt)
+
         # Update Piper model download status
         self._update_tts_model_status()
 
@@ -2565,6 +2663,7 @@ class SettingsDialog:
                         self._tts_openai_voice_combo,
                         self._tts_openai_model_combo,
                         self._tts_piper_voice_combo,
+                        self._tts_preprocess_preset_combo,
                     ):
                         widget.config(state="readonly")
                     elif widget == self._elevenlabs_key_entry:
@@ -2642,6 +2741,36 @@ class SettingsDialog:
         if self._tts_openai_voice_var.get() not in voice_display:
             if voice_display:
                 self._tts_openai_voice_var.set(voice_display[0])
+
+    def _on_tts_preprocess_preset_changed(self, event=None) -> None:
+        """Handle TTS preprocess preset dropdown change."""
+        from constants import TTS_PREPROCESS_PRESETS
+
+        selected = self._tts_preprocess_preset_var.get()
+        if selected == "Custom":
+            return  # Leave text box as-is
+
+        for key, info in TTS_PREPROCESS_PRESETS.items():
+            if info["label"] == selected:
+                self._tts_preprocess_prompt_text.delete("1.0", self._tk.END)
+                self._tts_preprocess_prompt_text.insert("1.0", info["prompt"])
+                return
+
+    def _on_tts_preprocess_prompt_edited(self, event=None) -> None:
+        """Auto-switch preset to Custom when user edits the prompt text."""
+        from constants import TTS_PREPROCESS_PRESETS
+
+        current_text = self._tts_preprocess_prompt_text.get("1.0", self._tk.END).strip()
+        current_preset = self._tts_preprocess_preset_var.get()
+        if current_preset == "Custom":
+            return
+
+        # Check if the text still matches the selected preset
+        for key, info in TTS_PREPROCESS_PRESETS.items():
+            if info["label"] == current_preset:
+                if current_text != info["prompt"].strip():
+                    self._tts_preprocess_preset_var.set("Custom")
+                return
 
     def _toggle_elevenlabs_key_edit(self) -> None:
         """Toggle between showing masked ElevenLabs key and editing."""
@@ -3423,6 +3552,23 @@ class SettingsDialog:
         if new_tts_speed != config.tts_speed:
             changed_fields["tts_speed"] = new_tts_speed
             config.tts_speed = new_tts_speed
+
+        # TTS LLM Preprocessing
+        new_preprocess = self._tts_preprocess_var.get()
+        if new_preprocess != config.tts_preprocess_with_llm:
+            changed_fields["tts_preprocess_with_llm"] = new_preprocess
+            config.tts_preprocess_with_llm = new_preprocess
+
+        new_preprocess_prompt = self._tts_preprocess_prompt_text.get(
+            "1.0", self._tk.END
+        ).strip()
+        # If prompt matches the default preset, store empty
+        from constants import TTS_PREPROCESS_DEFAULT_PROMPT
+        if new_preprocess_prompt == TTS_PREPROCESS_DEFAULT_PROMPT.strip():
+            new_preprocess_prompt = ""
+        if new_preprocess_prompt != config.tts_preprocess_prompt:
+            changed_fields["tts_preprocess_prompt"] = new_preprocess_prompt
+            config.tts_preprocess_prompt = new_preprocess_prompt
 
         # TTS Cache settings
         new_cache_enabled = self._tts_cache_enabled_var.get()

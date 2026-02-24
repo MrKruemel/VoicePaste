@@ -457,6 +457,74 @@ class TestInfer:
         assert "sid" in inputs
         assert inputs["sid"].tolist() == [0]
 
+    def test_user_noise_scale_overrides_model(self, sample_piper_config: dict) -> None:
+        """User-configured noise_scale overrides the model config value."""
+        from local_tts import PiperLocalTTS
+
+        tts = PiperLocalTTS(voice_name="test-voice", noise_scale=0.9)
+        tts._inference_params = sample_piper_config["inference"]
+        tts._session_input_names = ["input", "input_lengths", "scales"]
+
+        mock_output = np.random.randn(1, 1, 4410).astype(np.float32)
+        tts._session = MagicMock()
+        tts._session.run.return_value = [mock_output]
+
+        ids = [1, 0, 20, 0, 2]
+        tts._infer(ids)
+
+        call_args = tts._session.run.call_args
+        inputs = call_args[1] if call_args[1] else call_args[0][1]
+        scales = inputs["scales"]
+        # scales[0] = noise_scale, scales[2] = noise_w
+        assert scales[0] == pytest.approx(0.9)
+        # noise_w should still use model default (0.8)
+        assert scales[2] == pytest.approx(0.8)
+
+    def test_user_noise_w_overrides_model(self, sample_piper_config: dict) -> None:
+        """User-configured noise_w overrides the model config value."""
+        from local_tts import PiperLocalTTS
+
+        tts = PiperLocalTTS(voice_name="test-voice", noise_w=0.95)
+        tts._inference_params = sample_piper_config["inference"]
+        tts._session_input_names = ["input", "input_lengths", "scales"]
+
+        mock_output = np.random.randn(1, 1, 4410).astype(np.float32)
+        tts._session = MagicMock()
+        tts._session.run.return_value = [mock_output]
+
+        ids = [1, 0, 20, 0, 2]
+        tts._infer(ids)
+
+        call_args = tts._session.run.call_args
+        inputs = call_args[1] if call_args[1] else call_args[0][1]
+        scales = inputs["scales"]
+        # noise_scale should use model default (0.667)
+        assert scales[0] == pytest.approx(0.667)
+        # noise_w should use user value
+        assert scales[2] == pytest.approx(0.95)
+
+    def test_none_noise_params_use_model_defaults(self, sample_piper_config: dict) -> None:
+        """When noise params are None, model config values are used."""
+        from local_tts import PiperLocalTTS
+
+        tts = PiperLocalTTS(voice_name="test-voice")  # defaults to None
+        tts._inference_params = sample_piper_config["inference"]
+        tts._session_input_names = ["input", "input_lengths", "scales"]
+
+        mock_output = np.random.randn(1, 1, 4410).astype(np.float32)
+        tts._session = MagicMock()
+        tts._session.run.return_value = [mock_output]
+
+        ids = [1, 0, 20, 0, 2]
+        tts._infer(ids)
+
+        call_args = tts._session.run.call_args
+        inputs = call_args[1] if call_args[1] else call_args[0][1]
+        scales = inputs["scales"]
+        # Should use model config values
+        assert scales[0] == pytest.approx(0.667)  # noise_scale from config
+        assert scales[2] == pytest.approx(0.8)     # noise_w from config
+
 
 # ---------------------------------------------------------------------------
 # TTS Model Manager Tests

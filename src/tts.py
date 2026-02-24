@@ -227,6 +227,8 @@ def create_tts_backend(
     local_voice: str = "",
     speed: float = 1.0,
     sentence_pause_ms: int = 350,
+    noise_scale: Optional[float] = None,
+    noise_w: Optional[float] = None,
     openai_tts_voice: str = "",
     openai_tts_model: str = "",
     openai_tts_format: str = "",
@@ -243,6 +245,8 @@ def create_tts_backend(
         local_voice: Piper voice name (e.g., "de_DE-thorsten-medium").
         speed: Speech speed for Piper local TTS.
         sentence_pause_ms: Silence gap between sentences in ms (Piper).
+        noise_scale: VITS phoneme noise override (Piper). None = model default.
+        noise_w: VITS duration noise override (Piper). None = model default.
         openai_tts_voice: OpenAI voice name (e.g., "coral").
         openai_tts_model: OpenAI model name (e.g., "gpt-4o-mini-tts").
         openai_tts_format: OpenAI audio format (e.g., "mp3").
@@ -270,6 +274,8 @@ def create_tts_backend(
                 voice_name=voice,
                 speed=speed,
                 sentence_pause_ms=sentence_pause_ms,
+                noise_scale=noise_scale,
+                noise_w=noise_w,
             )
 
         except ImportError as e:

@@ -44,6 +44,8 @@ from constants import (
     APP_NAME,
     APP_VERSION,
     AppState,
+    DEFAULT_TTS_NOISE_SCALE,
+    DEFAULT_TTS_NOISE_W,
     LOG_DATE_FORMAT,
     LOG_FORMAT,
     PASTE_COUNTDOWN_BEEP_DURATION_MS,
@@ -254,6 +256,7 @@ class VoicePasteApp:
             register_cancel=self._hotkey_manager.register_cancel,
             unregister_cancel=self._hotkey_manager.unregister_cancel,
             show_error=self._show_error,
+            summarizer=self._summarizer,
         )
         self._tts_orchestrator.on_cancel = self._on_cancel
 
@@ -368,6 +371,17 @@ class VoicePasteApp:
         else:
             tts_api_key = ""  # Piper needs no key
 
+        # Convert default noise values to None (meaning "use model default")
+        noise_scale = (
+            config.tts_noise_scale
+            if config.tts_noise_scale != DEFAULT_TTS_NOISE_SCALE
+            else None
+        )
+        noise_w = (
+            config.tts_noise_w
+            if config.tts_noise_w != DEFAULT_TTS_NOISE_W
+            else None
+        )
         self._tts = create_tts_backend(
             api_key=tts_api_key,
             provider=config.tts_provider,
@@ -377,6 +391,8 @@ class VoicePasteApp:
             local_voice=config.tts_local_voice,
             speed=config.tts_speed,
             sentence_pause_ms=config.tts_sentence_pause_ms,
+            noise_scale=noise_scale,
+            noise_w=noise_w,
             openai_tts_voice=config.tts_openai_voice,
             openai_tts_model=config.tts_openai_model,
             openai_tts_format=config.tts_openai_format,
@@ -939,7 +955,15 @@ class VoicePasteApp:
         }
         if changed_fields.keys() & summarizer_keys:
             self._rebuild_summarizer()
+            self._tts_orchestrator.update_summarizer(self._summarizer)
             logger.info("Summarizer rebuilt with updated settings.")
+
+        # TTS preprocess settings (no backend rebuild needed, just config)
+        tts_preprocess_keys = {
+            "tts_preprocess_with_llm", "tts_preprocess_prompt",
+        }
+        if changed_fields.keys() & tts_preprocess_keys:
+            logger.info("TTS preprocessing settings updated.")
 
         # v0.9: Hands-Free hot-reload
         handsfree_keys = {

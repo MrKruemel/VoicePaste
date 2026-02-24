@@ -219,9 +219,34 @@ speed = 1.0
 
 # Silence gap between sentences in milliseconds (0 = disabled).
 # Piper synthesizes all text in one shot with no natural pauses.
-# This splits text into sentences and inserts silence gaps for readability.
+# This splits text into clauses and inserts graduated silence gaps for readability.
 # Valid range: 0 to 2000. Default: 350.
 sentence_pause_ms = 350
+
+# --- Advanced VITS parameters (Piper only, power-user) ---
+# These control the expressiveness of the VITS neural voice model.
+# noise_scale: Phoneme-level noise (0.0-1.0). Higher = more expressive/varied pitch.
+#   Default 0.667 (model default). Try 0.75-0.8 for more natural-sounding speech.
+# noise_w: Duration noise (0.0-1.0). Higher = more varied rhythm/timing.
+#   Default 0.8 (model default). Try 0.9 for more natural rhythm.
+# Uncomment to override model defaults:
+# noise_scale = 0.667
+# noise_w = 0.8
+
+# --- TTS LLM Preprocessing (for Ctrl+Alt+T clipboard readback) ---
+# Preprocess clipboard text with LLM before TTS synthesis.
+# Rewrites messy text (bullets, markdown, URLs, code) into natural spoken prose.
+# Requires summarization to be configured (provider + API key).
+tts_preprocess_with_llm = false
+
+# Custom preprocessing prompt (empty = use default "Clean & Natural" preset).
+# The default prompt rewrites text into natural spoken German/English.
+# Preset options (set in Settings dialog):
+#   - "Clean & Natural": Rewrite as natural speech, remove formatting
+#   - "Concise Summary": Summarize in 2-3 sentences
+#   - "Professional / Formal": Rewrite in formal style
+#   - "Bullet Points to Prose": Convert lists to flowing paragraphs
+tts_preprocess_prompt = ""
 
 [feedback]
 # Play audio cues on recording start/stop (default: true)

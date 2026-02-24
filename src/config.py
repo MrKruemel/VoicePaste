@@ -57,7 +57,10 @@ from constants import (
     DEFAULT_TTS_EXPORT_PATH,
     DEFAULT_TTS_HOTKEY,
     DEFAULT_TTS_MODEL_ID,
+    DEFAULT_TTS_NOISE_SCALE,
+    DEFAULT_TTS_NOISE_W,
     DEFAULT_TTS_OUTPUT_FORMAT,
+    DEFAULT_TTS_PREPROCESS_WITH_LLM,
     DEFAULT_TTS_PROVIDER,
     DEFAULT_TTS_SENTENCE_PAUSE_MS,
     DEFAULT_TTS_VOICE_ID,
@@ -285,6 +288,12 @@ class AppConfig:
     tts_local_voice: str = DEFAULT_PIPER_VOICE
     tts_speed: float = 1.0  # Piper length_scale: <1.0 = faster, >1.0 = slower
     tts_sentence_pause_ms: int = DEFAULT_TTS_SENTENCE_PAUSE_MS
+    tts_noise_scale: float = DEFAULT_TTS_NOISE_SCALE
+    tts_noise_w: float = DEFAULT_TTS_NOISE_W
+
+    # --- TTS LLM Preprocessing (Ctrl+Alt+T readback) ---
+    tts_preprocess_with_llm: bool = DEFAULT_TTS_PREPROCESS_WITH_LLM
+    tts_preprocess_prompt: str = ""  # empty = use default preset
 
     # --- v0.9: HTTP API ---
     api_enabled: bool = DEFAULT_API_ENABLED
@@ -478,6 +487,17 @@ speed = {self.tts_speed}
 # Silence gap between sentences in milliseconds (0 = disabled).
 # Improves readability for longer text. Default: 350.
 sentence_pause_ms = {self.tts_sentence_pause_ms}
+# VITS expressiveness parameters (advanced, power-user only).
+# noise_scale controls phoneme noise (0.0-1.0, higher = more expressive).
+# noise_w controls duration variation (0.0-1.0, higher = more varied rhythm).
+# noise_scale = {self.tts_noise_scale}
+# noise_w = {self.tts_noise_w}
+# --- TTS LLM Preprocessing (for Ctrl+Alt+T clipboard readback) ---
+# Preprocess clipboard text with LLM before TTS synthesis.
+# Rewrites messy text (bullets, markdown, URLs) into natural spoken prose.
+tts_preprocess_with_llm = {str(self.tts_preprocess_with_llm).lower()}
+# Custom preprocessing prompt (empty = use default "Clean & Natural" preset).
+tts_preprocess_prompt = "{esc(self.tts_preprocess_prompt)}"
 
 [paste]
 # Confirm before pasting: show a preview notification and wait for Enter.
@@ -884,6 +904,18 @@ def load_config() -> Optional[AppConfig]:
     )
     tts_sentence_pause_ms = max(0, min(tts_sentence_pause_ms, 2000))
 
+    # VITS expressiveness parameters (advanced)
+    tts_noise_scale = float(tts_section.get("noise_scale", DEFAULT_TTS_NOISE_SCALE))
+    tts_noise_scale = max(0.0, min(tts_noise_scale, 1.0))
+    tts_noise_w = float(tts_section.get("noise_w", DEFAULT_TTS_NOISE_W))
+    tts_noise_w = max(0.0, min(tts_noise_w, 1.0))
+
+    # TTS LLM Preprocessing
+    tts_preprocess_with_llm = bool(
+        tts_section.get("tts_preprocess_with_llm", DEFAULT_TTS_PREPROCESS_WITH_LLM)
+    )
+    tts_preprocess_prompt = str(tts_section.get("tts_preprocess_prompt", "")).strip()
+
     # --- v1.0: TTS Audio Cache ---
     tts_cache_section = data.get("tts_cache", {})
     tts_cache_enabled = bool(tts_cache_section.get("enabled", DEFAULT_TTS_CACHE_ENABLED))
@@ -1090,6 +1122,11 @@ def load_config() -> Optional[AppConfig]:
         tts_local_voice=tts_local_voice,
         tts_speed=tts_speed,
         tts_sentence_pause_ms=tts_sentence_pause_ms,
+        tts_noise_scale=tts_noise_scale,
+        tts_noise_w=tts_noise_w,
+        # TTS LLM Preprocessing
+        tts_preprocess_with_llm=tts_preprocess_with_llm,
+        tts_preprocess_prompt=tts_preprocess_prompt,
         # v0.9: HTTP API
         api_enabled=api_enabled,
         api_port=api_port,

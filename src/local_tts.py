@@ -400,6 +400,8 @@ class PiperLocalTTS:
         model_dir: Optional[Path] = None,
         speed: float = 1.0,
         sentence_pause_ms: int = 350,
+        noise_scale: Optional[float] = None,
+        noise_w: Optional[float] = None,
     ) -> None:
         """Initialize the Piper local TTS backend.
 
@@ -416,11 +418,15 @@ class PiperLocalTTS:
                 make speech faster, > 1.0 makes it slower. Default 1.0.
             sentence_pause_ms: Milliseconds of silence between sentences.
                 Set to 0 to disable sentence-level synthesis. Default 350.
+            noise_scale: VITS phoneme noise (0.0-1.0). None = use model default.
+            noise_w: VITS duration noise (0.0-1.0). None = use model default.
         """
         self._voice_name = voice_name
         self._model_dir = model_dir
         self._speed = speed
         self._sentence_pause_ms = sentence_pause_ms
+        self._noise_scale = noise_scale
+        self._noise_w = noise_w
         self._session: Optional[object] = None  # ort.InferenceSession
         self._config: Optional[dict] = None
         self._phoneme_id_map: Optional[dict[str, list[int]]] = None
@@ -433,11 +439,13 @@ class PiperLocalTTS:
 
         logger.info(
             "PiperLocalTTS initialized: voice=%s, model_dir=%s, speed=%.2f, "
-            "sentence_pause=%dms",
+            "sentence_pause=%dms, noise_scale=%s, noise_w=%s",
             voice_name,
             model_dir or "(auto/cache)",
             speed,
             sentence_pause_ms,
+            noise_scale if noise_scale is not None else "(model default)",
+            noise_w if noise_w is not None else "(model default)",
         )
 
     @property
@@ -587,9 +595,10 @@ class PiperLocalTTS:
         header) that can be decoded by miniaudio or any standard WAV
         decoder.
 
-        For multi-sentence text, each sentence is synthesized separately
-        and silence gaps are inserted between them. This produces natural
-        pauses that Piper's single-shot synthesis otherwise omits.
+        For multi-clause text, each clause is synthesized separately
+        and graduated silence gaps are inserted between them. This
+        produces natural pauses that Piper's single-shot synthesis
+        otherwise omits.
 
         Args:
             text: Text to synthesize.
@@ -611,23 +620,27 @@ class PiperLocalTTS:
 
         try:
             language = self._get_language()
-            sentences = self._split_sentences(text)
 
-            if len(sentences) <= 1 or self._sentence_pause_ms <= 0:
-                # Single sentence or pauses disabled — original code path
+            # Normalize text before splitting (abbreviations, symbols)
+            normalized = self._normalize_for_tts(text, language)
+
+            clauses = self._split_clauses(normalized, self._sentence_pause_ms)
+
+            if len(clauses) <= 1 or self._sentence_pause_ms <= 0:
+                # Single clause or pauses disabled — original code path
                 pcm_float32 = self._synthesize_segment(
-                    text.strip(), language
+                    normalized.strip(), language
                 )
             else:
-                # Multi-sentence: synthesize each with silence gaps
-                silence = self._generate_silence(
-                    self._sample_rate, self._sentence_pause_ms
-                )
+                # Multi-clause: synthesize each with graduated silence
                 pcm_chunks: list[np.ndarray] = []
-                for i, sentence in enumerate(sentences):
-                    chunk = self._synthesize_segment(sentence, language)
+                for i, (clause_text, pause_ms) in enumerate(clauses):
+                    chunk = self._synthesize_segment(clause_text, language)
                     pcm_chunks.append(chunk)
-                    if i < len(sentences) - 1:
+                    if pause_ms > 0 and i < len(clauses) - 1:
+                        silence = self._generate_silence(
+                            self._sample_rate, pause_ms
+                        )
                         pcm_chunks.append(silence)
                 pcm_float32 = np.concatenate(pcm_chunks)
 
@@ -640,7 +653,7 @@ class PiperLocalTTS:
                 "Piper TTS: %d chars (%d segments) -> %.1fs audio in %.2fs "
                 "(%.1fx realtime), %d bytes WAV",
                 len(text),
-                len(sentences),
+                len(clauses),
                 audio_duration,
                 elapsed,
                 audio_duration / max(elapsed, 0.001),
@@ -729,6 +742,196 @@ class PiperLocalTTS:
                 result.append(part)
 
         return [s for s in result if s.strip()]
+
+    @staticmethod
+    def _split_clauses(
+        text: str, sentence_pause_ms: int = 350,
+    ) -> list[tuple[str, int]]:
+        """Split text into clauses with graduated pause durations.
+
+        Produces a list of (clause_text, pause_after_ms) tuples.
+        The last element always has pause_after_ms=0.
+
+        Pause hierarchy:
+            . ! ?  (sentence end)       -> sentence_pause_ms (default 350ms)
+            ;                           -> 300ms
+            :                           -> 250ms
+            -- / em-dash / en-dash      -> 200ms
+            , + conjunction             -> 150ms
+
+        Commas NOT followed by a conjunction are left unsplit to
+        prevent breaking lists like "Berlin, Hamburg und Muenchen".
+
+        Args:
+            text: Input text to split.
+            sentence_pause_ms: Pause after sentence-ending punctuation.
+
+        Returns:
+            List of (clause_text, pause_ms_after) tuples.
+        """
+        from constants import CLAUSE_CONJUNCTIONS_DE, CLAUSE_CONJUNCTIONS_EN
+
+        text = text.strip()
+        if not text:
+            return []
+
+        all_conjunctions = CLAUSE_CONJUNCTIONS_DE | CLAUSE_CONJUNCTIONS_EN
+
+        # Step 1: Split on sentence boundaries (.!?) with abbreviation coalescing
+        sentence_parts = re.split(r"(?<=[.!?])\s+", text)
+        sentences: list[str] = []
+        for part in sentence_parts:
+            prev = sentences[-1] if sentences else ""
+            is_abbreviation = (
+                prev
+                and len(prev) < 15
+                and prev.endswith(".")
+                and " " not in prev
+            )
+            if is_abbreviation:
+                sentences[-1] = prev + " " + part
+            else:
+                sentences.append(part)
+        sentences = [s for s in sentences if s.strip()]
+
+        if not sentences:
+            return [(text, 0)]
+
+        result: list[tuple[str, int]] = []
+
+        for sent_idx, sentence in enumerate(sentences):
+            # Step 2: Within each sentence, split on ; : and dashes
+            # Use a regex that captures the delimiter
+            sub_parts = re.split(
+                r"(;\s*|:\s+|\s*[—–]\s*)", sentence
+            )
+
+            # Reassemble: attach delimiters to the preceding segment
+            segments: list[tuple[str, int]] = []
+            current = ""
+            for sp in sub_parts:
+                if not sp:
+                    continue
+                stripped = sp.strip()
+                if stripped in (";", ":", "—", "–"):
+                    current += sp
+                    pause = {";": 300, ":": 250}.get(stripped, 200)
+                    segments.append((current.strip(), pause))
+                    current = ""
+                else:
+                    current += sp
+
+            if current.strip():
+                segments.append((current.strip(), 0))
+
+            # Step 3: Within each segment, split on comma + conjunction
+            final_segments: list[tuple[str, int]] = []
+            for seg_text, seg_pause in segments:
+                # Look for ", conjunction" pattern
+                clause_parts = re.split(
+                    r",\s+(?=(?:" + "|".join(all_conjunctions) + r")\b)",
+                    seg_text,
+                    flags=re.IGNORECASE,
+                )
+
+                for ci, cp in enumerate(clause_parts):
+                    cp = cp.strip()
+                    if not cp:
+                        continue
+                    # Add comma back to all but first part
+                    if ci > 0:
+                        cp = cp  # conjunction is already at start
+                    if ci < len(clause_parts) - 1:
+                        # There's a split after this clause
+                        # Append comma back for natural reading
+                        final_segments.append((cp + ",", 150))
+                    else:
+                        final_segments.append((cp, seg_pause))
+
+            # Assign sentence pause to the last segment of this sentence
+            if final_segments:
+                last_text, _ = final_segments[-1]
+                if sent_idx < len(sentences) - 1:
+                    final_segments[-1] = (last_text, sentence_pause_ms)
+                else:
+                    final_segments[-1] = (last_text, 0)
+
+            result.extend(final_segments)
+
+        # Ensure last element has pause=0
+        if result:
+            last_text, _ = result[-1]
+            result[-1] = (last_text, 0)
+
+        return result if result else [(text, 0)]
+
+    @staticmethod
+    def _normalize_for_tts(text: str, language: str = "de") -> str:
+        """Normalize text for TTS pronunciation.
+
+        Expands abbreviations, replaces symbols with words, and cleans
+        formatting artifacts. Language-aware: uses German expansions
+        for 'de' language, English otherwise.
+
+        Args:
+            text: Input text to normalize.
+            language: Language code (e.g., "de", "en").
+
+        Returns:
+            Normalized text.
+        """
+        if not text:
+            return text
+
+        # Common: collapse multiple whitespace
+        result = re.sub(r"\s+", " ", text)
+
+        # Replace ellipsis with period
+        result = result.replace("...", ".")
+        result = result.replace("\u2026", ".")  # Unicode ellipsis
+
+        lang_base = language.split("-")[0].split("_")[0].lower()
+
+        if lang_base == "de":
+            # German abbreviations (case-insensitive where appropriate)
+            de_abbrevs = [
+                (r"\bz\.[\s]?B\.", "zum Beispiel"),
+                (r"\bd\.[\s]?h\.", "das heißt"),
+                (r"\bu\.[\s]?a\.", "unter anderem"),
+                (r"\busw\.", "und so weiter"),
+                (r"\bbzw\.", "beziehungsweise"),
+                (r"\bNr\.", "Nummer"),
+                (r"\bDr\.", "Doktor"),
+                (r"\bProf\.", "Professor"),
+                (r"\bca\.", "circa"),
+                (r"\betc\.", "et cetera"),
+            ]
+            for pattern, replacement in de_abbrevs:
+                result = re.sub(pattern, replacement, result)
+
+            # Symbols
+            result = re.sub(r"€", " Euro", result)
+            result = re.sub(r"(\d)\s*%", r"\1 Prozent", result)
+        else:
+            # English abbreviations
+            en_abbrevs = [
+                (r"\be\.g\.", "for example"),
+                (r"\bi\.e\.", "that is"),
+                (r"\betc\.", "et cetera"),
+                (r"\bDr\.", "Doctor"),
+                (r"\bProf\.", "Professor"),
+                (r"\bMr\.", "Mister"),
+                (r"\bMrs\.", "Missis"),
+            ]
+            for pattern, replacement in en_abbrevs:
+                result = re.sub(pattern, replacement, result)
+
+            # Symbols
+            result = re.sub(r"(\d)\s*%", r"\1 percent", result)
+
+        # Clean up extra spaces from replacements
+        result = re.sub(r"\s+", " ", result).strip()
+        return result
 
     @staticmethod
     def _generate_silence(sample_rate: int, duration_ms: int) -> np.ndarray:
@@ -857,12 +1060,19 @@ class PiperLocalTTS:
         )
         lengths_array = np.array([ids_array.shape[1]], dtype=np.int64)
 
-        noise_scale = self._inference_params.get("noise_scale", 0.667)
+        # Use user-configured values if set, otherwise fall back to model config
+        noise_scale = (
+            self._noise_scale if self._noise_scale is not None
+            else self._inference_params.get("noise_scale", 0.667)
+        )
         # Use user speed setting; fall back to model default
         length_scale = self._speed if self._speed != 1.0 else (
             self._inference_params.get("length_scale", 1.0)
         )
-        noise_w = self._inference_params.get("noise_w", 0.8)
+        noise_w = (
+            self._noise_w if self._noise_w is not None
+            else self._inference_params.get("noise_w", 0.8)
+        )
         scales_array = np.array(
             [noise_scale, length_scale, noise_w], dtype=np.float32
         )
