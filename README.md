@@ -13,7 +13,7 @@
   A cross-platform desktop utility (Windows + Linux) that records your speech, transcribes it with AI, optionally summarizes it, and pastes the result at your cursor—all with a hotkey. Runs entirely in the system tray.
 </p>
 
-**Current version**: 1.1.0
+**Current version**: 0.9.1
 
 ## Features
 
@@ -22,6 +22,8 @@
 - **Read text aloud with TTS**: Press Ctrl+Alt+T (Windows) or Ctrl+Alt+S (Linux) to read clipboard content via text-to-speech.
 - **Ask AI and hear the answer**: Press Ctrl+Alt+Y to ask a question and hear the answer read aloud.
 - **Hands-Free mode**: Say a wake phrase (default "Hello Cloud") to start recording without touching the keyboard. Recording auto-stops when you pause speaking. Configurable pipeline (Ask+TTS, Transcribe+Paste, Ask+Paste).
+- **Claude Code voice integration**: Press Ctrl+Alt+C to speak a prompt and send it to Claude Code CLI. Response is pasted, spoken aloud, or both. Requires Claude Code CLI installed.
+- **Terminal Mode**: Press Ctrl+Alt+M to toggle Wayland-compatible paste (Ctrl+Shift+V) for terminal emulators.
 - **HTTP API**: Localhost REST API for external apps and scripts. Control recording, TTS, and status via HTTP. Secured with CORS, rate limiting, 127.0.0.1-only binding.
 - **Confirm-before-paste**: Optional delay or Enter keypress before pasting. Prevents accidental pasting into wrong window.
 - **Floating overlay UI**: Non-intrusive status display in bottom-right corner. Shows recording timer, processing animation, speaking feedback, and paste confirmation. Disable in Settings.
@@ -44,12 +46,15 @@
 ### Windows
 - **Windows 10 or 11**
 - **Python 3.11+** (for running from source)
+- **For Claude Code integration**: Node.js + Claude Code CLI (`npm i -g @anthropic-ai/claude-code`)
+- **No extra installs needed**: espeak-ng (for Piper TTS) is bundled via `espeakng-loader` in both the .exe and pip install
 
 ### Linux (Ubuntu 22.04 / 24.04)
 - **Python 3.11+**
 - **System packages**: `espeak-ng libportaudio2 xclip xdotool python3-tk python3-gi gir1.2-ayatanaappindicator3-0.1`
 - **GNOME tray icon** (optional): `gnome-shell-extension-appindicator`
 - **X11 or Wayland**: Both supported. For Wayland, evdev hotkeys require membership in the `input` group (see setup below).
+- **For Claude Code integration**: Node.js + Claude Code CLI (`npm i -g @anthropic-ai/claude-code`)
 
 ### All Platforms
 - **Microphone**: Connected and working (required only for recording modes)
@@ -232,6 +237,9 @@ All options can be set via the **Settings dialog** (right-click tray → Setting
 |-----|------|---------|-------------|
 | `[hotkey]` `combination` | string | `"ctrl+alt+r"` | Global hotkey to start/stop recording. Use format: `"ctrl+alt+r"`, `"ctrl+shift+v"`, `"windows+shift+a"`, etc. |
 | `[hotkey]` `prompt_combination` | string | `"ctrl+alt+a"` | Voice Prompt hotkey: record speech, send as question to LLM, paste answer. Set to empty string to disable. |
+| `[hotkey]` `tts_combination` | string | `"ctrl+alt+t"` | TTS hotkey: read clipboard aloud. Linux default: `"ctrl+alt+s"`. |
+| `[hotkey]` `tts_ask_combination` | string | `"ctrl+alt+y"` | Ask+TTS hotkey: record question, get AI answer, speak it. |
+| `[hotkey]` `terminal_mode_combination` | string | `"ctrl+alt+m"` | Toggle Terminal Mode (force Ctrl+Shift+V paste). |
 
 ### Transcription (Speech-to-Text)
 
@@ -281,6 +289,50 @@ All options can be set via the **Settings dialog** (right-click tray → Setting
 | `[feedback]` `audio_cues` | boolean | `true` | Play audio beeps on recording start/stop/cancel/error and TTS completion. Set `false` for silent operation. |
 | `[feedback]` `show_overlay` | boolean | `true` | Show floating overlay UI in bottom-right corner with state feedback. Set `false` to disable overlay. |
 | `[logging]` `level` | string | `"INFO"` | Log level: `"DEBUG"`, `"INFO"`, `"WARNING"`, or `"ERROR"`. |
+
+### Hands-Free Mode
+
+| Key | Type | Default | Description |
+|-----|------|---------|-------------|
+| `[handsfree]` `enabled` | boolean | `false` | Enable hands-free wake word detection. |
+| `[handsfree]` `wake_phrase` | string | `"Hello Cloud"` | Wake phrase to trigger recording. Case-insensitive. |
+| `[handsfree]` `match_mode` | string | `"contains"` | How to match the wake phrase: `"contains"`, `"startswith"`, or `"fuzzy"`. |
+| `[handsfree]` `pipeline` | string | `"ask_tts"` | What to do after recording: `"ask_tts"` (ask AI + speak), `"summary"` (transcribe + paste), `"prompt"` (ask AI + paste), `"claude_code"` (send to Claude Code). |
+| `[handsfree]` `silence_timeout` | float | `3.0` | Seconds of silence before auto-stopping recording. |
+| `[handsfree]` `max_recording_seconds` | int | `120` | Maximum recording duration in seconds. |
+| `[handsfree]` `cooldown_seconds` | float | `3.0` | Cooldown between wake word activations. |
+| `[handsfree]` `wake_model_size` | string | `"base"` | Wake word model size: `"tiny"`, `"base"`, or `"small"`. Larger = more accurate, slower. |
+
+### HTTP API
+
+| Key | Type | Default | Description |
+|-----|------|---------|-------------|
+| `[api]` `api_enabled` | boolean | `false` | Enable localhost HTTP API server for external control. |
+| `[api]` `api_port` | int | `18923` | Port for the HTTP API (localhost only, 127.0.0.1). |
+
+### TTS Cache & Export
+
+| Key | Type | Default | Description |
+|-----|------|---------|-------------|
+| `[tts_cache]` `enabled` | boolean | `true` | Cache synthesized audio to avoid re-synthesizing identical text. |
+| `[tts_cache]` `max_size_mb` | int | `200` | Maximum cache size in MB. |
+| `[tts_cache]` `max_age_days` | int | `30` | Evict entries older than this. |
+| `[tts_cache]` `max_entries` | int | `500` | Maximum number of cached entries. |
+| `[tts_export]` `enabled` | boolean | `false` | Save synthesized audio to files. |
+| `[tts_export]` `export_path` | string | `""` | Directory for exported audio files. Empty = disabled. |
+
+### Claude Code Integration
+
+| Key | Type | Default | Description |
+|-----|------|---------|-------------|
+| `[claude_code]` `enabled` | boolean | `false` | Enable Claude Code CLI integration. Requires `claude` CLI installed (`npm i -g @anthropic-ai/claude-code`). |
+| `[claude_code]` `hotkey` | string | `"ctrl+alt+c"` | Hotkey to record speech and send to Claude Code. |
+| `[claude_code]` `working_dir` | string | `""` | Working directory for Claude Code. Empty = VoicePaste's cwd. |
+| `[claude_code]` `system_prompt` | string | `""` | Optional system prompt appended to every Claude Code invocation. |
+| `[claude_code]` `response_mode` | string | `"speak"` | How to deliver Claude's response: `"paste"` (paste at cursor), `"speak"` (read aloud via TTS), `"both"` (paste and speak). |
+| `[claude_code]` `timeout` | int | `120` | Maximum wait time in seconds for Claude Code response. |
+| `[claude_code]` `skip_permissions` | boolean | `false` | Pass `--dangerously-skip-permissions` to Claude Code. Only for trusted systems. |
+| `[claude_code]` `continue_conversation` | boolean | `false` | Pass `--continue` to maintain conversation context across invocations. |
 
 ## Choosing a Transcription Backend
 
@@ -359,6 +411,8 @@ Voice models are cached in `%LOCALAPPDATA%\VoicePaste\models\tts\` (Windows) or 
 | **Ctrl+Alt+A** | Start/stop recording for voice prompt (question → answer). |
 | **Ctrl+Alt+T** (Win) / **Ctrl+Alt+S** (Linux) | Read clipboard content aloud (TTS). Requires TTS enabled in Settings. |
 | **Ctrl+Alt+Y** | Ask AI a question and hear the answer (record → summarize → TTS). Requires TTS enabled. |
+| **Ctrl+Alt+C** | Record speech and send to Claude Code CLI. Response pasted, spoken, or both. Requires Claude Code CLI. |
+| **Ctrl+Alt+M** | Toggle Terminal Mode (force Ctrl+Shift+V paste for terminal emulators). |
 | **Escape** | Cancel active recording or TTS playback (discard audio, don't paste). |
 | **Right-click tray** | Show menu (Settings, Quit). |
 
@@ -370,6 +424,7 @@ Right-click the tray icon and select **Settings** to open the configuration dial
 - **Summarization**: Enable/disable text cleanup. Choose provider (OpenAI, OpenRouter, Ollama). Custom prompts.
 - **Text-to-Speech**: Enable/disable TTS. Choose provider (ElevenLabs cloud or Piper local). Download Piper voice models, select voice. Adjust speech speed. Configure TTS caching (deduplication, retention) and export settings (save to files).
 - **Hands-Free**: Enable/disable wake word detection. Configure wake phrase, matching mode, pipeline, silence timeout, max recording duration.
+- **Claude Code**: Enable/disable Claude Code CLI integration. Set working directory, system prompt, response mode (paste/speak/both), timeout, and permission settings.
 - **General**: Toggle audio cues, set log level, manage API credentials (OpenAI, OpenRouter, ElevenLabs) via OS credential store. Toggle floating overlay display.
 
 Changes save immediately. No restart needed (hot-reload).
@@ -650,11 +705,11 @@ pip install pyinstaller==6.x
 build.bat
 ```
 
-**Output**: `dist\voice_paste.exe`
+**Output**: `dist\VoicePaste.exe`
 
 **Build time**: 2–3 minutes.
 
-**Binary size**: ~50–60 MB (includes Python runtime, dependencies, and audio libraries).
+**Binary size**: ~90 MB (includes Python runtime, all dependencies, and audio libraries).
 
 ### Linux Build
 
@@ -750,7 +805,7 @@ For issues, questions, or feedback:
 2. Review `voice-paste.log` for detailed error information
 3. Verify your configuration in Settings dialog or `config.toml`
 4. Ensure your API key is valid and has available credits
-5. Check the [GitHub repository](https://github.com/) for known issues and updates
+5. Check the [GitHub repository](https://github.com/MrKruemel/VoicePaste) for known issues and updates
 
 ## Release History
 
