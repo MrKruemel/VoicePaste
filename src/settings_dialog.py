@@ -1247,13 +1247,6 @@ class SettingsDialog:
             font=("", 8),
         ).pack(fill=tk.X, pady=(0, 4))
 
-        # Add preprocess widgets to the enable/disable list
-        self._tts_widgets.extend([
-            self._tts_preprocess_checkbox,
-            self._tts_preprocess_preset_combo,
-            self._tts_preprocess_prompt_text,
-        ])
-
         # --- TTS Cache section ---
         ttk.Separator(parent, orient=tk.HORIZONTAL).pack(fill=tk.X, pady=(8, 8))
 
@@ -1389,6 +1382,9 @@ class SettingsDialog:
             self._tts_export_checkbox,
             self._tts_export_path_entry,
             self._tts_export_browse_btn,
+            self._tts_preprocess_checkbox,
+            self._tts_preprocess_preset_combo,
+            self._tts_preprocess_prompt_text,
         ]
 
     def _build_general_tab(self, parent: "ttk.Frame") -> None:
