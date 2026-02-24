@@ -5,6 +5,11 @@
 <h1 align="center">Voice Paste</h1>
 
 <p align="center">
+  <img src="https://img.shields.io/badge/status-works%20on%20my%20machine%20%C2%AF%5C_(%E3%83%84)_%2F%C2%AF-yellow" alt="Works on my machine" />
+  <img src="https://img.shields.io/badge/stage-alpha-orange" alt="Alpha" />
+</p>
+
+<p align="center">
   A cross-platform desktop utility (Windows + Linux) that records your speech, transcribes it with AI, optionally summarizes it, and pastes the result at your cursor—all with a hotkey. Runs entirely in the system tray.
 </p>
 
