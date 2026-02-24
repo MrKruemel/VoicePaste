@@ -81,15 +81,15 @@ class TestParseClaudeOutput:
 class TestIsAvailable:
     """Tests for CLI availability check."""
 
-    @patch("claude_code.shutil.which")
-    def test_available_when_claude_in_path(self, mock_which):
-        mock_which.return_value = "/usr/local/bin/claude"
+    @patch("claude_code._find_claude_binary")
+    def test_available_when_claude_in_path(self, mock_find):
+        mock_find.return_value = "/usr/local/bin/claude"
         assert ClaudeCodeBackend.is_available() is True
-        mock_which.assert_called_once_with("claude")
+        mock_find.assert_called_once()
 
-    @patch("claude_code.shutil.which")
-    def test_not_available_when_missing(self, mock_which):
-        mock_which.return_value = None
+    @patch("claude_code._find_claude_binary")
+    def test_not_available_when_missing(self, mock_find):
+        mock_find.return_value = None
         assert ClaudeCodeBackend.is_available() is False
 
 
@@ -129,9 +129,9 @@ class TestGetVersion:
 class TestInvoke:
     """Tests for the main invoke method."""
 
-    @patch("claude_code.ClaudeCodeBackend.is_available", return_value=True)
+    @patch("claude_code._find_claude_binary", return_value="/usr/local/bin/claude")
     @patch("claude_code.subprocess.run")
-    def test_successful_invocation(self, mock_run, mock_avail):
+    def test_successful_invocation(self, mock_run, mock_find):
         mock_run.return_value = MagicMock(
             returncode=0,
             stdout=json.dumps({"result": "Claude says hello"}),
@@ -147,7 +147,7 @@ class TestInvoke:
         # Verify subprocess called correctly
         call_args = mock_run.call_args
         cmd = call_args[0][0]
-        assert cmd[0] == "claude"
+        assert cmd[0] == "/usr/local/bin/claude"
         assert "-p" in cmd
         assert "What is 2+2?" in cmd
         assert "--output-format" in cmd
@@ -211,8 +211,8 @@ class TestInvoke:
         cmd = mock_run.call_args[0][0]
         assert "--append-system-prompt" not in cmd
 
-    @patch("claude_code.ClaudeCodeBackend.is_available", return_value=False)
-    def test_raises_not_found_when_unavailable(self, mock_avail):
+    @patch("claude_code._find_claude_binary", return_value=None)
+    def test_raises_not_found_when_unavailable(self, mock_find):
         backend = ClaudeCodeBackend()
         with pytest.raises(ClaudeCodeNotFoundError):
             backend.invoke("test")

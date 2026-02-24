@@ -436,6 +436,20 @@ _excludes = [
 
     # Internationalization (not used by VoicePaste)
     'babel', 'Babel',
+
+    # --- Heavy ML frameworks (not used by VoicePaste) ---
+    # May leak in via --system-site-packages or transitive deps.
+    'torch', 'torch._C', 'torch.cuda',
+    'torchvision', 'torchaudio',
+    'transformers',
+    'safetensors',
+    'sympy', 'networkx', 'mpmath',
+    'sentencepiece', 'accelerate', 'datasets', 'evaluate',
+    'bitsandbytes', 'triton', 'flash_attn',
+    'soundfile',
+    'dateutil', 'tzdata',
+    'jsonschema_specifications', 'referencing', 'rpds',
+    'joblib',
 ]
 
 # ---------------------------------------------------------------------------

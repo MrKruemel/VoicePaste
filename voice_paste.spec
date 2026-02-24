@@ -17,7 +17,7 @@
 #   Debug:    pyinstaller voice_paste.spec -- --debug
 #   (or use build.bat for convenience)
 #
-# Expected output:  dist/VoicePaste.exe  (~115-165 MB, +~15 MB from TTS deps)
+# Expected output:  dist/VoicePaste.exe  (~100-130 MB)
 #
 # Prerequisites:
 #   pip install -r requirements.txt
@@ -184,16 +184,6 @@ try:
 except Exception as e:
     print(f'[voice_paste.spec] Note: espeakng-loader data not found: {e}')
 
-try:
-    _espeakng_bins = collect_dynamic_libs('espeakng_loader')
-    if _espeakng_bins:
-        _binaries += _espeakng_bins
-        print(f'[voice_paste.spec] Collected {len(_espeakng_bins)} espeakng-loader binaries.')
-    else:
-        print(f'[voice_paste.spec] espeakng-loader: no dynamic libs found (DLL may be in data files).')
-except Exception as e:
-    print(f'[voice_paste.spec] Note: espeakng-loader binaries not found: {e}')
-
 print(f'[voice_paste.spec] Collected {len(_datas)} total data files.')
 
 # ---------------------------------------------------------------------------
@@ -203,6 +193,18 @@ print(f'[voice_paste.spec] Collected {len(_datas)} total data files.')
 # or implicit DLL dependencies of compiled extension modules.  We must
 # collect them explicitly.
 _binaries = []
+
+# --- espeakng-loader: espeak-ng DLL (v0.7: local TTS phonemization) ---
+# Must be after _binaries = [] to avoid NameError.
+try:
+    _espeakng_bins = collect_dynamic_libs('espeakng_loader')
+    if _espeakng_bins:
+        _binaries += _espeakng_bins
+        print(f'[voice_paste.spec] Collected {len(_espeakng_bins)} espeakng-loader binaries.')
+    else:
+        print(f'[voice_paste.spec] espeakng-loader: no dynamic libs found (DLL may be in data files).')
+except Exception as e:
+    print(f'[voice_paste.spec] Note: espeakng-loader binaries not found: {e}')
 
 # --- ctranslate2: C++ inference engine ---
 # Ships 3 DLLs (ctranslate2.dll, cudnn64_9.dll, libiomp5md.dll) that are
@@ -495,6 +497,40 @@ _excludes = [
     # av-based decode_audio().  The rthook_av_stub.py runtime hook injects
     # a lightweight stub so faster-whisper's import succeeds without it.
     'av',
+
+    # --- Packages leaked from global Python installation ---
+    # When building outside a clean venv, PyInstaller may pull in packages
+    # installed globally that VoicePaste does not use.  Excluding them
+    # reduces the .exe by ~150 MB.
+    # Long-term fix: always build in an isolated venv.
+    'torch',                # PyTorch (~317 MB) -- not used
+    'torch._C',
+    'torch.cuda',
+    'torchvision',
+    'torchaudio',
+    'transformers',         # HuggingFace Transformers (~36 MB) -- not used
+    'babel',                # i18n library (~29 MB) -- not used
+    'lxml',                 # XML parser (~7 MB) -- not used
+    'safetensors',          # Model serialization -- torch/transformers dep
+    'sympy',                # Symbolic math -- torch dep
+    'networkx',             # Graph library -- torch dep
+    'mpmath',               # Arbitrary precision math -- sympy dep
+    'rich',                 # Terminal formatting -- not used
+    'jsonschema',           # JSON Schema validation -- not used
+    'jsonschema_specifications',
+    'referencing',          # jsonschema dep
+    'rpds',                 # jsonschema dep
+    'joblib',               # Parallel execution -- not used
+    'soundfile',            # Alternative audio I/O -- not used (we use sounddevice)
+    'dateutil',             # Date utilities -- not needed
+    'tzdata',               # Timezone data -- babel dep
+    'sentencepiece',        # Tokenizer -- transformers dep
+    'accelerate',           # HuggingFace Accelerate -- not used
+    'datasets',             # HuggingFace Datasets -- not used
+    'evaluate',             # HuggingFace Evaluate -- not used
+    'bitsandbytes',         # Quantization -- not used
+    'triton',               # GPU compiler -- not used
+    'flash_attn',           # Flash Attention -- not used
 ]
 
 # ---------------------------------------------------------------------------

@@ -8,13 +8,57 @@ v1.2: Initial implementation (Phase 1).
 
 import json
 import logging
+import os
 import shutil
 import subprocess
+import sys
 import time
 from dataclasses import dataclass
 from typing import Optional
 
 logger = logging.getLogger(__name__)
+
+
+def _find_claude_binary() -> Optional[str]:
+    """Locate the ``claude`` CLI binary.
+
+    Search order:
+    1. ``shutil.which("claude")`` — works when npm bin dir is on PATH.
+    2. Windows fallback: ``%APPDATA%\\npm\\claude.cmd`` — npm global installs
+       put a ``.cmd`` wrapper here, but the directory is often missing from
+       the system PATH (PowerShell finds ``claude.ps1`` instead, which
+       ``subprocess.run`` cannot execute).
+    3. Linux/macOS fallback: common npm global bin directories.
+
+    Returns:
+        Absolute path to the claude binary, or None if not found.
+    """
+    # 1. Standard PATH search
+    found = shutil.which("claude")
+    if found:
+        return found
+
+    # 2. Windows: check npm global directory
+    if sys.platform == "win32":
+        appdata = os.environ.get("APPDATA", "")
+        if appdata:
+            cmd_path = os.path.join(appdata, "npm", "claude.cmd")
+            if os.path.isfile(cmd_path):
+                logger.debug("Found claude.cmd at npm fallback: %s", cmd_path)
+                return cmd_path
+
+    # 3. Linux/macOS: common npm global bin locations
+    else:
+        for candidate in (
+            os.path.expanduser("~/.npm-global/bin/claude"),
+            "/usr/local/bin/claude",
+            os.path.expanduser("~/.local/bin/claude"),
+        ):
+            if os.path.isfile(candidate) and os.access(candidate, os.X_OK):
+                logger.debug("Found claude at fallback: %s", candidate)
+                return candidate
+
+    return None
 
 
 class ClaudeCodeError(Exception):
@@ -92,13 +136,14 @@ class ClaudeCodeBackend:
             ClaudeCodeTimeoutError: If the subprocess exceeds timeout.
             ClaudeCodeError: On non-zero exit or JSON parse failure.
         """
-        if not self.is_available():
+        claude_bin = _find_claude_binary()
+        if not claude_bin:
             raise ClaudeCodeNotFoundError(
                 "Claude Code CLI not found in PATH. "
                 "Install: npm install -g @anthropic-ai/claude-code"
             )
 
-        cmd = ["claude", "-p", prompt, "--output-format", "json"]
+        cmd = [claude_bin, "-p", prompt, "--output-format", "json"]
 
         if self.continue_conversation and self._session_active:
             cmd.append("--continue")
@@ -180,15 +225,18 @@ class ClaudeCodeBackend:
 
     @staticmethod
     def is_available() -> bool:
-        """Check if the `claude` CLI is available in PATH."""
-        return shutil.which("claude") is not None
+        """Check if the ``claude`` CLI is available."""
+        return _find_claude_binary() is not None
 
     @staticmethod
     def get_version() -> Optional[str]:
         """Get the Claude Code CLI version string, or None if unavailable."""
+        claude_bin = _find_claude_binary()
+        if not claude_bin:
+            return None
         try:
             result = subprocess.run(
-                ["claude", "--version"],
+                [claude_bin, "--version"],
                 capture_output=True,
                 text=True,
                 timeout=10,
