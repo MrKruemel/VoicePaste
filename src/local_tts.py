@@ -6,7 +6,8 @@ inference. No internet connection required.
 
 Dependencies:
     - onnxruntime (Apache 2.0, already bundled for local STT)
-    - espeakng-loader (MIT, bundles espeak-ng DLL + data)
+    - espeakng-loader (MIT, bundles espeak-ng DLL + data) [Windows]
+    - espeak-ng system package (sudo apt install espeak-ng) [Linux]
     - numpy (BSD, already bundled)
 
 Acknowledgement:
@@ -28,6 +29,7 @@ import ctypes
 import io
 import json
 import logging
+import sys
 import threading
 import time
 import wave
@@ -49,22 +51,63 @@ _PAD = "_"  # Padding (inserted between every phoneme for alignment)
 _espeakng_available: Optional[bool] = None
 
 
+def _find_system_espeakng() -> Optional[str]:
+    """Find system-installed espeak-ng shared library on Linux.
+
+    Returns:
+        Path to libespeak-ng.so if found, None otherwise.
+    """
+    if sys.platform == "win32":
+        return None
+
+    import ctypes.util
+
+    # ctypes.util.find_library returns the basename (e.g., "espeak-ng")
+    lib_name = ctypes.util.find_library("espeak-ng")
+    if lib_name:
+        logger.debug("ctypes.util.find_library found: %s", lib_name)
+        return lib_name
+
+    # Direct paths for Ubuntu 22.04 / 24.04
+    for candidate in (
+        "/usr/lib/x86_64-linux-gnu/libespeak-ng.so.1",
+        "/usr/lib/aarch64-linux-gnu/libespeak-ng.so.1",
+        "/usr/lib/libespeak-ng.so.1",
+    ):
+        if Path(candidate).exists():
+            logger.debug("Found system espeak-ng at: %s", candidate)
+            return candidate
+
+    return None
+
+
 def is_espeakng_available() -> bool:
-    """Check if espeakng-loader is installed and the DLL can be loaded.
+    """Check if espeak-ng is available (system library or espeakng-loader).
+
+    On Linux, prefers the system-installed libespeak-ng.so.
+    On Windows, uses the espeakng-loader package (bundles DLL + data).
 
     Caches the result after the first call.
 
     Returns:
-        True if espeakng-loader is available, False otherwise.
+        True if espeak-ng is available, False otherwise.
     """
     global _espeakng_available
     if _espeakng_available is not None:
         return _espeakng_available
 
+    # On Linux, try system library first
+    if sys.platform != "win32":
+        system_lib = _find_system_espeakng()
+        if system_lib:
+            _espeakng_available = True
+            logger.info("System espeak-ng is available: %s", system_lib)
+            return True
+
+    # Fall back to espeakng-loader (Windows primary path, Linux fallback)
     try:
         import espeakng_loader  # noqa: F401
 
-        # Verify the DLL exists
         lib_path = espeakng_loader.get_library_path()
         data_path = espeakng_loader.get_data_path()
         if not Path(lib_path).exists():
@@ -86,7 +129,10 @@ def is_espeakng_available() -> bool:
     except ImportError:
         _espeakng_available = False
         logger.info(
-            "espeakng-loader is not installed. Local TTS unavailable."
+            "espeak-ng is not available. Local TTS unavailable.%s",
+            " Install with: sudo apt install espeak-ng"
+            if sys.platform != "win32"
+            else " Install espeakng-loader package.",
         )
 
     return _espeakng_available
@@ -132,6 +178,10 @@ class EspeakPhonemizer:
     def _ensure_initialized(self) -> None:
         """Load and initialize espeak-ng if not already done.
 
+        On Linux, prefers the system-installed libespeak-ng.so (data path
+        is NULL so espeak-ng uses its compiled-in default).
+        On Windows, uses espeakng-loader which bundles DLL + data.
+
         Raises:
             EspeakPhonemizerError: If initialization fails.
         """
@@ -139,10 +189,7 @@ class EspeakPhonemizer:
             return
 
         try:
-            import espeakng_loader
-
-            lib_path = espeakng_loader.get_library_path()
-            data_path = str(espeakng_loader.get_data_path())
+            lib_path, data_path = self._resolve_espeak_paths()
 
             self._lib = ctypes.CDLL(str(lib_path))
 
@@ -159,7 +206,7 @@ class EspeakPhonemizer:
             result = self._lib.espeak_Initialize(
                 0x02,       # AUDIO_OUTPUT_RETRIEVAL
                 0,          # buflength (default)
-                data_path.encode("utf-8"),
+                data_path,  # None on Linux (uses system default)
                 0x8000,     # espeakINITIALIZE_DONT_EXIT
             )
             if result < 0:
@@ -183,17 +230,20 @@ class EspeakPhonemizer:
             logger.info(
                 "espeak-ng initialized: sample_rate=%d, data=%s",
                 result,
-                data_path,
+                data_path or "(system default)",
             )
 
         except ImportError as e:
-            raise EspeakPhonemizerError(
-                "espeakng-loader is not installed. "
-                "Install with: pip install espeakng-loader"
-            ) from e
+            if sys.platform == "win32":
+                msg = ("espeakng-loader is not installed. "
+                       "Install with: pip install espeakng-loader")
+            else:
+                msg = ("espeak-ng is not installed. "
+                       "Install with: sudo apt install espeak-ng")
+            raise EspeakPhonemizerError(msg) from e
         except OSError as e:
             raise EspeakPhonemizerError(
-                f"Failed to load espeak-ng DLL: {e}"
+                f"Failed to load espeak-ng library: {e}"
             ) from e
         except EspeakPhonemizerError:
             raise
@@ -201,6 +251,34 @@ class EspeakPhonemizer:
             raise EspeakPhonemizerError(
                 f"espeak-ng initialization failed: {type(e).__name__}: {e}"
             ) from e
+
+    @staticmethod
+    def _resolve_espeak_paths() -> tuple[str, Optional[bytes]]:
+        """Resolve espeak-ng library path and data path.
+
+        On Linux: system libespeak-ng.so, data_path=None (compiled-in default).
+        On Windows: espeakng-loader bundled DLL + data directory.
+
+        Returns:
+            Tuple of (lib_path, data_path_bytes_or_none).
+
+        Raises:
+            ImportError: If espeakng-loader not available (Windows).
+            EspeakPhonemizerError: If library not found.
+        """
+        # Linux: try system library first
+        if sys.platform != "win32":
+            system_lib = _find_system_espeakng()
+            if system_lib:
+                # Pass None as data_path: espeak-ng uses compiled-in default
+                return system_lib, None
+
+        # Windows primary path / Linux fallback: espeakng-loader
+        import espeakng_loader
+
+        lib_path = str(espeakng_loader.get_library_path())
+        data_path = str(espeakng_loader.get_data_path())
+        return lib_path, data_path.encode("utf-8")
 
     def _set_language(self, language: str) -> None:
         """Set the espeak-ng voice/language.
@@ -319,6 +397,7 @@ class PiperLocalTTS:
         self,
         voice_name: str,
         model_dir: Optional[Path] = None,
+        speed: float = 1.0,
     ) -> None:
         """Initialize the Piper local TTS backend.
 
@@ -331,9 +410,12 @@ class PiperLocalTTS:
             model_dir: Explicit path to the model directory containing
                 the .onnx and .onnx.json files. If None, resolves from
                 the standard cache directory.
+            speed: Speech speed multiplier (length_scale). Values < 1.0
+                make speech faster, > 1.0 makes it slower. Default 1.0.
         """
         self._voice_name = voice_name
         self._model_dir = model_dir
+        self._speed = speed
         self._session: Optional[object] = None  # ort.InferenceSession
         self._config: Optional[dict] = None
         self._phoneme_id_map: Optional[dict[str, list[int]]] = None
@@ -345,9 +427,10 @@ class PiperLocalTTS:
         self._phonemizer = EspeakPhonemizer()
 
         logger.info(
-            "PiperLocalTTS initialized: voice=%s, model_dir=%s",
+            "PiperLocalTTS initialized: voice=%s, model_dir=%s, speed=%.2f",
             voice_name,
             model_dir or "(auto/cache)",
+            speed,
         )
 
     @property
@@ -680,7 +763,10 @@ class PiperLocalTTS:
         lengths_array = np.array([ids_array.shape[1]], dtype=np.int64)
 
         noise_scale = self._inference_params.get("noise_scale", 0.667)
-        length_scale = self._inference_params.get("length_scale", 1.0)
+        # Use user speed setting; fall back to model default
+        length_scale = self._speed if self._speed != 1.0 else (
+            self._inference_params.get("length_scale", 1.0)
+        )
         noise_w = self._inference_params.get("noise_w", 0.8)
         scales_array = np.array(
             [noise_scale, length_scale, noise_w], dtype=np.float32

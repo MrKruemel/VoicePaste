@@ -265,7 +265,7 @@ class TestDownloadModelProgressIntegration:
     @patch("model_manager._verify_stt_integrity", return_value=True)
     def test_progress_callback_receives_updates(self, mock_verify, tmp_path, monkeypatch):
         """Progress callback should be called during download."""
-        monkeypatch.setenv("LOCALAPPDATA", str(tmp_path))
+        monkeypatch.setattr("platform_impl.get_cache_dir", lambda: tmp_path / "VoicePaste")
         progress_calls = []
 
         def on_progress(downloaded, total):
@@ -298,7 +298,7 @@ class TestDownloadModelProgressIntegration:
 
     def test_cancellation_aborts_download(self, tmp_path, monkeypatch):
         """Setting cancel_event during download should cause failure."""
-        monkeypatch.setenv("LOCALAPPDATA", str(tmp_path))
+        monkeypatch.setattr("platform_impl.get_cache_dir", lambda: tmp_path / "VoicePaste")
 
         cancel = threading.Event()
 

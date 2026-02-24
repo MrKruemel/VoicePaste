@@ -9,8 +9,9 @@ __pycache__/
 dist/
 build/
 *.spec
-# BUT track the main build spec file (source of truth for PyInstaller)
+# BUT track the build spec files (source of truth for PyInstaller)
 !voice_paste.spec
+!voice_paste_linux.spec
 
 # IDE
 .vscode/
@@ -32,6 +33,9 @@ env/
 
 # Input/reference files (may contain API keys)
 input/
+
+# Claude Code
+.claude/
 
 # OS
 Thumbs.db

@@ -1,4 +1,4 @@
-# Voice-to-Summary Paste Tool - Development & Test Dependencies
+# VoicePaste - Development & Test Dependencies
 # Install: pip install -r requirements-dev.txt
 #
 # This file includes production deps plus tools needed for testing,

@@ -33,12 +33,13 @@ class STTBackend(Protocol):
     Implementations must transcribe audio bytes to text.
     """
 
-    def transcribe(self, audio_data: bytes, language: str = "de") -> str:
+    def transcribe(self, audio_data: bytes, language: str | None = "de") -> str:
         """Transcribe audio bytes to text.
 
         Args:
             audio_data: WAV audio file bytes.
             language: Language code for transcription (default 'de' for German).
+                Pass None or "auto" for automatic language detection.
 
         Returns:
             Transcribed text string.
@@ -91,7 +92,7 @@ class CloudWhisperSTT:
         self._model = model
         self._timeout = timeout
 
-    def transcribe(self, audio_data: bytes, language: str = "de") -> str:
+    def transcribe(self, audio_data: bytes, language: str | None = "de") -> str:
         """Transcribe audio using the OpenAI Whisper API.
 
         Retries up to API_MAX_RETRIES times with exponential backoff for
@@ -100,7 +101,8 @@ class CloudWhisperSTT:
 
         Args:
             audio_data: WAV audio file bytes (in-memory, never from disk).
-            language: Language code for transcription.
+            language: Language code for transcription, or None/"auto" for
+                automatic detection.
 
         Returns:
             Transcribed text string.
@@ -109,7 +111,15 @@ class CloudWhisperSTT:
             STTError: If the API call fails after all retries or on a
                 permanent error.
         """
-        logger.info("Sending audio to Whisper API (%d bytes)...", len(audio_data))
+        # Normalize "auto" to None (omit language param for Whisper auto-detect)
+        if language == "auto":
+            language = None
+
+        logger.info(
+            "Sending audio to Whisper API (%d bytes, language=%s)...",
+            len(audio_data),
+            language or "auto-detect",
+        )
 
         last_exception: Exception | None = None
 
@@ -120,12 +130,16 @@ class CloudWhisperSTT:
                 audio_file = io.BytesIO(audio_data)
                 audio_file.name = "recording.wav"
 
-                response = self._client.audio.transcriptions.create(
+                # Build API kwargs; omit language for auto-detection
+                api_kwargs: dict = dict(
                     model=self._model,
                     file=audio_file,
-                    language=language,
                     response_format="text",
                 )
+                if language is not None:
+                    api_kwargs["language"] = language
+
+                response = self._client.audio.transcriptions.create(**api_kwargs)
 
                 transcript = str(response).strip()
 

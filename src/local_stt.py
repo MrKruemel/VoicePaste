@@ -39,6 +39,35 @@ from stt import STTError
 
 logger = logging.getLogger(__name__)
 
+# ---------------------------------------------------------------------------
+# Stub out PyAV (av) so faster-whisper can import without the real package.
+#
+# faster_whisper.__init__ does ``from faster_whisper.audio import decode_audio``
+# which triggers a top-level ``import av`` inside audio.py.  PyAV bundles the
+# FFmpeg native libraries and adds ~119 MB to a PyInstaller build, but
+# VoicePaste never calls decode_audio() -- we feed pre-decoded PCM float32
+# arrays (via _wav_bytes_to_float32) directly to WhisperModel.transcribe().
+#
+# By inserting a lightweight dummy module into sys.modules we let
+# faster_whisper.audio import without error while keeping the binary small.
+# If ``av`` IS genuinely installed (e.g. running from source), we leave it
+# alone.
+# ---------------------------------------------------------------------------
+if "av" not in sys.modules:
+    try:
+        import av  # noqa: F401 -- real package present, nothing to do
+    except ImportError:
+        import types
+
+        _dummy_av = types.ModuleType("av")
+        _dummy_av.__version__ = "0.0.0-stub"  # type: ignore[attr-defined]
+        _dummy_av.__path__ = []  # type: ignore[attr-defined]  # mark as package
+        sys.modules["av"] = _dummy_av
+        logger.debug(
+            "Injected dummy 'av' module -- PyAV is not installed. "
+            "This is expected; VoicePaste does not use decode_audio()."
+        )
+
 # Sentinel to track whether faster-whisper is available
 _faster_whisper_available: Optional[bool] = None
 
@@ -101,6 +130,69 @@ def _configure_onnxruntime_for_frozen() -> None:
             type(e).__name__,
             e,
         )
+
+
+def _resolve_device() -> str:
+    """Resolve 'auto' device to 'cuda' or 'cpu' safely.
+
+    CTranslate2's own auto-detection can cause a native crash (segfault)
+    when CUDA libraries are partially installed (e.g. the NVIDIA driver is
+    present but cuDNN is not).  We pre-check that both an NVIDIA GPU *and*
+    a usable cuDNN library are present before allowing CUDA.
+
+    In a frozen PyInstaller executable, CUDA is always disabled because:
+    - The bundled onnxruntime has no CUDA providers (Silero VAD would fail)
+    - CUDA runtime libraries (libcudart, libcublas) aren't in the bundle
+    - CTranslate2 may segfault when it can't find CUDA runtime at inference
+
+    Returns:
+        'cuda' if NVIDIA GPU + cuDNN are available (non-frozen), 'cpu' otherwise.
+    """
+    # In a frozen PyInstaller bundle, always force CPU.
+    # CUDA runtime libs aren't bundled and onnxruntime is CPU-only.
+    if _is_frozen():
+        logger.info(
+            "Frozen executable detected — forcing device='cpu'. "
+            "Run from source for CUDA GPU acceleration."
+        )
+        return "cpu"
+
+    import ctypes
+    import ctypes.util
+
+    # Step 1: check for NVIDIA GPU
+    if sys.platform == "win32":
+        import shutil
+        has_gpu = shutil.which("nvidia-smi") is not None
+    else:
+        has_gpu = Path("/dev/nvidia0").exists()
+
+    if not has_gpu:
+        logger.info("No NVIDIA GPU detected — using device='cpu'.")
+        return "cpu"
+
+    # Step 2: check for cuDNN (required by CTranslate2 for CUDA inference).
+    # Without cuDNN, CTranslate2 segfaults during model load.
+    cudnn_found = ctypes.util.find_library("cudnn") is not None
+    if not cudnn_found:
+        # Try common sonames directly
+        for soname in ("libcudnn.so.9", "libcudnn.so.8", "libcudnn.so"):
+            try:
+                ctypes.cdll.LoadLibrary(soname)
+                cudnn_found = True
+                break
+            except OSError:
+                continue
+
+    if not cudnn_found:
+        logger.info(
+            "NVIDIA GPU found but cuDNN is not installed — using device='cpu'. "
+            "Install cuDNN for GPU acceleration."
+        )
+        return "cpu"
+
+    logger.info("NVIDIA GPU + cuDNN detected — using device='cuda'.")
+    return "cuda"
 
 
 def is_faster_whisper_available() -> bool:
@@ -370,11 +462,19 @@ class LocalWhisperSTT:
                     str(self._model_path) if self._model_path else self._model_size
                 )
 
+                # Resolve "auto" device safely: CTranslate2's auto-detection
+                # can cause a native crash (segfault) when CUDA libs are
+                # partially installed (e.g. libcudnn missing).  Pre-check
+                # whether CUDA is actually usable and fall back to CPU.
+                device = self._device
+                if device == "auto":
+                    device = _resolve_device()
+
                 logger.info(
                     "Loading Whisper model: source=%s, device=%s, "
                     "compute_type=%s, model_path=%s...",
                     model_source,
-                    self._device,
+                    device,
                     self._compute_type,
                     self._model_path or "(auto/cache)",
                 )
@@ -382,7 +482,7 @@ class LocalWhisperSTT:
 
                 self._model = WhisperModel(
                     model_source,
-                    device=self._device,
+                    device=device,
                     compute_type=self._compute_type,
                     download_root=None,
                 )
@@ -510,7 +610,7 @@ class LocalWhisperSTT:
         """Whether the Whisper model is currently loaded in memory."""
         return self._model_loaded and self._model is not None
 
-    def transcribe(self, audio_data: bytes, language: str = "de") -> str:
+    def transcribe(self, audio_data: bytes, language: str | None = "de") -> str:
         """Transcribe audio bytes to text using the local Whisper model.
 
         Loads the model lazily on first call if not already loaded.
@@ -522,6 +622,7 @@ class LocalWhisperSTT:
         Args:
             audio_data: WAV audio file bytes (in-memory, never from disk).
             language: Language code for transcription (default 'de' for German).
+                Pass None or "auto" for automatic language detection.
 
         Returns:
             Transcribed text string.
@@ -529,6 +630,10 @@ class LocalWhisperSTT:
         Raises:
             STTError: If transcription fails (model not available, decode error, etc.).
         """
+        # Normalize "auto" to None (faster-whisper auto-detects when language=None)
+        if language == "auto":
+            language = None
+
         logger.info("Local STT: transcribing %d bytes of audio...", len(audio_data))
 
         # Lazy load model on first use

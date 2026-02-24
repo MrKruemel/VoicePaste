@@ -9,7 +9,7 @@ Architecture:
     - Opens its own sounddevice InputStream (16 kHz, mono, int16).
     - Computes RMS energy per 100 ms frame to detect speech presence.
     - When speech is detected, buffers audio until speech ends or 3 s max.
-    - Runs faster-whisper tiny model on the buffer (beam_size=1 for speed).
+    - Runs faster-whisper model on the buffer (beam_size=1 for speed).
     - Checks if the transcription contains the configured wake phrase.
     - On match: fires the on_detected callback, then enters cooldown.
 
@@ -36,6 +36,7 @@ import numpy as np
 import sounddevice as sd
 
 from constants import (
+    ADAPTIVE_CALIBRATION_SECONDS,
     DEFAULT_HANDSFREE_BUFFER_SECONDS,
     DEFAULT_HANDSFREE_COOLDOWN_SECONDS,
     DEFAULT_SAMPLE_RATE,
@@ -83,14 +84,13 @@ def _clear_buffer(buf: list[np.ndarray]) -> None:
 
 
 class WakeWordDetector:
-    """Continuous wake word detection using faster-whisper tiny model.
+    """Continuous wake word detection using faster-whisper.
 
     Opens a persistent sounddevice InputStream and processes audio in a
     background thread.  Uses energy-based VAD to detect speech segments,
-    then runs faster-whisper tiny model on short buffers to check for
-    the configured wake phrase.
+    then runs faster-whisper on short buffers to check for the wake phrase.
 
-    The detector manages its own separate tiny model instance (not shared
+    The detector manages its own separate model instance (not shared
     with the main STT backend) because WhisperModel.transcribe() is not
     thread-safe and the main model may be a different size.
     """
@@ -105,6 +105,8 @@ class WakeWordDetector:
         match_mode: str = DEFAULT_WAKE_PHRASE_MATCH_MODE,
         language: Optional[str] = None,
         should_listen: Optional[Callable[[], bool]] = None,
+        adaptive_energy: bool = False,
+        model_size: str = "base",
     ) -> None:
         self._wake_phrase = wake_phrase
         self._wake_phrase_normalized = _normalize_text(wake_phrase)
@@ -120,6 +122,10 @@ class WakeWordDetector:
         # When False, the listen loop discards frames (saves CPU, avoids
         # concurrent audio stream conflicts during recording/processing).
         self._should_listen = should_listen
+        # Adaptive energy threshold: calibrate from ambient noise on start.
+        self._adaptive_energy = adaptive_energy
+        # Whisper model size for wake word STT.
+        self._model_size = model_size
 
         self._model = None
         self._model_lock = threading.Lock()
@@ -128,7 +134,7 @@ class WakeWordDetector:
         self._running = False
 
     def _load_model(self) -> bool:
-        """Lazy-load the faster-whisper tiny model.
+        """Lazy-load the faster-whisper model for wake word detection.
 
         Returns:
             True if model loaded successfully, False otherwise.
@@ -140,23 +146,23 @@ class WakeWordDetector:
                 from faster_whisper import WhisperModel
                 import model_manager
 
-                model_path = model_manager.get_model_path("tiny")
+                size = self._model_size
+                model_path = model_manager.get_model_path(size)
                 if model_path is None:
-                    # Try to download (will be cached for future use)
-                    logger.info("Tiny model not found locally. Attempting download...")
-                    model_path = model_manager.download_model("tiny")
+                    logger.info("%s model not found locally. Attempting download...", size)
+                    model_path = model_manager.download_model(size)
 
                 if model_path is None:
-                    logger.error("Failed to get tiny model for wake word detection.")
+                    logger.error("Failed to get %s model for wake word detection.", size)
                     return False
 
-                logger.info("Loading faster-whisper tiny model for wake word detection...")
+                logger.info("Loading faster-whisper %s model for wake word detection...", size)
                 self._model = WhisperModel(
                     str(model_path),
                     device="cpu",
                     compute_type="int8",
                 )
-                logger.info("Wake word tiny model loaded successfully.")
+                logger.info("Wake word %s model loaded successfully.", size)
                 return True
             except ImportError:
                 logger.error(
@@ -165,13 +171,13 @@ class WakeWordDetector:
                 )
                 return False
             except Exception:
-                logger.exception("Failed to load tiny model for wake word detection.")
+                logger.exception("Failed to load %s model for wake word detection.", self._model_size)
                 return False
 
     def start(self) -> bool:
         """Start the wake word detector.
 
-        Loads the tiny model (if needed) and starts the listener thread.
+        Loads the model (if needed) and starts the listener thread.
 
         Returns:
             True if started successfully, False otherwise.
@@ -207,12 +213,12 @@ class WakeWordDetector:
         logger.info("Wake word detector stopped.")
 
     def unload_model(self) -> None:
-        """Free the tiny whisper model from memory."""
+        """Free the whisper model from memory."""
         with self._model_lock:
             if self._model is not None:
                 del self._model
                 self._model = None
-                logger.info("Wake word tiny model unloaded.")
+                logger.info("Wake word model unloaded.")
 
     @property
     def is_running(self) -> bool:
@@ -243,7 +249,7 @@ class WakeWordDetector:
                 no_speech_threshold=0.75,
                 log_prob_threshold=-1.5,
                 # NOTE: Do NOT use initial_prompt here. It causes the
-                # tiny model to hallucinate the wake phrase on any input.
+                # model to hallucinate the wake phrase on any input.
             )
             text = " ".join(seg.text for seg in segments).strip()
             return text
@@ -300,6 +306,39 @@ class WakeWordDetector:
             return
 
         logger.debug("Wake word listener loop started.")
+
+        # Adaptive energy calibration: collect ambient noise frames to
+        # derive a dynamic energy threshold that works in noisy environments.
+        if self._adaptive_energy:
+            logger.info(
+                "Calibrating ambient noise for wake word detection (%.1fs)...",
+                ADAPTIVE_CALIBRATION_SECONDS,
+            )
+            cal_frames: list[np.ndarray] = []
+            cal_start = time.monotonic()
+            while (time.monotonic() - cal_start) < ADAPTIVE_CALIBRATION_SECONDS:
+                if self._stop_event.is_set():
+                    try:
+                        stream.stop()
+                        stream.close()
+                    except Exception:
+                        pass
+                    logger.debug("Wake word calibration aborted (stop event).")
+                    self._running = False
+                    return
+                try:
+                    frame, _ = stream.read(_FRAME_SIZE)
+                    cal_frames.append(frame.copy())
+                except Exception:
+                    break
+
+            from audio import calibrate_rms_threshold
+            self._energy_threshold = calibrate_rms_threshold(cal_frames)
+            _clear_buffer(cal_frames)
+            logger.info(
+                "Wake word energy threshold calibrated: %.1f RMS.",
+                self._energy_threshold,
+            )
 
         try:
             while not self._stop_event.is_set():

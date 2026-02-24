@@ -1,4 +1,4 @@
-"""System tray icon management for the Voice-to-Summary Paste Tool.
+"""System tray icon management for VoicePaste.
 
 Uses pystray for system tray integration and Pillow for icon generation.
 
@@ -14,15 +14,45 @@ v0.4: Extracted icon drawing to shared icon_drawing module.
 
 import logging
 import os
+import sys
+import tempfile
 import threading
 from typing import Callable, Optional
 
 import pystray
 
-from constants import APP_NAME, APP_VERSION, AppState
+from constants import APP_NAME, APP_VERSION, AppState, SUPPORTED_LANGUAGES
 from icon_drawing import create_icon_image
 
 logger = logging.getLogger(__name__)
+
+# ---------------------------------------------------------------------------
+# Workaround: pystray's GTK/AppIndicator backend writes icon temp files
+# without a .png extension (tempfile.mktemp()).  GNOME Shell's appindicator
+# extension uses GdkPixbuf to load the file, which needs the extension to
+# determine the image format.  Without it: "Failed to recognize image format"
+# → icon disappears → event loop dies.
+#
+# Monkey-patch _update_fs_icon to add '.png' suffix on Linux.
+# ---------------------------------------------------------------------------
+if sys.platform != "win32":
+    try:
+        from pystray._util.gtk import GtkIcon as _GtkIcon
+
+        _orig_update_fs_icon = _GtkIcon._update_fs_icon
+
+        def _patched_update_fs_icon(self):
+            # SEC-071: Use mkstemp instead of deprecated mktemp (TOCTOU race)
+            fd, self._icon_path = tempfile.mkstemp(suffix=".png")
+            os.close(fd)
+            with open(self._icon_path, "wb") as f:
+                self.icon.save(f, "PNG")
+            self._icon_valid = True
+
+        _GtkIcon._update_fs_icon = _patched_update_fs_icon
+        logger.debug("Patched pystray GtkIcon._update_fs_icon for .png suffix.")
+    except Exception:
+        pass  # Not on GTK backend — no patch needed
 
 # Icon dimensions -- 32x32 is the standard Windows system tray icon size.
 ICON_SIZE = 32
@@ -97,6 +127,15 @@ class TrayManager:
         get_tts_cache_entries: Optional[Callable[[], list]] = None,
         on_tts_replay: Optional[Callable[[str], None]] = None,
         on_tts_cache_clear: Optional[Callable[[], int]] = None,
+        on_language_changed: Optional[Callable[[str], None]] = None,
+        get_current_language: Optional[Callable[[], str]] = None,
+        claude_code_enabled: bool = False,
+        claude_code_hotkey_label: str = "Ctrl+Alt+C",
+        get_claude_code_available: Optional[Callable[[], bool]] = None,
+        on_claude_new_conversation: Optional[Callable[[], None]] = None,
+        on_terminal_mode_toggle: Optional[Callable[[], None]] = None,
+        get_terminal_mode_active: Optional[Callable[[], bool]] = None,
+        terminal_mode_hotkey_label: str = "Ctrl+Alt+M",
     ) -> None:
         """Initialize the tray manager.
 
@@ -113,6 +152,11 @@ class TrayManager:
             tts_ask_hotkey_label: Human-readable hotkey string for TTS ask mode.
             on_handsfree_toggle: Callback for the Hands-Free toggle (v0.9).
             get_handsfree_active: Callable returning current Hands-Free state.
+            on_language_changed: Callback when user selects a language from tray menu.
+            get_current_language: Callable returning current language code.
+            on_terminal_mode_toggle: Callback for the Terminal Mode toggle (v1.3).
+            get_terminal_mode_active: Callable returning current Terminal Mode state.
+            terminal_mode_hotkey_label: Human-readable hotkey string for Terminal Mode.
         """
         self._on_quit = on_quit
         self._on_settings = on_settings
@@ -127,6 +171,15 @@ class TrayManager:
         self._get_tts_cache_entries = get_tts_cache_entries
         self._on_tts_replay = on_tts_replay
         self._on_tts_cache_clear = on_tts_cache_clear
+        self._on_language_changed = on_language_changed
+        self._get_current_language = get_current_language
+        self._claude_code_enabled = claude_code_enabled
+        self._claude_code_hotkey_label = claude_code_hotkey_label
+        self._get_claude_code_available = get_claude_code_available
+        self._on_claude_new_conversation = on_claude_new_conversation
+        self._on_terminal_mode_toggle = on_terminal_mode_toggle
+        self._get_terminal_mode_active = get_terminal_mode_active
+        self._terminal_mode_hotkey_label = terminal_mode_hotkey_label
         self._icon: Optional[pystray.Icon] = None
         self._running = False
         self._current_state = AppState.IDLE
@@ -221,6 +274,46 @@ class TrayManager:
                 self._build_tts_cache_submenu(),
                 enabled=lambda _: self._get_tts_cache_entries is not None,
             ),
+            # v1.2: Quick language toggle
+            pystray.MenuItem(
+                "Language",
+                self._build_language_submenu(),
+                enabled=lambda _: self._is_settings_enabled(),
+            ),
+            # v1.2: Claude Code status (only shown when enabled)
+            pystray.MenuItem(
+                lambda _: (
+                    "Claude Code: Ready"
+                    if self._get_claude_code_available and self._get_claude_code_available()
+                    else "Claude Code: N/A"
+                ),
+                None,
+                enabled=False,
+                visible=lambda _: self._claude_code_enabled,
+            ),
+            pystray.MenuItem(
+                "New Conversation",
+                lambda: (
+                    self._on_claude_new_conversation()
+                    if self._on_claude_new_conversation
+                    else None
+                ),
+                visible=lambda _: self._claude_code_enabled,
+            ),
+            # v1.3: Terminal Mode toggle (paste Ctrl+Shift+V vs Ctrl+V)
+            pystray.MenuItem(
+                lambda _: (
+                    f"Terminal Mode: ON ({self._terminal_mode_hotkey_label})"
+                    if self._get_terminal_mode_active
+                    and self._get_terminal_mode_active()
+                    else f"Terminal Mode: OFF ({self._terminal_mode_hotkey_label})"
+                ),
+                self._handle_terminal_mode_toggle,
+                checked=lambda _: (
+                    self._get_terminal_mode_active
+                    and self._get_terminal_mode_active()
+                ),
+            ),
             # v0.9: Hands-Free toggle
             pystray.MenuItem(
                 lambda _: (
@@ -234,6 +327,32 @@ class TrayManager:
             pystray.Menu.SEPARATOR,
             pystray.MenuItem("Quit", self._handle_quit),
         )
+
+    def _build_language_submenu(self) -> pystray.Menu:
+        """Build the 'Language' submenu with radio items for each language."""
+        items = []
+        for code, display in SUPPORTED_LANGUAGES.items():
+            items.append(pystray.MenuItem(
+                display,
+                self._make_language_handler(code),
+                checked=self._make_language_checker(code),
+            ))
+        return pystray.Menu(*items)
+
+    def _make_language_handler(self, lang_code: str) -> Callable:
+        """Create a menu click handler that switches transcription language."""
+        def handler(icon, item):
+            if self._on_language_changed:
+                self._on_language_changed(lang_code)
+        return handler
+
+    def _make_language_checker(self, lang_code: str) -> Callable:
+        """Create a checked callback for language radio items."""
+        def checker(item) -> bool:
+            if self._get_current_language:
+                return self._get_current_language() == lang_code
+            return False
+        return checker
 
     def _build_tts_cache_submenu(self) -> pystray.Menu:
         """Build the 'Recent TTS' submenu from cache entries."""
@@ -294,6 +413,19 @@ class TrayManager:
         """
         logger.debug("Tray icon default action triggered (no-op).")
 
+    def _handle_terminal_mode_toggle(
+        self, icon: pystray.Icon, item: pystray.MenuItem
+    ) -> None:
+        """Handle the Terminal Mode toggle menu action (v1.3).
+
+        Args:
+            icon: The pystray Icon instance.
+            item: The menu item that was clicked.
+        """
+        logger.info("Terminal Mode toggle requested from tray menu.")
+        if self._on_terminal_mode_toggle:
+            self._on_terminal_mode_toggle()
+
     def _handle_handsfree_toggle(
         self, icon: pystray.Icon, item: pystray.MenuItem
     ) -> None:
@@ -342,6 +474,22 @@ class TrayManager:
             )
         except Exception:
             logger.debug("Failed to update tray icon (may not be visible yet).")
+
+    def set_processing_step(self, step: str) -> None:
+        """Update the tray tooltip to show a processing sub-step.
+
+        Only updates the tooltip text; does not change the icon color.
+        Ignored if the tray icon is not running.
+
+        Args:
+            step: Short description of the current step (e.g., "Transcribing...").
+        """
+        if not self._icon or not self._running:
+            return
+        try:
+            self._icon.title = f"{APP_NAME} - {step}"
+        except Exception:
+            pass
 
     def notify(self, title: str, message: str) -> None:
         """Show a toast notification via the tray icon.
@@ -469,6 +617,10 @@ class TrayManager:
                 notification_lines.append(
                     f"{self._tts_ask_hotkey_label}: Ask AI + TTS"
                 )
+            if self._claude_code_enabled:
+                notification_lines.append(
+                    f"{self._claude_code_hotkey_label}: Claude Code"
+                )
             notification_lines.append("Right-click for options.")
             icon.notify(
                 "\n".join(notification_lines),
@@ -477,6 +629,20 @@ class TrayManager:
             logger.info("Startup notification shown (tts_enabled=%s).", self._tts_enabled)
         except Exception:
             logger.debug("Failed to show startup notification.")
+
+    def refresh_menu(self) -> None:
+        """Force a menu refresh so dynamic labels and checkmarks update.
+
+        Thread-safe. Called after state changes that affect menu items
+        (e.g., Terminal Mode toggle).
+        """
+        if not self._icon or not self._running:
+            return
+        try:
+            self._icon.update_menu()
+            logger.debug("Tray menu refreshed.")
+        except Exception:
+            logger.debug("Failed to refresh tray menu (non-fatal).")
 
     def stop(self) -> None:
         """Stop the system tray icon."""

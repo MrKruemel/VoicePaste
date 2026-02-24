@@ -1,4 +1,4 @@
-"""Voice-to-Summary Paste Tool -- Main Entry Point.
+"""VoicePaste -- Main Entry Point.
 
 A Windows desktop application that lets users press a hotkey (default: Ctrl+Shift+V),
 speak into their microphone, and have a clean German-language summary
@@ -23,8 +23,6 @@ Architecture:
     Thread 3:      Settings dialog (tkinter, spawned on demand, v0.3)
 """
 
-import ctypes
-import ctypes.wintypes
 import logging
 import logging.handlers
 import os
@@ -32,7 +30,6 @@ import sys
 import threading
 import time
 import traceback
-from typing import Optional
 
 # Ensure src directory is on the path for imports
 if getattr(sys, "frozen", False):
@@ -52,13 +49,27 @@ from constants import (
     PASTE_COUNTDOWN_BEEP_DURATION_MS,
     PASTE_COUNTDOWN_BEEP_FREQ,
     PROMPT_SYSTEM_PROMPT,
+    SUPPORTED_LANGUAGES,
     TTS_MAX_TEXT_LENGTH,
+    VALID_TRANSITIONS,
 )
 from config import AppConfig, load_config
 from audio import AudioRecorder
 from stt import CloudWhisperSTT, STTError, create_stt_backend
 from summarizer import CloudLLMSummarizer, PassthroughSummarizer, SummarizerError
-from paste import clipboard_backup, clipboard_restore, paste_text
+from platform_impl import (
+    acquire_single_instance_lock,
+    clipboard_backup,
+    clipboard_restore,
+    enable_debug_console,
+    paste_text,
+    play_beep,
+    register_key_press,
+    release_single_instance_lock,
+    send_key,
+    show_fatal_error,
+    unregister_key_hook,
+)
 from hotkey import HotkeyManager
 from tray import TrayManager
 from tts import TTSError, create_tts_backend
@@ -73,122 +84,20 @@ from notifications import (
     play_wakeword_cue,
 )
 from api_server import start_api_server, stop_api_server
+from api_dispatch import APIController
+from claude_code import (
+    ClaudeCodeBackend,
+    ClaudeCodeError,
+    ClaudeCodeNotFoundError,
+    ClaudeCodeTimeoutError,
+)
+from tts_orchestrator import TTSOrchestrator
 
 logger = logging.getLogger(APP_NAME)
 
-# Windows MessageBox constants
-_MB_OK = 0x00000000
-_MB_ICONERROR = 0x00000010
-_MB_ICONWARNING = 0x00000030
-_MB_TOPMOST = 0x00040000
-
-
-def _show_fatal_error(message: str, title: str = APP_NAME) -> None:
-    """Show a fatal error message box using the Windows API.
-
-    This is used for errors that occur before the tray icon is available,
-    or when the application must exit immediately. Essential for
-    --noconsole builds where there is no console to display errors.
-
-    The message box is topmost so it appears above other windows.
-
-    Args:
-        message: Error message body.
-        title: Message box title (defaults to APP_NAME).
-    """
-    try:
-        ctypes.windll.user32.MessageBoxW(
-            0,
-            message,
-            title,
-            _MB_OK | _MB_ICONERROR | _MB_TOPMOST,
-        )
-    except Exception:
-        # Last resort: if even MessageBox fails, there is nothing we can do.
-        pass
-
-
-def _enable_debug_console() -> None:
-    """Allocate a console window for a windowed (--noconsole) application.
-
-    When VoicePaste.exe is built in release mode (no console), passing
-    --debug on the command line will call this function to attach a
-    console window so that log output is visible in real time.
-
-    Uses kernel32.AllocConsole() which creates a new console window.
-    After allocation, sys.stdout and sys.stderr are redirected to the
-    new console so that print() and logging StreamHandler work.
-    """
-    try:
-        ctypes.windll.kernel32.AllocConsole()
-        # Reopen stdout/stderr to point to the new console
-        sys.stdout = open("CONOUT$", "w", encoding="utf-8")
-        sys.stderr = open("CONOUT$", "w", encoding="utf-8")
-    except Exception:
-        # If AllocConsole fails (e.g., console already attached), ignore.
-        pass
-
-# REQ-S27: Single-instance mutex via Windows kernel32
-_MUTEX_NAME = "Global\\VoicePasteToolMutex"
-_ERROR_ALREADY_EXISTS = 183
-
-
-def _acquire_single_instance_mutex() -> Optional[ctypes.wintypes.HANDLE]:
-    """Attempt to acquire a Windows named mutex for single-instance enforcement.
-
-    REQ-S27: Prevents multiple instances of the application from running
-    simultaneously. Uses kernel32 CreateMutexW to create a system-wide
-    named mutex.
-
-    Returns:
-        The mutex handle if successfully acquired, None if another instance
-        is already running or if mutex creation fails.
-    """
-    kernel32 = ctypes.windll.kernel32
-
-    handle = kernel32.CreateMutexW(
-        None,   # default security attributes
-        True,   # initial owner
-        _MUTEX_NAME,
-    )
-
-    if handle == 0 or handle is None:
-        logger.error(
-            "Failed to create mutex '%s'. GetLastError=%d",
-            _MUTEX_NAME,
-            kernel32.GetLastError(),
-        )
-        return None
-
-    last_error = kernel32.GetLastError()
-    if last_error == _ERROR_ALREADY_EXISTS:
-        logger.error(
-            "Another instance of %s is already running (mutex '%s' exists).",
-            APP_NAME,
-            _MUTEX_NAME,
-        )
-        # Close our duplicate handle since we are not the owner
-        kernel32.CloseHandle(handle)
-        return None
-
-    logger.info("Single-instance mutex acquired: '%s'.", _MUTEX_NAME)
-    return handle
-
-
-def _release_single_instance_mutex(handle: ctypes.wintypes.HANDLE) -> None:
-    """Release and close the single-instance mutex.
-
-    Args:
-        handle: The mutex handle returned by _acquire_single_instance_mutex.
-    """
-    kernel32 = ctypes.windll.kernel32
-
-    try:
-        kernel32.ReleaseMutex(handle)
-        kernel32.CloseHandle(handle)
-        logger.info("Single-instance mutex released.")
-    except Exception:
-        logger.exception("Error releasing single-instance mutex.")
+# Platform functions imported from platform_impl:
+#   show_fatal_error, enable_debug_console,
+#   acquire_single_instance_lock, release_single_instance_lock
 
 
 def setup_logging(config: AppConfig, force_debug: bool = False) -> None:
@@ -265,7 +174,10 @@ class VoicePasteApp:
         self._active_mode: str = "summary"  # "summary", "prompt", "tts", "tts_ask"
 
         # Initialize components
-        self._recorder = AudioRecorder(on_auto_stop=self._on_auto_stop)
+        self._recorder = AudioRecorder(
+            on_auto_stop=self._on_auto_stop,
+            device=config.audio_device_index,
+        )
 
         # v0.4: STT backend via factory (cloud or local)
         self._stt = create_stt_backend(config)
@@ -295,7 +207,13 @@ class VoicePasteApp:
             prompt_hotkey=config.prompt_hotkey,
             tts_hotkey=config.tts_hotkey,
             tts_ask_hotkey=config.tts_ask_hotkey,
+            claude_code_hotkey=config.claude_code_hotkey,
+            terminal_mode_hotkey=config.terminal_mode_hotkey,
         )
+
+        # v1.2: Claude Code CLI backend
+        self._claude_code: ClaudeCodeBackend | None = None
+        self._rebuild_claude_code()
 
         # v0.3: TrayManager gets settings callback and state accessor
         # v0.8.7: Pass TTS config so startup notification shows TTS hotkeys
@@ -313,10 +231,41 @@ class VoicePasteApp:
             get_tts_cache_entries=lambda: self._tts_cache.list_entries(),
             on_tts_replay=lambda eid: self.replay_tts_entry(eid),
             on_tts_cache_clear=lambda: self._tts_cache.clear(),
+            on_language_changed=self._on_language_changed,
+            get_current_language=lambda: self.config.transcription_language,
+            claude_code_enabled=config.claude_code_enabled,
+            claude_code_hotkey_label=config.claude_code_hotkey,
+            get_claude_code_available=lambda: self._claude_code is not None,
+            on_claude_new_conversation=self._on_claude_new_conversation,
+            on_terminal_mode_toggle=self._toggle_terminal_mode,
+            get_terminal_mode_active=lambda: self._terminal_mode,
+            terminal_mode_hotkey_label=config.terminal_mode_hotkey,
         )
+
+        # v1.2: TTS orchestrator (extracted from main.py)
+        self._tts_orchestrator = TTSOrchestrator(
+            config=self.config,
+            tts_backend=self._tts,
+            audio_player=self._audio_player,
+            tts_cache=self._tts_cache,
+            tts_exporter=self._tts_exporter,
+            set_state=self._set_state,
+            get_state=lambda: self.state,
+            register_cancel=self._hotkey_manager.register_cancel,
+            unregister_cancel=self._hotkey_manager.unregister_cancel,
+            show_error=self._show_error,
+        )
+        self._tts_orchestrator.on_cancel = self._on_cancel
+
+        # v1.3: Terminal Mode toggle (runtime-only, not persisted)
+        self._terminal_mode: bool = False
 
         self._shutdown_event = threading.Event()
         self._pipeline_thread: threading.Thread | None = None
+        # Pipeline queueing: allow one recording while processing
+        self._queued_audio: bytes | None = None
+        self._queued_mode: str = "summary"
+        self._recording_during_processing: bool = False
         # v0.9: Confirm-before-paste synchronization
         self._paste_confirm_event = threading.Event()
         self._paste_cancel_event = threading.Event()
@@ -326,6 +275,15 @@ class VoicePasteApp:
         # v0.9: HTTP API server
         self._api_server = None
         self._api_thread = None
+        # v1.1: API dispatch controller (extracted from main.py)
+        self._api_controller = APIController(
+            app=self,
+            tts_backend=self._tts,
+            audio_player=self._audio_player,
+            tts_cache=self._tts_cache,
+            tts_exporter=self._tts_exporter,
+            paste_cancel_event=self._paste_cancel_event,
+        )
 
     @property
     def state(self) -> AppState:
@@ -336,7 +294,8 @@ class VoicePasteApp:
     def _set_state(self, new_state: AppState) -> None:
         """Set the application state (thread-safe).
 
-        Updates the tray icon to reflect the new state.
+        Validates the transition against the explicit transition table,
+        updates the tray icon to reflect the new state.
         All state transitions are logged.
 
         Args:
@@ -344,6 +303,12 @@ class VoicePasteApp:
         """
         with self._state_lock:
             old_state = self._state
+            if old_state != new_state and (old_state, new_state) not in VALID_TRANSITIONS:
+                logger.error(
+                    "Invalid state transition: %s -> %s",
+                    old_state.value,
+                    new_state.value,
+                )
             self._state = new_state
             logger.info("State: %s -> %s", old_state.value, new_state.value)
 
@@ -402,11 +367,42 @@ class VoicePasteApp:
             model_id=config.tts_model_id,
             output_format=config.tts_output_format,
             local_voice=config.tts_local_voice,
+            speed=config.tts_speed,
         )
         if self._tts is not None:
             logger.info("TTS backend ready: %s", config.tts_provider)
         else:
             logger.warning("TTS backend unavailable (no API key?).")
+
+    def _rebuild_claude_code(self) -> None:
+        """(Re)create the Claude Code backend based on current config.
+
+        Called on init and after settings changes (hot-reload).
+        """
+        if self.config.claude_code_enabled and ClaudeCodeBackend.is_available():
+            self._claude_code = ClaudeCodeBackend(
+                working_directory=self.config.claude_code_working_dir or None,
+                system_prompt=self.config.claude_code_system_prompt or None,
+                timeout_seconds=self.config.claude_code_timeout,
+                skip_permissions=self.config.claude_code_skip_permissions,
+                continue_conversation=self.config.claude_code_continue_conversation,
+            )
+            logger.info("Claude Code backend ready (cwd=%s).",
+                        self.config.claude_code_working_dir or "(default)")
+        else:
+            self._claude_code = None
+            if self.config.claude_code_enabled:
+                logger.warning("Claude Code enabled but CLI not found in PATH.")
+            else:
+                logger.debug("Claude Code integration disabled.")
+
+    def _on_claude_new_conversation(self) -> None:
+        """Reset Claude Code conversation state (tray menu callback)."""
+        if self._claude_code:
+            self._claude_code.new_conversation()
+            self._tray_manager.notify(APP_NAME, "Claude Code: New conversation started.")
+        else:
+            logger.debug("New conversation requested but Claude Code not active.")
 
     def _create_tts_cache(self) -> TTSAudioCache:
         """Create a TTS audio cache from current config."""
@@ -420,27 +416,11 @@ class VoicePasteApp:
 
     def _get_tts_cache_key(self, text: str) -> CacheKey:
         """Build a CacheKey from the current TTS config and text."""
-        config = self.config
-        if config.tts_provider == "piper":
-            return CacheKey(
-                provider="piper",
-                voice_id=config.tts_local_voice,
-                text=text,
-            )
-        return CacheKey(
-            provider="elevenlabs",
-            voice_id=config.tts_voice_id,
-            text=text,
-        )
+        return self._tts_orchestrator.get_cache_key(text)
 
     def _get_tts_voice_label(self) -> str:
         """Get a human-readable label for the current TTS voice."""
-        config = self.config
-        if config.tts_provider == "piper":
-            return config.tts_local_voice
-        from constants import ELEVENLABS_VOICE_PRESETS
-        preset = ELEVENLABS_VOICE_PRESETS.get(config.tts_voice_id, {})
-        return preset.get("name", config.tts_voice_id)
+        return self._tts_orchestrator.get_voice_label()
 
     def _create_tts_exporter(self) -> TTSAudioExporter:
         """Create a TTS audio exporter from current config.
@@ -457,49 +437,12 @@ class VoicePasteApp:
         )
 
     def _export_tts_audio(self, text: str, audio_data: bytes) -> None:
-        """Export TTS audio to the user's export directory if enabled.
-
-        This is a fire-and-forget helper. Errors are logged but never
-        raised, so export failures do not disrupt the TTS pipeline.
-
-        Args:
-            text: The TTS input text (used for filename generation).
-            audio_data: Raw audio bytes to export.
-        """
-        try:
-            result = self._tts_exporter.export(text, audio_data)
-            if result is not None:
-                logger.info("TTS audio exported to: %s", result)
-        except Exception:
-            logger.exception("Error exporting TTS audio (non-fatal).")
+        """Export TTS audio to the user's export directory if enabled."""
+        self._tts_orchestrator.export_audio(text, audio_data)
 
     def replay_tts_entry(self, entry_id: str) -> bool:
         """Replay a cached TTS entry by its ID. Returns True if started."""
-        if self.state != AppState.IDLE:
-            return False
-        audio_data = self._tts_cache.replay(entry_id)
-        if audio_data is None:
-            return False
-        self._set_state(AppState.SPEAKING)
-        thread = threading.Thread(
-            target=self._play_cached_audio,
-            args=(audio_data,),
-            daemon=True,
-            name="cache-replay-worker",
-        )
-        thread.start()
-        return True
-
-    def _play_cached_audio(self, audio_data: bytes) -> None:
-        """Play cached audio bytes. Runs in worker thread."""
-        try:
-            self._hotkey_manager.register_cancel(self._on_cancel)
-            self._audio_player.play(audio_data)
-        except Exception:
-            logger.exception("Error during cached audio playback.")
-        finally:
-            self._hotkey_manager.unregister_cancel()
-            self._set_state(AppState.IDLE)
+        return self._tts_orchestrator.replay_entry(entry_id)
 
     def _on_tts_hotkey(self) -> None:
         """Handle the TTS clipboard readout hotkey (Ctrl+Alt+T).
@@ -584,102 +527,71 @@ class VoicePasteApp:
         else:
             logger.info("TTS Ask hotkey ignored (state=%s).", current.value)
 
-    def _run_tts_pipeline(self, text: str) -> None:
-        """Synthesize text and play audio. Runs in a worker thread.
+    def _on_claude_code_hotkey(self) -> None:
+        """Handle the Claude Code hotkey (Ctrl+Alt+C).
 
-        Uses cache-through: checks cache before synthesis, stores after.
-
-        Args:
-            text: Text to synthesize and play.
+        Records speech, transcribes, sends to Claude Code CLI, then
+        delivers the response based on config (paste, speak, or both).
         """
-        try:
-            # v1.0: Cache-through — check cache first
-            cache_key = self._get_tts_cache_key(text)
-            audio_data = self._tts_cache.get(cache_key)
-            cached = audio_data is not None
+        current = self.state
+        logger.info("Claude Code hotkey invoked. State: %s", current.value)
 
-            if audio_data is None:
-                # Cache miss — synthesize
-                audio_data = self._tts.synthesize(text)
-                # Store in cache
-                self._tts_cache.put(
-                    cache_key, audio_data,
-                    voice_label=self._get_tts_voice_label(),
-                )
+        if current == AppState.SPEAKING:
+            logger.info("Stopping TTS playback.")
+            self._audio_player.stop()
+            return
+
+        if current == AppState.IDLE:
+            if not self._claude_code:
+                if not ClaudeCodeBackend.is_available():
+                    self._show_error(
+                        "Claude Code CLI not found.\n"
+                        "Install: npm i -g @anthropic-ai/claude-code"
+                    )
+                else:
+                    self._show_error(
+                        "Claude Code integration is disabled.\n"
+                        "Enable in Settings > Claude Code."
+                    )
+                return
+            logger.info("Transition: IDLE -> RECORDING (claude_code mode)")
+            self._active_mode = "claude_code"
+            self._start_recording()
+
+        elif current == AppState.RECORDING:
+            if self._recording_during_processing:
+                logger.info("Stopping queued recording (pipeline still processing).")
+                self._stop_queued_recording()
             else:
-                logger.info("TTS cache hit — skipping synthesis.")
+                logger.info("Transition: RECORDING -> PROCESSING")
+                self._stop_recording_and_process()
 
-            # v1.0: Export to user directory (non-blocking, fire-and-forget)
-            self._export_tts_audio(text, audio_data)
+        elif current == AppState.PROCESSING:
+            if self._recording_during_processing:
+                logger.info("Queue full: already recording during PROCESSING.")
+                self._play_audio_cue(play_error_cue)
+            else:
+                logger.info("Starting queued recording during PROCESSING.")
+                self._queued_mode = "claude_code"
+                self._start_queued_recording()
 
-            # Play
-            self._set_state(AppState.SPEAKING)
+        else:
+            logger.info("Claude Code hotkey ignored (state=%s).", current.value)
 
-            # Register Escape to stop TTS
-            self._hotkey_manager.register_cancel(self._on_cancel)
-
-            self._audio_player.play(audio_data)
-
-        except TTSError as e:
-            logger.error("TTS error: %s", e)
-            self._show_error(f"TTS error:\n{e}")
-
-        except Exception:
-            logger.exception("Unexpected error in TTS pipeline.")
-            self._show_error("TTS playback failed.\nCheck the log file.")
-
-        finally:
-            self._hotkey_manager.unregister_cancel()
-            self._set_state(AppState.IDLE)
+    def _run_tts_pipeline(self, text: str) -> None:
+        """Synthesize text and play audio. Delegates to TTSOrchestrator."""
+        self._tts_orchestrator.synthesize_and_play(text)
 
     def _run_tts_export_pipeline(self, text: str, filename_hint: str = "") -> None:
-        """Synthesize text and save to the export directory (API-driven).
-
-        Unlike _run_tts_pipeline, this does NOT play the audio -- it only
-        synthesizes and exports. Used by the POST /tts/export API endpoint.
-
-        Args:
-            text: Text to synthesize and export.
-            filename_hint: Optional custom filename hint.
-        """
-        try:
-            # Cache-through: check cache first
-            cache_key = self._get_tts_cache_key(text)
-            audio_data = self._tts_cache.get(cache_key)
-
-            if audio_data is None:
-                audio_data = self._tts.synthesize(text)
-                self._tts_cache.put(
-                    cache_key, audio_data,
-                    voice_label=self._get_tts_voice_label(),
-                )
-            else:
-                logger.info("TTS cache hit — skipping synthesis for export.")
-
-            # Export to user directory
-            result = self._tts_exporter.export(
-                text, audio_data, filename_hint=filename_hint,
-            )
-            if result is not None:
-                logger.info("API TTS export complete: %s", result)
-            else:
-                logger.warning("API TTS export returned None (check config).")
-
-        except TTSError as e:
-            logger.error("TTS error in export pipeline: %s", e)
-            self._show_error(f"TTS export error:\n{e}")
-
-        except Exception:
-            logger.exception("Unexpected error in TTS export pipeline.")
-            self._show_error("TTS export failed.\nCheck the log file.")
-
-        finally:
-            self._set_state(AppState.IDLE)
+        """Synthesize text and export to file. Delegates to TTSOrchestrator."""
+        self._tts_orchestrator.synthesize_and_export(text, filename_hint)
 
     # --- v0.9: HTTP API ---
 
     def _api_dispatch(self, command: dict) -> dict:
         """Handle an API command and return a JSON-serializable response.
+
+        Delegates to the extracted APIController (v1.1).
 
         Args:
             command: Dict with "action" key and optional parameters.
@@ -687,219 +599,7 @@ class VoicePasteApp:
         Returns:
             Response dict with "status" key.
         """
-        action = command.get("action", "")
-
-        if action == "status":
-            return {
-                "status": "ok",
-                "data": {
-                    "state": self.state.value,
-                    "tts_enabled": self.config.tts_enabled,
-                    "api_version": "1",
-                    "app_version": APP_VERSION,
-                },
-            }
-
-        if action == "tts":
-            text = command.get("text", "")
-            if not text or not text.strip():
-                return {
-                    "status": "error",
-                    "error_code": "INVALID_PARAMS",
-                    "message": "text is required and must be non-empty",
-                }
-            text = text.strip()
-            if len(text) > TTS_MAX_TEXT_LENGTH:
-                return {
-                    "status": "error",
-                    "error_code": "TEXT_TOO_LONG",
-                    "message": f"Text exceeds {TTS_MAX_TEXT_LENGTH} character limit",
-                }
-            if not self._tts:
-                return {
-                    "status": "error",
-                    "error_code": "TTS_NOT_CONFIGURED",
-                    "message": "TTS is not enabled or configured",
-                }
-            if self.state != AppState.IDLE:
-                return {
-                    "status": "busy",
-                    "state": self.state.value,
-                    "message": "Another operation is in progress",
-                }
-            # Fire-and-forget: start TTS in worker thread
-            self._set_state(AppState.PROCESSING)
-            thread = threading.Thread(
-                target=self._run_tts_pipeline,
-                args=(text,),
-                daemon=True,
-                name="api-tts-worker",
-            )
-            thread.start()
-            return {"status": "ok"}
-
-        if action == "stop_tts":
-            if self.state == AppState.SPEAKING:
-                self._audio_player.stop()
-            return {"status": "ok"}
-
-        if action == "record_start":
-            if self.state != AppState.IDLE:
-                return {
-                    "status": "busy",
-                    "state": self.state.value,
-                    "message": "Another operation is in progress",
-                }
-            mode = command.get("mode", "summary")
-            if mode not in ("summary", "prompt"):
-                mode = "summary"
-            self._active_mode = mode
-            self._start_recording()
-            return {"status": "ok"}
-
-        if action == "record_stop":
-            if self.state != AppState.RECORDING:
-                return {
-                    "status": "busy",
-                    "state": self.state.value,
-                    "message": "Not currently recording",
-                }
-            self._stop_recording_and_process()
-            return {"status": "ok"}
-
-        if action == "cancel":
-            current = self.state
-            if current == AppState.RECORDING:
-                self._on_cancel()
-            elif current == AppState.SPEAKING:
-                self._audio_player.stop()
-            elif current == AppState.AWAITING_PASTE:
-                self._paste_cancel_event.set()
-            return {"status": "ok"}
-
-        # --- v1.0: TTS Cache API ---
-
-        if action == "tts_history_list":
-            entries = self._tts_cache.list_entries(limit=50)
-            stats = self._tts_cache.stats()
-            return {
-                "status": "ok",
-                "data": {
-                    "entries": entries,
-                    "total_entries": stats["total_entries"],
-                    "total_size_mb": stats["total_size_mb"],
-                    "cache_enabled": stats["cache_enabled"],
-                },
-            }
-
-        if action == "tts_history_get":
-            entry_id = command.get("id", "")
-            entry = self._tts_cache.get_entry(entry_id)
-            if entry is None:
-                return {
-                    "status": "error",
-                    "error_code": "NOT_FOUND",
-                    "message": f"Cache entry '{entry_id}' not found",
-                }
-            return {"status": "ok", "data": entry}
-
-        if action == "tts_replay":
-            entry_id = command.get("id", "")
-            if self.state != AppState.IDLE:
-                return {
-                    "status": "busy",
-                    "state": self.state.value,
-                    "message": "Another operation is in progress",
-                }
-            success = self.replay_tts_entry(entry_id)
-            if not success:
-                return {
-                    "status": "error",
-                    "error_code": "NOT_FOUND",
-                    "message": f"Cache entry '{entry_id}' not found",
-                }
-            return {"status": "ok"}
-
-        if action == "tts_history_delete":
-            entry_id = command.get("id", "")
-            deleted = self._tts_cache.delete(entry_id)
-            if not deleted:
-                return {
-                    "status": "error",
-                    "error_code": "NOT_FOUND",
-                    "message": f"Cache entry '{entry_id}' not found",
-                }
-            return {"status": "ok", "deleted": True}
-
-        if action == "tts_history_clear":
-            count = self._tts_cache.clear()
-            return {"status": "ok", "deleted_count": count}
-
-        # --- v1.0: TTS Export API ---
-
-        if action == "tts_export_list":
-            exports = self._tts_exporter.list_exports()
-            stats = self._tts_exporter.stats()
-            return {
-                "status": "ok",
-                "data": {
-                    "exports": exports,
-                    "total_files": stats["total_files"],
-                    "total_size_mb": stats["total_size_mb"],
-                    "export_enabled": stats["enabled"],
-                    "export_dir": stats["export_dir"],
-                },
-            }
-
-        if action == "tts_export":
-            text = command.get("text", "")
-            if not text or not text.strip():
-                return {
-                    "status": "error",
-                    "error_code": "INVALID_PARAMS",
-                    "message": "text is required and must be non-empty",
-                }
-            text = text.strip()
-            if len(text) > TTS_MAX_TEXT_LENGTH:
-                return {
-                    "status": "error",
-                    "error_code": "TEXT_TOO_LONG",
-                    "message": f"Text exceeds {TTS_MAX_TEXT_LENGTH} character limit",
-                }
-            if not self._tts:
-                return {
-                    "status": "error",
-                    "error_code": "TTS_NOT_CONFIGURED",
-                    "message": "TTS is not enabled or configured",
-                }
-            if not self._tts_exporter.enabled:
-                return {
-                    "status": "error",
-                    "error_code": "EXPORT_DISABLED",
-                    "message": "TTS export is not enabled. Enable in Settings.",
-                }
-            if self.state != AppState.IDLE:
-                return {
-                    "status": "busy",
-                    "state": self.state.value,
-                    "message": "Another operation is in progress",
-                }
-            # Synthesize + export in worker thread (fire-and-forget)
-            self._set_state(AppState.PROCESSING)
-            thread = threading.Thread(
-                target=self._run_tts_export_pipeline,
-                args=(text, command.get("filename_hint", "")),
-                daemon=True,
-                name="api-tts-export-worker",
-            )
-            thread.start()
-            return {"status": "ok", "message": "Export started"}
-
-        return {
-            "status": "error",
-            "error_code": "INVALID_PARAMS",
-            "message": f"Unknown action: {action}",
-        }
+        return self._api_controller.dispatch(command)
 
     def _start_api_server(self) -> None:
         """Start the HTTP API server if enabled."""
@@ -950,6 +650,11 @@ class VoicePasteApp:
 
         from wake_word import WakeWordDetector
 
+        # Determine energy threshold / adaptive mode based on config.
+        # 0.0 = adaptive (auto-calibrate from ambient noise).
+        _silence_rms = self.config.handsfree_silence_threshold_rms
+        _use_adaptive = _silence_rms == 0.0
+
         self._wake_detector = WakeWordDetector(
             wake_phrase=self.config.wake_phrase,
             on_detected=self._on_wake_word_detected,
@@ -957,6 +662,9 @@ class VoicePasteApp:
             match_mode=self.config.wake_phrase_match_mode,
             language="en",  # Wake phrases are typically English
             should_listen=lambda: self.state == AppState.IDLE,
+            adaptive_energy=_use_adaptive,
+            model_size=self.config.handsfree_wake_model_size,
+            **({"energy_threshold": _silence_rms} if not _use_adaptive else {}),
         )
 
         success = self._wake_detector.start()
@@ -1013,7 +721,10 @@ class VoicePasteApp:
 
         # Set pipeline mode and start recording with silence auto-stop
         # Map config pipeline names to internal _active_mode names
-        _pipeline_to_mode = {"ask_tts": "tts_ask", "summary": "summary", "prompt": "prompt"}
+        _pipeline_to_mode = {
+            "ask_tts": "tts_ask", "summary": "summary",
+            "prompt": "prompt", "claude_code": "claude_code",
+        }
         self._active_mode = _pipeline_to_mode.get(self.config.handsfree_pipeline, "tts_ask")
         # Start recording for hands-free pipeline
         self._start_recording_handsfree()
@@ -1024,12 +735,19 @@ class VoicePasteApp:
             self._show_error("No STT backend available for Hands-Free recording.")
             return
 
-        # Create a new AudioRecorder with silence auto-stop
+        # Create a new AudioRecorder with silence auto-stop.
+        # If silence_threshold_rms == 0.0, use adaptive calibration.
+        _silence_rms = self.config.handsfree_silence_threshold_rms
+        _use_adaptive = _silence_rms == 0.0
+
         self._recorder = AudioRecorder(
             on_auto_stop=self._on_auto_stop,
             on_silence_stop=self._on_silence_auto_stop,
             silence_timeout_seconds=self.config.silence_timeout_seconds,
+            silence_threshold_rms=_silence_rms if not _use_adaptive else 300.0,
             max_duration_override=self.config.handsfree_max_recording_seconds,
+            device=self.config.audio_device_index,
+            adaptive_silence=_use_adaptive,
         )
 
         success = self._recorder.start()
@@ -1053,6 +771,55 @@ class VoicePasteApp:
         logger.info("Silence auto-stop triggered (Hands-Free mode).")
         self._tray_manager.notify(APP_NAME, "Silence detected — processing...")
         self._stop_recording_and_process()
+
+    def _get_effective_paste_shortcut(self) -> str:
+        """Determine the effective paste shortcut considering terminal mode.
+
+        Terminal Mode (runtime toggle) overrides the config's paste_shortcut.
+        When Terminal Mode is active, always uses Ctrl+Shift+V.
+        Otherwise, uses the config setting (auto/ctrl+v/ctrl+shift+v).
+
+        Returns:
+            Paste shortcut string: "ctrl+shift+v", "ctrl+v", or "auto".
+        """
+        if self._terminal_mode:
+            return "ctrl+shift+v"
+        if self.config.paste_shortcut != "auto":
+            return self.config.paste_shortcut
+        return "auto"
+
+    def _toggle_terminal_mode(self) -> None:
+        """Toggle terminal paste mode (Ctrl+Shift+V vs Ctrl+V).
+
+        This is a runtime toggle that overrides the paste_shortcut config.
+        When enabled, all paste operations use Ctrl+Shift+V (terminal shortcut).
+        When disabled, the config's paste_shortcut setting is used.
+        The state does NOT persist to config.toml -- it resets on restart.
+
+        Useful on Wayland where auto-detection of the focused window is unreliable.
+        """
+        self._terminal_mode = not self._terminal_mode
+
+        if self._terminal_mode:
+            mode_label = "Terminal (Ctrl+Shift+V)"
+        else:
+            # BUG-3: Show the actual configured paste shortcut, not a
+            # hardcoded "GUI (Ctrl+V)" which is wrong when config uses
+            # "auto" or "ctrl+shift+v".
+            shortcut = self.config.paste_shortcut
+            if shortcut == "ctrl+v":
+                mode_label = "GUI (Ctrl+V)"
+            elif shortcut == "ctrl+shift+v":
+                mode_label = "Terminal (Ctrl+Shift+V)"
+            else:
+                mode_label = "Auto-Detect"
+
+        logger.info("Paste mode toggled: %s", mode_label)
+        # Update tray menu to reflect new check state and show notification.
+        # Note: _tray_manager is always initialised before hotkeys can fire,
+        # so no hasattr guard is needed (BUG-4).
+        self._tray_manager.refresh_menu()
+        self._tray_manager.notify(APP_NAME, f"Paste: {mode_label}")
 
     def _open_settings(self) -> None:
         """Open the settings dialog. Called from tray menu (pystray thread)."""
@@ -1128,6 +895,8 @@ class VoicePasteApp:
                     logger.warning("Error unloading local TTS model: %s", e)
 
             self._rebuild_tts()
+            self._tts_orchestrator.update_tts(self._tts)
+            self._api_controller.update_tts(self._tts)
             logger.info("TTS backend rebuilt with updated settings.")
 
             # Register/unregister TTS hotkeys based on new enabled state
@@ -1179,12 +948,16 @@ class VoicePasteApp:
         }
         if changed_fields.keys() & cache_keys:
             self._tts_cache = self._create_tts_cache()
+            self._tts_orchestrator.update_cache(self._tts_cache)
+            self._api_controller.update_cache(self._tts_cache)
             logger.info("TTS cache rebuilt with updated settings.")
 
         # v1.0: TTS export hot-reload
         export_keys = {"tts_export_enabled", "tts_export_path"}
         if changed_fields.keys() & export_keys:
             self._tts_exporter = self._create_tts_exporter()
+            self._tts_orchestrator.update_exporter(self._tts_exporter)
+            self._api_controller.update_exporter(self._tts_exporter)
             logger.info("TTS exporter rebuilt with updated settings.")
 
         # v0.9: API server hot-reload
@@ -1193,10 +966,49 @@ class VoicePasteApp:
             self._stop_api_server()
             self._start_api_server()
 
+        # v1.2: Claude Code hot-reload
+        claude_keys = {
+            "claude_code_enabled", "claude_code_working_dir",
+            "claude_code_system_prompt", "claude_code_timeout",
+            "claude_code_response_mode", "claude_code_skip_permissions",
+            "claude_code_continue_conversation",
+        }
+        if changed_fields.keys() & claude_keys:
+            self._rebuild_claude_code()
+            if self.config.claude_code_enabled and self._claude_code:
+                if not self._hotkey_manager._slots["claude_code"].registered:
+                    try:
+                        self._hotkey_manager.register_claude_code(
+                            self._on_claude_code_hotkey
+                        )
+                    except Exception as exc:
+                        logger.warning(
+                            "Failed to register Claude Code hotkey: %s", exc
+                        )
+            else:
+                self._hotkey_manager.unregister_claude_code()
+            logger.info("Claude Code backend rebuilt with updated settings.")
+
         # Notify user via toast
         self._tray_manager.notify(
             APP_NAME, "Settings saved and applied."
         )
+
+    def _on_language_changed(self, lang_code: str) -> None:
+        """Handle language change from tray submenu.
+
+        Updates config, saves to disk, and notifies the user.
+
+        Args:
+            lang_code: Language code (e.g. "de", "en", "auto").
+        """
+        if lang_code == self.config.transcription_language:
+            return
+        self.config.transcription_language = lang_code
+        self.config.save_to_toml()
+        display = SUPPORTED_LANGUAGES.get(lang_code, lang_code)
+        logger.info("Transcription language changed to '%s' (%s).", lang_code, display)
+        self._tray_manager.notify(APP_NAME, f"Language: {display}")
 
     def _play_audio_cue(self, cue_fn: callable) -> None:
         """Play an audio cue if audio cues are enabled in config.
@@ -1236,11 +1048,24 @@ class VoicePasteApp:
             self._start_recording()
 
         elif current == AppState.RECORDING:
-            logger.info("Transition: RECORDING -> PROCESSING (stopping recording)")
-            self._stop_recording_and_process()
+            if self._recording_during_processing:
+                # Stop queued recording: save audio, stay in PROCESSING
+                logger.info("Stopping queued recording (pipeline still processing).")
+                self._stop_queued_recording()
+            else:
+                logger.info("Transition: RECORDING -> PROCESSING (stopping recording)")
+                self._stop_recording_and_process()
 
         elif current == AppState.PROCESSING:
-            logger.info("Hotkey pressed during PROCESSING state, ignored.")
+            if self._recording_during_processing:
+                # Already recording while processing — queue is full
+                logger.info("Queue full: already recording during PROCESSING.")
+                self._play_audio_cue(play_error_cue)
+            else:
+                # Start a new recording while pipeline is processing
+                logger.info("Starting queued recording during PROCESSING.")
+                self._queued_mode = "summary"
+                self._start_queued_recording()
 
         elif current == AppState.PASTING:
             logger.info("Hotkey pressed during PASTING state, ignored.")
@@ -1263,11 +1088,21 @@ class VoicePasteApp:
             self._start_recording()
 
         elif current == AppState.RECORDING:
-            logger.info("Transition: RECORDING -> PROCESSING (stopping recording)")
-            self._stop_recording_and_process()
+            if self._recording_during_processing:
+                logger.info("Stopping queued recording (pipeline still processing).")
+                self._stop_queued_recording()
+            else:
+                logger.info("Transition: RECORDING -> PROCESSING (stopping recording)")
+                self._stop_recording_and_process()
 
         elif current == AppState.PROCESSING:
-            logger.info("Prompt hotkey pressed during PROCESSING state, ignored.")
+            if self._recording_during_processing:
+                logger.info("Queue full: already recording during PROCESSING.")
+                self._play_audio_cue(play_error_cue)
+            else:
+                logger.info("Starting queued recording during PROCESSING.")
+                self._queued_mode = "prompt"
+                self._start_queued_recording()
 
         elif current == AppState.PASTING:
             logger.info("Prompt hotkey pressed during PASTING state, ignored.")
@@ -1277,7 +1112,7 @@ class VoicePasteApp:
 
         Active during RECORDING state (discards audio), SPEAKING state
         (stops TTS playback), and AWAITING_PASTE state (cancels paste, v0.9).
-        Returns to IDLE.
+        Returns to IDLE (or PROCESSING if cancelling a queued recording).
         """
         current = self.state
 
@@ -1290,6 +1125,18 @@ class VoicePasteApp:
         if current == AppState.AWAITING_PASTE:
             logger.info("Paste cancelled by user (via _on_cancel).")
             self._paste_cancel_event.set()
+            return
+
+        if current == AppState.PROCESSING and self._recording_during_processing:
+            # Cancel queued recording, but keep the pipeline running
+            logger.info("Queued recording cancelled by user.")
+            self._recorder.stop()
+            self._recording_during_processing = False
+            self._queued_audio = None
+            self._hotkey_manager.unregister_cancel()
+            self._play_audio_cue(play_cancel_cue)
+            # Stay in PROCESSING — the pipeline is still running
+            self._tray_manager.update_state(AppState.PROCESSING)
             return
 
         if current != AppState.RECORDING:
@@ -1306,7 +1153,6 @@ class VoicePasteApp:
 
         # Play cancel cue and return to idle
         self._play_audio_cue(play_cancel_cue)
-        self._handsfree_recording = False
         self._set_state(AppState.IDLE)
 
     def _on_auto_stop(self) -> None:
@@ -1318,6 +1164,16 @@ class VoicePasteApp:
         the recording was auto-stopped.
         """
         current = self.state
+
+        # Handle auto-stop during queued recording
+        if current == AppState.PROCESSING and self._recording_during_processing:
+            logger.info("Queued recording auto-stopped after max duration.")
+            self._tray_manager.notify(
+                APP_NAME, "Queued recording auto-stopped."
+            )
+            self._stop_queued_recording()
+            return
+
         if current != AppState.RECORDING:
             logger.debug(
                 "Auto-stop fired but state is %s, not RECORDING. Ignored.",
@@ -1330,6 +1186,61 @@ class VoicePasteApp:
             APP_NAME, "Recording auto-stopped after 5 minutes."
         )
         self._stop_recording_and_process()
+
+    def _start_queued_recording(self) -> None:
+        """Start a new recording while the pipeline is still processing.
+
+        Does NOT change the application state (stays in PROCESSING).
+        The recorder runs in the background; audio is saved to
+        _queued_audio when the user stops the recording.
+        """
+        if self._stt is None:
+            logger.info("No STT backend — cannot queue recording.")
+            self._play_audio_cue(play_error_cue)
+            return
+
+        # Create a fresh recorder for the queued recording
+        self._recorder = AudioRecorder(
+            on_auto_stop=self._on_auto_stop,
+            device=self.config.audio_device_index,
+        )
+        success = self._recorder.start()
+        if success:
+            self._recording_during_processing = True
+            self._play_audio_cue(play_recording_start_cue)
+            self._hotkey_manager.register_cancel(self._on_cancel)
+            # Update tray tooltip to indicate recording + processing
+            self._tray_manager.set_processing_step("Recording (queued)...")
+            logger.info("Queued recording started.")
+        else:
+            logger.error("Failed to start queued recording.")
+            self._play_audio_cue(play_error_cue)
+
+    def _stop_queued_recording(self) -> None:
+        """Stop a queued recording and save the audio for later processing.
+
+        Does NOT start a new pipeline thread — the audio is saved to
+        _queued_audio and will be picked up by _run_pipeline's finally block.
+        """
+        self._play_audio_cue(play_recording_stop_cue)
+        self._hotkey_manager.unregister_cancel()
+
+        audio_data = self._recorder.stop()
+        self._recording_during_processing = False
+
+        if audio_data is None:
+            logger.info("No audio captured in queued recording.")
+            self._queued_audio = None
+        else:
+            self._queued_audio = audio_data
+            self._active_mode = self._queued_mode
+            logger.info(
+                "Queued recording saved (%d bytes). Will process after current pipeline.",
+                len(audio_data),
+            )
+
+        # Restore tray to processing state
+        self._tray_manager.update_state(AppState.PROCESSING)
 
     def _start_recording(self) -> None:
         """Transition from IDLE to RECORDING.
@@ -1458,8 +1369,7 @@ class VoicePasteApp:
         self._paste_cancel_event.clear()
 
         # Register Enter (confirm) and Escape (cancel) hotkeys
-        import keyboard
-        enter_hook = keyboard.on_press_key("enter", lambda _: self._on_paste_confirm(), suppress=False)
+        enter_hook = register_key_press("enter", lambda _: self._on_paste_confirm(), suppress=False)
         self._hotkey_manager.register_cancel(self._on_paste_cancel)
 
         try:
@@ -1490,8 +1400,7 @@ class VoicePasteApp:
                     # Beep each second as countdown feedback
                     if config.audio_cues_enabled and elapsed > 0 and elapsed % 1.0 < 0.1:
                         try:
-                            import winsound
-                            winsound.Beep(
+                            play_beep(
                                 PASTE_COUNTDOWN_BEEP_FREQ,
                                 PASTE_COUNTDOWN_BEEP_DURATION_MS,
                             )
@@ -1527,24 +1436,33 @@ class VoicePasteApp:
 
         finally:
             # Always clean up hotkey hooks
-            keyboard.unhook(enter_hook)
+            unregister_key_hook(enter_hook)
             self._hotkey_manager.unregister_cancel()
 
-    def _run_pipeline(self, audio_data: bytes) -> None:
+    def _run_pipeline(self, audio_data: bytes, clip_backup: str | None = None) -> None:
         """Execute the STT, summarization, and paste pipeline in a worker thread.
 
         Includes clipboard backup/restore for clipboard preservation (US-0.2.5).
         All errors are caught and reported via toast notifications.
+        Supports pipeline queueing: if queued audio exists after this pipeline
+        completes, it is processed before returning to IDLE.
 
         Args:
             audio_data: WAV audio bytes to transcribe and paste.
+            clip_backup: Pre-existing clipboard backup (used by queued pipeline
+                to share the original backup). If None, backs up now.
         """
         # Backup clipboard before we overwrite it (US-0.2.5)
-        clip_backup = clipboard_backup()
+        owns_clipboard = clip_backup is None
+        if owns_clipboard:
+            clip_backup = clipboard_backup()
 
         try:
-            # Step 1: Transcribe
-            transcript = self._stt.transcribe(audio_data)
+            # Step 1: Transcribe -- update tray tooltip for progress feedback
+            self._tray_manager.set_processing_step("Transcribing...")
+            transcript = self._stt.transcribe(
+                audio_data, language=self.config.transcription_language
+            )
 
             if not transcript or not transcript.strip():
                 logger.info("Empty transcript. Nothing to paste.")
@@ -1553,13 +1471,25 @@ class VoicePasteApp:
                 return
 
             # Step 2: Summarize or Prompt (v0.5: voice prompt mode)
-            if self._active_mode in ("prompt", "tts_ask"):
-                logger.info("Prompt mode: sending transcript as prompt to LLM.")
-                summary = self._summarizer.summarize(
-                    transcript, system_prompt=PROMPT_SYSTEM_PROMPT
+            self._tray_manager.set_processing_step("Summarizing...")
+            try:
+                if self._active_mode in ("prompt", "tts_ask"):
+                    logger.info("Prompt mode: sending transcript as prompt to LLM.")
+                    summary = self._summarizer.summarize(
+                        transcript, system_prompt=PROMPT_SYSTEM_PROMPT
+                    )
+                else:
+                    summary = self._summarizer.summarize(transcript)
+            except SummarizerError as e:
+                # Graceful fallback: paste raw transcript instead of failing
+                logger.warning(
+                    "Summarization failed, falling back to raw transcript: %s", e
                 )
-            else:
-                summary = self._summarizer.summarize(transcript)
+                summary = transcript
+                self._tray_manager.notify(
+                    APP_NAME,
+                    "Summarization unavailable \u2014 raw transcript pasted.",
+                )
 
             # Handle empty result (e.g., all filler words removed)
             if not summary or not summary.strip():
@@ -1568,8 +1498,72 @@ class VoicePasteApp:
                 self._set_state(AppState.IDLE)
                 return
 
+            # v1.2: Claude Code mode — send transcript to Claude CLI
+            if self._active_mode == "claude_code":
+                self._tray_manager.set_processing_step("Asking Claude...")
+                try:
+                    result = self._claude_code.invoke(transcript)
+                    response_text = result.text
+                except ClaudeCodeNotFoundError:
+                    self._tray_manager.notify(
+                        APP_NAME,
+                        "Claude Code CLI not found.\n"
+                        "Install: npm i -g @anthropic-ai/claude-code",
+                    )
+                    self._set_state(AppState.IDLE)
+                    return
+                except ClaudeCodeTimeoutError:
+                    self._tray_manager.notify(APP_NAME, "Claude Code timed out.")
+                    self._set_state(AppState.IDLE)
+                    return
+                except ClaudeCodeError as e:
+                    self._tray_manager.notify(
+                        APP_NAME, f"Claude Code error:\n{e}"
+                    )
+                    self._set_state(AppState.IDLE)
+                    return
+
+                if not response_text or not response_text.strip():
+                    self._tray_manager.notify(APP_NAME, "Claude returned empty response.")
+                    self._set_state(AppState.IDLE)
+                    return
+
+                # Route response based on config
+                mode = self.config.claude_code_response_mode
+                if mode in ("speak", "both"):
+                    # Put answer on clipboard for user access
+                    clipboard_restore(response_text)
+                    clip_backup = None  # Don't restore old clipboard
+                    logger.info("Claude answer placed on clipboard.")
+                    if self._tts:
+                        try:
+                            self._tts_orchestrator.synthesize_for_ask(response_text)
+                        except TTSError as e:
+                            logger.error("TTS error in Claude Code pipeline: %s", e)
+                            self._tray_manager.notify(
+                                APP_NAME,
+                                f"Answer on clipboard.\nTTS failed: {e}",
+                            )
+                        finally:
+                            self._hotkey_manager.unregister_cancel()
+                    else:
+                        self._tray_manager.notify(
+                            APP_NAME,
+                            "Answer on clipboard (TTS not configured).",
+                        )
+                        self._set_state(AppState.IDLE)
+                    if mode == "speak":
+                        return
+                    # "both" falls through to paste below
+
+                if mode in ("paste", "both"):
+                    summary = response_text
+                    # Falls through to the normal paste flow below
+                else:
+                    return  # speak-only, already handled
+
             # v0.6: TTS Ask mode — speak the answer instead of pasting
-            if self._active_mode == "tts_ask" and self._tts:
+            elif self._active_mode == "tts_ask" and self._tts:
                 # Put answer on clipboard (silently, no paste) using ctypes API
                 clipboard_restore(summary)
                 logger.info("AI answer placed on clipboard.")
@@ -1577,26 +1571,8 @@ class VoicePasteApp:
                 # Prevent the finally block from overwriting the AI answer
                 clip_backup = None
 
-                # v1.0: Cache-through for TTS Ask mode
                 try:
-                    cache_key = self._get_tts_cache_key(summary)
-                    tts_audio = self._tts_cache.get(cache_key)
-
-                    if tts_audio is None:
-                        tts_audio = self._tts.synthesize(summary)
-                        self._tts_cache.put(
-                            cache_key, tts_audio,
-                            voice_label=self._get_tts_voice_label(),
-                        )
-                    else:
-                        logger.info("TTS cache hit in Ask+TTS — skipping synthesis.")
-
-                    # v1.0: Export to user directory (non-blocking, fire-and-forget)
-                    self._export_tts_audio(summary, tts_audio)
-
-                    self._set_state(AppState.SPEAKING)
-                    self._hotkey_manager.register_cancel(self._on_cancel)
-                    self._audio_player.play(tts_audio)
+                    self._tts_orchestrator.synthesize_for_ask(summary)
                 except TTSError as e:
                     logger.error("TTS error in Ask+TTS pipeline: %s", e)
                     self._tray_manager.notify(
@@ -1614,14 +1590,14 @@ class VoicePasteApp:
                 return
 
             self._set_state(AppState.PASTING)
-            success = paste_text(summary)
+            _paste_shortcut = self._get_effective_paste_shortcut()
+            success = paste_text(summary, paste_shortcut=_paste_shortcut)
 
             if success:
                 # v0.9: Auto-Enter after paste (e.g. execute command in terminal)
                 if self.config.paste_auto_enter:
                     time.sleep(0.05)
-                    import keyboard
-                    keyboard.send("enter")
+                    send_key("enter")
                     logger.info("Pipeline complete. Text pasted + Enter pressed.")
                 else:
                     logger.info("Pipeline complete. Text pasted successfully.")
@@ -1631,10 +1607,6 @@ class VoicePasteApp:
         except STTError as e:
             logger.error("STT pipeline error: %s", e)
             self._show_error(f"Transcription error:\n{e}")
-
-        except SummarizerError as e:
-            logger.error("Summarizer pipeline error: %s", e)
-            self._show_error(f"Summarization error:\n{e}")
 
         except ImportError as e:
             # Catches late-binding import failures in local STT (e.g.,
@@ -1699,13 +1671,30 @@ class VoicePasteApp:
             )
 
         finally:
-            # Always restore clipboard and return to IDLE
             # Brief delay to ensure paste has completed before restoring
             time.sleep(0.1)
-            clipboard_restore(clip_backup)
-            # Restore default recorder (without silence detection)
-            self._recorder = AudioRecorder(on_auto_stop=self._on_auto_stop)
-            self._set_state(AppState.IDLE)
+
+            # Check for queued audio before returning to IDLE
+            queued = self._queued_audio
+            self._queued_audio = None
+
+            if queued is not None:
+                logger.info(
+                    "Processing queued audio (%d bytes)...", len(queued)
+                )
+                # Process the queued audio, passing the original clipboard
+                # backup so it is only restored after the LAST pipeline.
+                self._set_state(AppState.PROCESSING)
+                self._run_pipeline(queued, clip_backup=clip_backup)
+            else:
+                # No queued audio — normal cleanup
+                clipboard_restore(clip_backup)
+                # Restore default recorder (without silence detection)
+                self._recorder = AudioRecorder(
+                    on_auto_stop=self._on_auto_stop,
+                    device=self.config.audio_device_index,
+                )
+                self._set_state(AppState.IDLE)
 
     def _shutdown(self) -> None:
         """Clean shutdown of all components."""
@@ -1746,6 +1735,25 @@ class VoicePasteApp:
         # Unregister hotkeys
         self._hotkey_manager.unregister()
 
+        # v1.3: Stop evdev monitor if running (Wayland)
+        # SEC-083: Also clean up UInput virtual keyboard device
+        # SEC-086: Separate try blocks so stop_monitor() failure does not
+        # skip cleanup_uinput() (and vice versa).
+        if sys.platform == "linux":
+            try:
+                from evdev_hotkey import stop_monitor, cleanup_uinput
+            except ImportError:
+                pass
+            else:
+                try:
+                    stop_monitor()
+                except Exception:
+                    logger.debug("Error stopping evdev monitor during shutdown.")
+                try:
+                    cleanup_uinput()
+                except Exception:
+                    logger.debug("Error cleaning up UInput during shutdown.")
+
         # Stop tray (this unblocks the main thread)
         self._tray_manager.stop()
 
@@ -1773,6 +1781,28 @@ class VoicePasteApp:
             "on" if self.config.audio_cues_enabled else "off",
         )
 
+        # v1.3: On Wayland, check evdev permissions before registering hotkeys
+        if (
+            sys.platform == "linux"
+            and os.environ.get("XDG_SESSION_TYPE", "").lower() == "wayland"
+        ):
+            try:
+                from evdev_hotkey import check_evdev_permissions
+                ok, msg = check_evdev_permissions()
+                if ok:
+                    logger.info("evdev permission check: %s", msg)
+                else:
+                    logger.error("evdev permission check failed: %s", msg)
+                    raise RuntimeError(msg)
+            except ImportError:
+                logger.error("evdev library not installed (required for Wayland).")
+                raise RuntimeError(
+                    "The 'evdev' Python library is required for global hotkeys "
+                    "on Wayland sessions but is not installed.\n\n"
+                    "Install it with:\n"
+                    "  pip install evdev"
+                )
+
         # Register hotkey (keyboard library runs its own listener thread).
         # On some Windows configurations, the keyboard library requires
         # Administrator privileges. If registration fails, we raise so
@@ -1781,6 +1811,19 @@ class VoicePasteApp:
             self._hotkey_manager.register(self._on_hotkey)
         except Exception as exc:
             logger.exception("Failed to register hotkey.")
+            if (
+                sys.platform == "linux"
+                and os.environ.get("XDG_SESSION_TYPE", "").lower() == "wayland"
+            ):
+                raise RuntimeError(
+                    f"Could not register the hotkey ({self.config.hotkey}).\n\n"
+                    f"On Wayland, VoicePaste uses evdev to read keyboard input.\n"
+                    f"Ensure the 'evdev' library is installed and your user is "
+                    f"in the 'input' group:\n"
+                    f"  sudo usermod -aG input $USER\n"
+                    f"Then log out and back in.\n\n"
+                    f"Technical detail: {exc}"
+                ) from exc
             raise RuntimeError(
                 f"Could not register the hotkey ({self.config.hotkey}).\n\n"
                 f"The 'keyboard' library may require Administrator privileges "
@@ -1818,13 +1861,38 @@ class VoicePasteApp:
                     self.config.tts_ask_hotkey, exc,
                 )
 
+        # v1.2: Register Claude Code hotkey (non-fatal if registration fails)
+        if self.config.claude_code_enabled and self._claude_code:
+            try:
+                self._hotkey_manager.register_claude_code(
+                    self._on_claude_code_hotkey
+                )
+            except Exception as exc:
+                logger.warning(
+                    "Failed to register Claude Code hotkey '%s': %s",
+                    self.config.claude_code_hotkey, exc,
+                )
+
+        # v1.3: Register Terminal Mode toggle hotkey (non-fatal)
+        try:
+            self._hotkey_manager.register_terminal_mode(
+                self._toggle_terminal_mode
+            )
+        except Exception as exc:
+            logger.warning(
+                "Failed to register Terminal Mode hotkey '%s': %s",
+                self.config.terminal_mode_hotkey, exc,
+            )
+
         logger.info(
-            "Hotkeys registered: summary='%s', prompt='%s', tts='%s', tts_ask='%s'. "
-            "Waiting for user input.",
+            "Hotkeys registered: summary='%s', prompt='%s', tts='%s', tts_ask='%s', "
+            "claude_code='%s', terminal_mode='%s'. Waiting for user input.",
             self.config.hotkey,
             self.config.prompt_hotkey,
             self.config.tts_hotkey if self.config.tts_enabled else "(disabled)",
             self.config.tts_ask_hotkey if self.config.tts_enabled else "(disabled)",
+            self.config.claude_code_hotkey if self.config.claude_code_enabled else "(disabled)",
+            self.config.terminal_mode_hotkey,
         )
 
         # v1.0: Run startup cache eviction on a deferred thread
@@ -1882,7 +1950,7 @@ def main() -> None:
     verbose_mode = "--verbose" in sys.argv
 
     if "--debug" in sys.argv or verbose_mode:
-        _enable_debug_console()
+        enable_debug_console()
 
     # ----------------------------------------------------------------
     # Step 1: Bootstrap logging (console + minimal format)
@@ -1912,12 +1980,35 @@ def main() -> None:
     logger.info("Executable: %s", sys.executable)
     logger.info("Arguments: %s", sys.argv)
 
-    # Log keyboard library version for debugging hotkey issues
-    try:
-        import keyboard as _kb_diag
-        logger.info("keyboard library version: %s", _kb_diag.version)
-    except Exception as e:
-        logger.warning("Could not determine keyboard library version: %s", e)
+    # Log hotkey library version for debugging hotkey issues
+    if sys.platform == "win32":
+        try:
+            import keyboard as _kb_diag
+            logger.info("keyboard library version: %s", _kb_diag.version)
+        except Exception as e:
+            logger.warning("Could not determine keyboard library version: %s", e)
+    else:
+        _session_type = os.environ.get("XDG_SESSION_TYPE", "unknown")
+        logger.info("Session type: %s", _session_type)
+        if _session_type == "wayland":
+            try:
+                import evdev as _evdev_diag  # noqa: F401 -- availability check
+                try:
+                    import importlib.metadata as _meta
+                    logger.info("evdev library version: %s", _meta.version("evdev"))
+                except Exception:
+                    logger.info("evdev: available (version unknown in frozen build)")
+            except ImportError:
+                logger.debug("evdev not available (Wayland hotkeys will not work)")
+        try:
+            import pynput as _pynput_diag  # noqa: F401 -- availability check
+            try:
+                import importlib.metadata as _meta
+                logger.info("pynput library version: %s", _meta.version("pynput"))
+            except Exception:
+                logger.info("pynput: available (version unknown in frozen build)")
+        except ImportError:
+            logger.debug("pynput not available (X11 hotkeys will not work)")
 
     # Log sounddevice/PortAudio version for debugging audio issues
     try:
@@ -1935,7 +2026,7 @@ def main() -> None:
     # ----------------------------------------------------------------
     # Step 2: Single-instance mutex (REQ-S27)
     # ----------------------------------------------------------------
-    mutex_handle = _acquire_single_instance_mutex()
+    mutex_handle = acquire_single_instance_lock()
     if mutex_handle is None:
         msg = (
             f"{APP_NAME} is already running.\n\n"
@@ -1945,7 +2036,7 @@ def main() -> None:
             f"and end the 'VoicePaste' process, then try again."
         )
         logger.error("Cannot start: another instance is already running.")
-        _show_fatal_error(msg)
+        show_fatal_error(msg)
         sys.exit(1)
 
     try:
@@ -1987,7 +2078,7 @@ def main() -> None:
     except RuntimeError as exc:
         # VoicePasteApp.run() raises RuntimeError for hotkey failures
         logger.error("Startup error: %s", exc)
-        _show_fatal_error(str(exc))
+        show_fatal_error(str(exc))
         sys.exit(1)
 
     except Exception:
@@ -2002,7 +2093,7 @@ def main() -> None:
         except NameError:
             log_hint = "voice-paste.log (next to VoicePaste.exe)"
 
-        _show_fatal_error(
+        show_fatal_error(
             f"{APP_NAME} encountered an unexpected error and must close.\n\n"
             f"Please check the log file for details:\n"
             f"  {log_hint}\n\n"
@@ -2013,7 +2104,7 @@ def main() -> None:
     finally:
         # Always release the mutex on shutdown
         if mutex_handle is not None:
-            _release_single_instance_mutex(mutex_handle)
+            release_single_instance_lock(mutex_handle)
 
 
 if __name__ == "__main__":

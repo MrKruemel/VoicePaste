@@ -120,10 +120,8 @@ class TTSAudioCache:
         if cache_dir is not None:
             self._cache_dir = cache_dir
         else:
-            local_appdata = os.environ.get("LOCALAPPDATA", "")
-            if not local_appdata:
-                local_appdata = str(Path.home() / "AppData" / "Local")
-            self._cache_dir = Path(local_appdata) / "VoicePaste" / "cache" / "tts"
+            from platform_impl import get_cache_dir as _platform_cache_dir
+            self._cache_dir = _platform_cache_dir() / "cache" / "tts"
 
         self._index_path = self._cache_dir / "index.json"
         self._index: dict[str, Any] = {"version": 1, "entries": {}}

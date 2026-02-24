@@ -1,6 +1,6 @@
 @echo off
 REM ==========================================================================
-REM Build script for Voice-to-Summary Paste Tool
+REM Build script for VoicePaste
 REM ==========================================================================
 REM
 REM Usage:

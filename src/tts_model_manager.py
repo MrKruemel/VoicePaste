@@ -38,17 +38,15 @@ _download_lock = threading.Lock()
 def get_tts_cache_dir() -> Path:
     """Get the TTS model cache directory.
 
-    Uses %LOCALAPPDATA%\\VoicePaste\\models\\tts\\ on Windows.
+    Uses platform_impl.get_cache_dir() / models / tts on all platforms.
     Creates the directory if it does not exist.
 
     Returns:
         Path to the TTS model cache directory.
     """
-    local_app_data = os.environ.get("LOCALAPPDATA", "")
-    if not local_app_data:
-        local_app_data = str(Path.home() / "AppData" / "Local")
+    from platform_impl import get_cache_dir as _platform_cache_dir
 
-    cache_dir = Path(local_app_data) / "VoicePaste" / "models" / "tts"
+    cache_dir = _platform_cache_dir() / "models" / "tts"
     cache_dir.mkdir(parents=True, exist_ok=True)
     return cache_dir
 

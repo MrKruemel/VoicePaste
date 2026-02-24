@@ -1,7 +1,8 @@
-# Voice-to-Summary Paste Tool Configuration
+# VoicePaste Configuration
 # Copy this file to config.toml and customize as needed.
 #
-# IMPORTANT: API keys are stored securely in Windows Credential Manager.
+# IMPORTANT: API keys are stored securely in the OS credential store
+# (Windows Credential Manager / Linux keyring via the Settings dialog).
 # Use the Settings dialog (right-click tray icon > Settings) to manage API keys.
 # If you add keys to this file, they will be automatically migrated to Credential Manager on startup.
 #
@@ -20,11 +21,18 @@ combination = "ctrl+alt+r"
 prompt_combination = "ctrl+alt+a"
 
 # TTS hotkeys (v0.6): only active when TTS is enabled in Settings
-# Read clipboard aloud via Text-to-Speech (default: "ctrl+alt+t")
+# Read clipboard aloud via Text-to-Speech
+# Default: "ctrl+alt+t" (Windows), "ctrl+alt+s" (Linux — avoids GNOME Terminal's Ctrl+Alt+T)
 tts_combination = "ctrl+alt+t"
 # Ask AI a question and hear the answer via TTS (default: "ctrl+alt+y")
 tts_ask_combination = "ctrl+alt+y"
 # Note: These hotkeys only work when TTS is enabled. Disable TTS to free up these hotkeys.
+
+# Terminal Mode toggle (v1.3): switch paste between Ctrl+V (GUI) and Ctrl+Shift+V (terminal)
+# Useful on Wayland where auto-detection of the focused window is unreliable.
+# Press this hotkey to toggle between GUI paste (Ctrl+V) and terminal paste (Ctrl+Shift+V).
+# The toggle state resets on restart. Set paste_shortcut in [paste] for a persistent override.
+terminal_mode_combination = "ctrl+alt+m"
 
 # Hands-Free hotkey (v0.9): say wake phrase to start recording, silence auto-stops (default: disabled)
 # Set to a hotkey like "ctrl+alt+o" to enable, or leave empty to disable.
@@ -37,18 +45,29 @@ tts_ask_combination = "ctrl+alt+y"
 # The server binds to 127.0.0.1 only (no network exposure, localhost-only).
 # API is disabled by default for security. Enable in Settings dialog or set to true here.
 # WARNING: Only enable if you trust local applications on your machine.
-enabled = false
+api_enabled = false
 
 # HTTP API port (default: 18923)
 # The server will listen on http://127.0.0.1:18923.
 # Only change this if port 18923 is already in use on your machine.
-port = 18923
+api_port = 18923
 
 [transcription]
 # STT backend: "cloud" (OpenAI Whisper API) or "local" (faster-whisper, offline, v0.4+)
 # - "cloud": requires OpenAI API key. Fast, excellent quality, requires internet.
 # - "local": downloads a Whisper model (~75MB–3GB depending on size). Offline, slower, no API key needed.
 backend = "cloud"
+
+# Transcription language: "auto" (let Whisper detect) or a language code.
+# Examples: "de" (German), "en" (English), "fr" (French), "es" (Spanish)
+# "auto" works well for multilingual users but may be slightly less accurate
+# than specifying the exact language.
+language = "de"
+
+# Audio input device: -1 = system default microphone, or a device index number.
+# Use the Settings dialog (right-click tray icon > Settings > Transcription) to
+# see available microphones and select one. The device index is shown as (#N).
+# audio_device_index = -1
 
 # Local model size (only used when backend = "local")
 # Options: tiny (~75MB, fast, lower quality)
@@ -138,7 +157,8 @@ output_format = "mp3_44100_128"
 
 # --- Local (Piper) settings (v0.7) ---
 # Piper voice model name. Download models via Settings dialog before first use.
-# Models are cached in %LOCALAPPDATA%\VoicePaste\models\tts\.
+# Models are cached in %LOCALAPPDATA%\VoicePaste\models\tts\ (Windows)
+# or ~/.cache/VoicePaste/models/tts/ (Linux).
 # Only used when provider = "piper".
 #
 # German voices (v0.8):
@@ -164,6 +184,12 @@ output_format = "mp3_44100_128"
 # Full list: See PIPER_VOICE_MODELS in src/constants.py.
 local_voice = "de_DE-thorsten-medium"
 
+# Speech speed for Piper local TTS (v1.1)
+# Controls the length_scale parameter: lower = slower, higher = faster.
+# 0.5 = slow (double duration), 1.0 = normal, 2.0 = fast (half duration)
+# Valid range: 0.25 to 4.0. Only used when provider = "piper".
+speed = 1.0
+
 [feedback]
 # Play audio cues on recording start/stop (default: true)
 # When true, you hear distinct beeps for:
@@ -173,15 +199,6 @@ local_voice = "de_DE-thorsten-medium"
 # - Error: single low buzz
 # Set to false for silent operation.
 audio_cues = true
-
-# Show floating overlay UI (default: true, v0.8+)
-# Displays non-intrusive status in bottom-right corner:
-# - Red dot + timer during recording
-# - Amber dot + dots during processing
-# - Blue pulsing dot during TTS playback
-# - Green dot + "Pasted" confirmation when pasting
-# Set to false to disable overlay and use only tray icon for feedback.
-show_overlay = true
 
 [paste]
 # Delayed Paste (v0.9+)
@@ -201,6 +218,22 @@ require_confirmation = false
 # If require_confirmation is true, how long to wait for the Enter key before cancelling the paste.
 # Valid range: 5.0 to 120.0 seconds.
 confirmation_timeout_seconds = 30.0
+
+# Automatically press Enter after pasting (default: false)
+# When true, simulates pressing Enter after the text is pasted.
+# Useful to immediately execute a pasted command in a terminal.
+auto_enter = false
+
+# Paste shortcut selection (default: "auto")
+# Controls which keyboard shortcut is simulated to paste text:
+# - "auto": Detect terminal emulators and use Ctrl+Shift+V, otherwise Ctrl+V.
+#   On X11: uses xprop to read WM_CLASS window property.
+#   On Wayland/GNOME: attempts GNOME Shell D-Bus detection (may be blocked on GNOME 41+).
+#   On Wayland: falls back to Ctrl+V if detection is unavailable. Use Terminal Mode toggle (Ctrl+Alt+M) to switch manually.
+# - "ctrl+v": Always use Ctrl+V (standard paste, works in most applications).
+# - "ctrl+shift+v": Always use Ctrl+Shift+V (terminal-only paste, overrides auto-detection).
+# Use "ctrl+shift+v" if auto-detection fails on your terminal or desktop environment.
+paste_shortcut = "auto"
 
 [handsfree]
 # Hands-Free Mode (v0.9+)
@@ -225,21 +258,89 @@ wake_phrase = "Hello Cloud"
 match_mode = "contains"
 
 # Recording pipeline for hands-free mode (default: "ask_tts")
-# - "transcribe_paste": Record speech -> Transcribe -> Summarize -> Paste (normal recording mode)
 # - "ask_tts": Record speech -> Send to LLM as question -> Speak answer via TTS
-# - "ask_paste": Record speech -> Send to LLM as question -> Paste answer
+# - "summary": Record speech -> Transcribe -> Summarize -> Paste (normal recording mode)
+# - "prompt": Record speech -> Send to LLM as question -> Paste answer
+# - "claude_code": Record speech -> Send to Claude Code CLI -> Response via configured mode
 pipeline = "ask_tts"
 
 # Silence detection timeout in seconds (default: 3.0)
 # After speech is detected, recording stops when silence exceeds this duration.
 # Longer values capture extended pauses within a single utterance.
 # Valid range: 1.0 to 10.0 seconds.
-silence_timeout_seconds = 3.0
+silence_timeout = 3.0
 
-# Maximum recording duration in seconds (default: 60)
+# Maximum recording duration in seconds (default: 120)
 # Recording auto-stops after this duration to prevent runaway recordings.
 # Valid range: 10 to 300 seconds.
-max_duration_seconds = 60
+max_recording_seconds = 120
+
+# Cooldown in seconds after wake word detection (default: 3.0)
+# Prevents the wake phrase from re-triggering immediately after a recording.
+# Valid range: 1.0 to 10.0 seconds.
+cooldown_seconds = 3.0
+
+# Silence detection threshold (RMS energy, int16 scale).
+# 0 = adaptive (auto-calibrate from ambient noise at recording start).
+# Set to a fixed value (e.g. 500-1000) if adaptive detection misbehaves.
+# Higher values = less sensitive (ignore more background noise).
+silence_threshold_rms = 0
+
+# Whisper model size for wake word detection (default: "base")
+# Larger models are more accurate in noisy environments but use more RAM and CPU.
+# Options: "tiny" (~75MB, fastest, lower accuracy in noise),
+#          "base" (~145MB, recommended, good noise handling),
+#          "small" (~480MB, best accuracy, slower, higher CPU)
+wake_model_size = "base"
+
+[tts_cache]
+# Cache TTS audio locally to avoid re-synthesis of the same text.
+# Saves API credits (ElevenLabs) and reduces latency on repeated playback.
+enabled = true
+# Maximum total cache size in MB. Oldest entries are evicted when exceeded.
+# Valid range: 10 to 2000.
+max_size_mb = 200
+# Maximum age of unused cache entries in days. Set to 0 to disable age limit.
+# Valid range: 0 to 365.
+max_age_days = 30
+# Maximum number of cached entries. Set to 0 for unlimited (bounded by size).
+# Valid range: 0 to 5000.
+max_entries = 500
+
+[tts_export]
+# TTS Audio Export: save generated audio to a user-chosen folder with
+# human-readable filenames. Useful for creating audio collections,
+# training material, or any batch TTS output you want to keep.
+enabled = false
+# Default export directory (empty = ask on first export).
+export_path = ""
+
+[claude_code]
+# Claude Code CLI integration (requires `claude` in PATH)
+# Sends voice input to Claude Code with full project context, CLAUDE.md, and tool use.
+# Install: npm install -g @anthropic-ai/claude-code
+enabled = false
+# Hotkey to trigger Claude Code voice input (default: "ctrl+alt+c")
+hotkey = "ctrl+alt+c"
+# Working directory for Claude Code (empty = VoicePaste's current directory)
+# Set this to your project root so Claude Code has access to CLAUDE.md and project files.
+# working_dir = "/path/to/your/project"
+# System prompt appended to Claude Code invocations (empty = none)
+# system_prompt = "Answer concisely in the same language as the question."
+# Response mode: how to deliver Claude's response
+# - "paste": paste at cursor position
+# - "speak": read aloud via TTS (requires TTS enabled)
+# - "both": speak and paste
+response_mode = "speak"
+# Timeout in seconds for Claude Code to respond (default: 120)
+timeout = 120
+# Skip permission prompts (--dangerously-skip-permissions).
+# Only enable on trusted systems where you don't want to maintain an allowlist.
+skip_permissions = false
+# Continue conversation: pass --continue on subsequent calls to maintain context.
+# When true, Claude remembers previous exchanges in the session.
+# Use "New Conversation" in the tray menu to start fresh.
+continue_conversation = false
 
 [logging]
 # Log level: "DEBUG", "INFO", "WARNING", or "ERROR" (default: "INFO")

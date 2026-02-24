@@ -66,12 +66,17 @@ def _apply_dark_title_bar(widget) -> None:
     DwmSetWindowAttribute with DWMWA_USE_IMMERSIVE_DARK_MODE (attribute 20)
     to request a dark title bar.
 
+    On Linux this is a no-op (GNOME/KDE handle title bar theming natively).
+
     Must be called AFTER the window has been created and update_idletasks()
     has run (so that a valid HWND exists).
 
     Args:
         widget: A tkinter Tk or Toplevel instance.
     """
+    import sys
+    if sys.platform != "win32":
+        return
     try:
         import ctypes
         hwnd = ctypes.windll.user32.GetParent(widget.winfo_id())
@@ -434,12 +439,14 @@ class SettingsDialog:
         tts_tab = ttk.Frame(self._notebook, padding=(10, 8))
         general_tab = ttk.Frame(self._notebook, padding=(10, 8))
         handsfree_tab = ttk.Frame(self._notebook, padding=(10, 8))
+        claude_code_tab = ttk.Frame(self._notebook, padding=(10, 8))
 
         self._notebook.add(transcription_tab, text="Transcription")
         self._notebook.add(summarization_tab, text="Summarization")
         self._notebook.add(tts_tab, text="Text-to-Speech")
         self._notebook.add(general_tab, text="General")
         self._notebook.add(handsfree_tab, text="Hands-Free")
+        self._notebook.add(claude_code_tab, text="Claude Code")
 
         # ---------------------------------------------------------------
         # Tab 1: Transcription
@@ -461,6 +468,11 @@ class SettingsDialog:
         # ---------------------------------------------------------------
         self._build_general_tab(general_tab)
         self._build_handsfree_tab(handsfree_tab)
+
+        # ---------------------------------------------------------------
+        # Tab 6: Claude Code
+        # ---------------------------------------------------------------
+        self._build_claude_code_tab(claude_code_tab)
 
         # === Error label (below notebook, hidden by default) ===
         self._error_label = ttk.Label(
@@ -515,6 +527,58 @@ class SettingsDialog:
         )
         self._backend_combo.pack(side=tk.LEFT, padx=(4, 0))
         self._backend_combo.bind("<<ComboboxSelected>>", self._on_backend_changed)
+
+        # Language selector row
+        lang_row = ttk.Frame(parent)
+        lang_row.pack(fill=tk.X, pady=(0, 4))
+
+        ttk.Label(lang_row, text="Language:", width=10, anchor=tk.W).pack(side=tk.LEFT)
+
+        from constants import SUPPORTED_LANGUAGES
+        self._lang_var = tk.StringVar()
+        self._lang_display_values = list(SUPPORTED_LANGUAGES.values())
+        self._lang_code_keys = list(SUPPORTED_LANGUAGES.keys())
+        self._lang_combo = ttk.Combobox(
+            lang_row,
+            textvariable=self._lang_var,
+            values=self._lang_display_values,
+            state="readonly",
+            width=35,
+        )
+        self._lang_combo.pack(side=tk.LEFT, padx=(4, 0))
+
+        lang_hint = ttk.Label(
+            lang_row,
+            text="\"Auto-detect\" lets Whisper identify the language automatically",
+            foreground="#999999",
+            font=("", 8),
+        )
+        lang_hint.pack(side=tk.LEFT, padx=(8, 0))
+
+        # Audio input device selector row
+        mic_row = ttk.Frame(parent)
+        mic_row.pack(fill=tk.X, pady=(0, 4))
+
+        ttk.Label(mic_row, text="Microphone:", width=10, anchor=tk.W).pack(side=tk.LEFT)
+
+        self._audio_device_var = tk.StringVar()
+        self._audio_device_combo = ttk.Combobox(
+            mic_row,
+            textvariable=self._audio_device_var,
+            state="readonly",
+            width=45,
+        )
+        self._audio_device_combo.pack(side=tk.LEFT, padx=(4, 0))
+
+        # Populate device list
+        self._audio_device_map: list[tuple[int | None, str]] = []
+        self._refresh_audio_devices()
+
+        refresh_btn = ttk.Button(
+            mic_row, text="Refresh", width=8,
+            command=self._refresh_audio_devices,
+        )
+        refresh_btn.pack(side=tk.LEFT, padx=(4, 0))
 
         # --- Cloud sub-frame (shown when backend = cloud) ---
         self._cloud_frame = ttk.Frame(parent)
@@ -645,6 +709,32 @@ class SettingsDialog:
         self._transcription_error = ttk.Label(
             parent, text="", foreground="#FF6B6B", font=("", 8)
         )
+
+    def _refresh_audio_devices(self) -> None:
+        """Query sounddevice for available input devices and populate the combo."""
+        try:
+            import sounddevice as sd
+            devices = sd.query_devices()
+        except Exception:
+            self._audio_device_map = [(None, "System Default")]
+            self._audio_device_combo["values"] = ["System Default"]
+            self._audio_device_var.set("System Default")
+            return
+
+        self._audio_device_map = [(None, "System Default")]
+        for i, dev in enumerate(devices):
+            if dev.get("max_input_channels", 0) > 0:
+                name = dev.get("name", f"Device {i}")
+                label = f"{name} (#{i})"
+                self._audio_device_map.append((i, label))
+
+        display_values = [label for _, label in self._audio_device_map]
+        self._audio_device_combo["values"] = display_values
+
+        # Preserve current selection if still valid
+        current = self._audio_device_var.get()
+        if current not in display_values:
+            self._audio_device_var.set("System Default")
 
     def _build_summarization_tab(self, parent: "ttk.Frame") -> None:
         """Build widgets for the Summarization tab.
@@ -985,6 +1075,19 @@ class SettingsDialog:
         )
         self._tts_progress_label.pack(side=tk.LEFT)
 
+        # TTS Speed row
+        tts_speed_row = ttk.Frame(self._tts_local_frame)
+        tts_speed_row.pack(fill=tk.X, pady=(4, 4))
+        ttk.Label(tts_speed_row, text="Speed:", width=10, anchor=tk.W).pack(side=tk.LEFT)
+        self._tts_speed_var = tk.StringVar(value="1.0")
+        ttk.Spinbox(
+            tts_speed_row, from_=0.5, to=2.0, increment=0.1, width=6,
+            textvariable=self._tts_speed_var,
+        ).pack(side=tk.LEFT, padx=(4, 0))
+        ttk.Label(tts_speed_row, text="(0.5 = slow, 1.0 = normal, 2.0 = fast)").pack(
+            side=tk.LEFT, padx=(4, 0)
+        )
+
         # Piper privacy hint
         tts_local_hint = ttk.Label(
             self._tts_local_frame,
@@ -1183,6 +1286,15 @@ class SettingsDialog:
         self._tts_ask_hotkey_label = ttk.Label(tts_ask_hotkey_row, text="", font=("", 9, "bold"))
         self._tts_ask_hotkey_label.pack(side=tk.LEFT, padx=(4, 0))
 
+        # Terminal Mode hotkey display (v1.3)
+        terminal_mode_row = ttk.Frame(parent)
+        terminal_mode_row.pack(fill=tk.X, pady=(0, 2))
+
+        ttk.Label(terminal_mode_row, text="Term. Mode:", width=10, anchor=tk.W).pack(side=tk.LEFT)
+        self._terminal_mode_hotkey_label = ttk.Label(
+            terminal_mode_row, text="", font=("", 9, "bold"))
+        self._terminal_mode_hotkey_label.pack(side=tk.LEFT, padx=(4, 0))
+
         hotkey_hint = ttk.Label(
             parent,
             text="Change in config.toml (requires restart)",
@@ -1266,9 +1378,26 @@ class SettingsDialog:
             variable=self._paste_auto_enter_var,
         ).pack(fill=tk.X, pady=(4, 0))
 
+        # Paste shortcut selection (Linux)
+        shortcut_row = ttk.Frame(parent)
+        shortcut_row.pack(fill=tk.X, pady=(6, 2))
+        ttk.Label(
+            shortcut_row, text="Paste shortcut:", anchor=tk.W
+        ).pack(side=tk.LEFT)
+        self._paste_shortcut_var = tk.StringVar()
+        self._paste_shortcut_combo = ttk.Combobox(
+            shortcut_row,
+            textvariable=self._paste_shortcut_var,
+            values=["Auto-detect", "Ctrl+V", "Ctrl+Shift+V"],
+            state="readonly",
+            width=16,
+        )
+        self._paste_shortcut_combo.pack(side=tk.LEFT, padx=(8, 0))
+
         paste_hint = ttk.Label(
             parent,
-            text="When confirmation is on, delay is ignored (Enter triggers paste).",
+            text="When confirmation is on, delay is ignored (Enter triggers paste).\n"
+                 "Paste shortcut: Auto detects terminals for Ctrl+Shift+V.",
             foreground="#999999",
             font=("", 8),
         )
@@ -1374,6 +1503,7 @@ class SettingsDialog:
                 "Ask AI + TTS (ask_tts)",
                 "Transcribe + Paste (summary)",
                 "Ask AI + Paste (prompt)",
+                "Claude Code (claude_code)",
             ],
             state="readonly",
             width=28,
@@ -1394,6 +1524,24 @@ class SettingsDialog:
             parent,
             text="How long to wait after you stop speaking before auto-stopping.\n"
                  "Increase for slow/thoughtful speech with pauses.",
+            foreground="#999999",
+            font=("", 8),
+        ).pack(fill=tk.X, pady=(0, 8))
+
+        # Silence threshold RMS
+        threshold_row = ttk.Frame(parent)
+        threshold_row.pack(fill=tk.X, pady=(0, 4))
+        ttk.Label(threshold_row, text="Silence threshold:", width=16, anchor=tk.W).pack(side=tk.LEFT)
+        self._hf_silence_threshold_var = tk.StringVar(value="0")
+        ttk.Spinbox(
+            threshold_row, from_=0, to=10000, increment=50, width=6,
+            textvariable=self._hf_silence_threshold_var,
+        ).pack(side=tk.LEFT, padx=(4, 0))
+        ttk.Label(threshold_row, text="RMS").pack(side=tk.LEFT, padx=(4, 0))
+
+        ttk.Label(
+            parent,
+            text="RMS threshold for silence. 0 = auto-calibrate from ambient noise.",
             foreground="#999999",
             font=("", 8),
         ).pack(fill=tk.X, pady=(0, 8))
@@ -1420,18 +1568,228 @@ class SettingsDialog:
         ).pack(side=tk.LEFT, padx=(4, 0))
         ttk.Label(cooldown_row, text="seconds").pack(side=tk.LEFT, padx=(4, 0))
 
+        # Wake word model size
+        model_row = ttk.Frame(parent)
+        model_row.pack(fill=tk.X, pady=(4, 4))
+        ttk.Label(model_row, text="Wake model:", width=16, anchor=tk.W).pack(side=tk.LEFT)
+        self._hf_wake_model_var = tk.StringVar(value="base")
+        ttk.Combobox(
+            model_row, textvariable=self._hf_wake_model_var,
+            values=["tiny", "base", "small"], state="readonly", width=8,
+        ).pack(side=tk.LEFT, padx=(4, 0))
+
+        ttk.Label(
+            parent,
+            text="tiny (~75 MB, fast, less accurate in noise)  |  "
+                 "base (~145 MB, recommended)  |  small (~480 MB, best accuracy)",
+            foreground="#999999",
+            font=("", 8),
+        ).pack(fill=tk.X, pady=(0, 4))
+
         ttk.Separator(parent, orient=tk.HORIZONTAL).pack(fill=tk.X, pady=(8, 8))
         ttk.Label(
             parent,
             text="Requirements:\n"
                  "- faster-whisper must be installed (Local STT build)\n"
-                 "- The 'tiny' Whisper model will be loaded for detection\n"
-                 "  (~75 MB RAM, minimal CPU when no speech detected)",
+                 "- The selected model will be downloaded on first use\n"
+                 "  (minimal CPU when no speech detected)",
             foreground="#999999",
             wraplength=480,
             font=("", 8),
             justify=tk.LEFT,
         ).pack(fill=tk.X)
+
+    def _build_claude_code_tab(self, parent: "ttk.Frame") -> None:
+        """Build the Claude Code tab UI (v1.2)."""
+        tk = self._tk
+        ttk = self._ttk
+
+        # Enable toggle
+        self._claude_code_enabled_var = tk.BooleanVar()
+        ttk.Checkbutton(
+            parent,
+            text="Enable Claude Code Integration",
+            variable=self._claude_code_enabled_var,
+        ).pack(fill=tk.X, pady=(0, 4))
+
+        # Status label
+        self._claude_code_status_var = tk.StringVar(value="Checking...")
+        status_row = ttk.Frame(parent)
+        status_row.pack(fill=tk.X, pady=(0, 8))
+        ttk.Label(status_row, text="Status:", width=16, anchor=tk.W).pack(side=tk.LEFT)
+        self._claude_code_status_label = ttk.Label(
+            status_row, textvariable=self._claude_code_status_var,
+        )
+        self._claude_code_status_label.pack(side=tk.LEFT, padx=(4, 0))
+
+        # Check CLI availability on tab build
+        try:
+            from claude_code import ClaudeCodeBackend
+            if ClaudeCodeBackend.is_available():
+                version = ClaudeCodeBackend.get_version() or "unknown version"
+                self._claude_code_status_var.set(f"Found: {version}")
+                self._claude_code_status_label.configure(foreground="#66BB6A")
+            else:
+                self._claude_code_status_var.set(
+                    "Not found. Install: npm i -g @anthropic-ai/claude-code"
+                )
+                self._claude_code_status_label.configure(foreground="#FF6B6B")
+        except Exception:
+            self._claude_code_status_var.set("Error checking CLI availability")
+            self._claude_code_status_label.configure(foreground="#FF6B6B")
+
+        ttk.Separator(parent, orient=tk.HORIZONTAL).pack(fill=tk.X, pady=(0, 8))
+
+        # Working directory
+        workdir_row = ttk.Frame(parent)
+        workdir_row.pack(fill=tk.X, pady=(0, 4))
+        ttk.Label(workdir_row, text="Working directory:", width=16, anchor=tk.W).pack(
+            side=tk.LEFT
+        )
+        self._claude_code_workdir_var = tk.StringVar()
+        ttk.Entry(
+            workdir_row, textvariable=self._claude_code_workdir_var, width=30
+        ).pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(4, 4))
+        ttk.Button(
+            workdir_row, text="Browse...", width=8,
+            command=self._browse_claude_code_workdir,
+        ).pack(side=tk.LEFT)
+
+        ttk.Label(
+            parent,
+            text="The project directory where Claude Code runs.\n"
+                 "Claude reads CLAUDE.md and project files from this directory.\n"
+                 "Leave empty to use VoicePaste's current directory.",
+            foreground="#999999",
+            font=("", 8),
+        ).pack(fill=tk.X, pady=(0, 8))
+
+        # System prompt
+        ttk.Label(parent, text="System prompt (optional):", anchor=tk.W).pack(
+            fill=tk.X, pady=(0, 2)
+        )
+        prompt_frame = ttk.Frame(parent)
+        prompt_frame.pack(fill=tk.X, pady=(0, 8))
+        self._claude_code_prompt_text = tk.Text(
+            prompt_frame, height=3, width=50, wrap=tk.WORD,
+        )
+        self._claude_code_prompt_text.pack(fill=tk.X)
+
+        ttk.Separator(parent, orient=tk.HORIZONTAL).pack(fill=tk.X, pady=(0, 8))
+
+        # Response mode
+        mode_row = ttk.Frame(parent)
+        mode_row.pack(fill=tk.X, pady=(0, 4))
+        ttk.Label(mode_row, text="Response mode:", width=16, anchor=tk.W).pack(
+            side=tk.LEFT
+        )
+        self._claude_code_mode_var = tk.StringVar()
+        ttk.Combobox(
+            mode_row,
+            textvariable=self._claude_code_mode_var,
+            values=["Paste", "Speak", "Both"],
+            state="readonly",
+            width=12,
+        ).pack(side=tk.LEFT, padx=(4, 0))
+
+        ttk.Label(
+            parent,
+            text="Paste = insert at cursor, Speak = read aloud via TTS, Both = speak + paste.",
+            foreground="#999999",
+            font=("", 8),
+        ).pack(fill=tk.X, pady=(0, 8))
+
+        # Timeout
+        timeout_row = ttk.Frame(parent)
+        timeout_row.pack(fill=tk.X, pady=(0, 4))
+        ttk.Label(timeout_row, text="Timeout:", width=16, anchor=tk.W).pack(
+            side=tk.LEFT
+        )
+        self._claude_code_timeout_var = tk.StringVar(value="120")
+        ttk.Spinbox(
+            timeout_row, from_=10, to=600, increment=10, width=6,
+            textvariable=self._claude_code_timeout_var,
+        ).pack(side=tk.LEFT, padx=(4, 0))
+        ttk.Label(timeout_row, text="seconds").pack(side=tk.LEFT, padx=(4, 0))
+
+        # Skip permissions toggle
+        self._claude_code_skip_perms_var = tk.BooleanVar()
+        ttk.Checkbutton(
+            parent,
+            text="Skip permission prompts (--dangerously-skip-permissions)",
+            variable=self._claude_code_skip_perms_var,
+        ).pack(fill=tk.X, pady=(4, 0))
+        ttk.Label(
+            parent,
+            text="Skips the tool-use allowlist. Only enable on trusted systems.",
+            foreground="#FF9966",
+            font=("", 8),
+        ).pack(fill=tk.X, pady=(0, 8))
+
+        # Continue conversation toggle
+        self._claude_code_continue_var = tk.BooleanVar()
+        ttk.Checkbutton(
+            parent,
+            text="Continue conversation (--continue)",
+            variable=self._claude_code_continue_var,
+        ).pack(fill=tk.X, pady=(4, 0))
+        ttk.Label(
+            parent,
+            text="Subsequent calls maintain context. Use tray menu to start fresh.",
+            foreground="#888888",
+            font=("", 8),
+        ).pack(fill=tk.X, pady=(0, 8))
+
+        # Hotkey display (read-only)
+        hotkey_row = ttk.Frame(parent)
+        hotkey_row.pack(fill=tk.X, pady=(4, 4))
+        ttk.Label(hotkey_row, text="Hotkey:", width=16, anchor=tk.W).pack(
+            side=tk.LEFT
+        )
+        self._claude_code_hotkey_label = ttk.Label(
+            hotkey_row, text=self._config.claude_code_hotkey,
+            foreground="#AAAAAA",
+        )
+        self._claude_code_hotkey_label.pack(side=tk.LEFT, padx=(4, 0))
+        ttk.Label(
+            hotkey_row, text="(change in config.toml)",
+            foreground="#666666", font=("", 8),
+        ).pack(side=tk.LEFT, padx=(8, 0))
+
+        ttk.Separator(parent, orient=tk.HORIZONTAL).pack(fill=tk.X, pady=(8, 8))
+
+        # Test button
+        ttk.Button(
+            parent, text="Test Connection", width=16,
+            command=self._test_claude_code,
+        ).pack(anchor=tk.W)
+
+    def _browse_claude_code_workdir(self) -> None:
+        """Open a directory chooser for Claude Code working directory."""
+        from tkinter import filedialog
+        directory = filedialog.askdirectory(
+            title="Select Claude Code Working Directory",
+            initialdir=self._claude_code_workdir_var.get() or None,
+        )
+        if directory:
+            self._claude_code_workdir_var.set(directory)
+
+    def _test_claude_code(self) -> None:
+        """Test Claude Code CLI availability and show result."""
+        try:
+            from claude_code import ClaudeCodeBackend
+            if ClaudeCodeBackend.is_available():
+                version = ClaudeCodeBackend.get_version() or "unknown version"
+                self._claude_code_status_var.set(f"Found: {version}")
+                self._claude_code_status_label.configure(foreground="#66BB6A")
+            else:
+                self._claude_code_status_var.set(
+                    "Not found. Install: npm i -g @anthropic-ai/claude-code"
+                )
+                self._claude_code_status_label.configure(foreground="#FF6B6B")
+        except Exception as e:
+            self._claude_code_status_var.set(f"Error: {e}")
+            self._claude_code_status_label.configure(foreground="#FF6B6B")
 
     def _populate_from_config(self) -> None:
         """Fill widget values from current config and keyring."""
@@ -1442,6 +1800,29 @@ class SettingsDialog:
             self._backend_var.set("Local (faster-whisper, offline)")
         else:
             self._backend_var.set("Cloud (OpenAI Whisper API)")
+
+        # Transcription language
+        from constants import SUPPORTED_LANGUAGES
+        lang_code = config.transcription_language
+        if lang_code in SUPPORTED_LANGUAGES:
+            self._lang_var.set(SUPPORTED_LANGUAGES[lang_code])
+        else:
+            # Unknown language code -- show it directly
+            self._lang_var.set(lang_code)
+
+        # Audio input device
+        device_idx = config.audio_device_index
+        if device_idx is not None:
+            # Find the matching entry in the device map
+            for idx, label in self._audio_device_map:
+                if idx == device_idx:
+                    self._audio_device_var.set(label)
+                    break
+            else:
+                # Device index not found — might be unplugged; show as default
+                self._audio_device_var.set("System Default")
+        else:
+            self._audio_device_var.set("System Default")
 
         # OpenAI API Key
         if config.openai_api_key:
@@ -1563,6 +1944,9 @@ class SettingsDialog:
                 PIPER_VOICE_MODELS[first_key]["label"]
             )
 
+        # TTS speed
+        self._tts_speed_var.set(str(config.tts_speed))
+
         # Update Piper model download status
         self._update_tts_model_status()
 
@@ -1588,6 +1972,7 @@ class SettingsDialog:
         self._prompt_hotkey_label.config(text=config.prompt_hotkey)
         self._tts_hotkey_label.config(text=config.tts_hotkey)
         self._tts_ask_hotkey_label.config(text=config.tts_ask_hotkey)
+        self._terminal_mode_hotkey_label.config(text=config.terminal_mode_hotkey)
 
         # Audio cues
         self._audio_cues_var.set(config.audio_cues_enabled)
@@ -1597,6 +1982,15 @@ class SettingsDialog:
         self._paste_delay_var.set(str(config.paste_delay_seconds))
         self._paste_timeout_var.set(str(config.paste_confirmation_timeout))
         self._paste_auto_enter_var.set(config.paste_auto_enter)
+        # Paste shortcut display mapping
+        _shortcut_display_map = {
+            "auto": "Auto-detect",
+            "ctrl+v": "Ctrl+V",
+            "ctrl+shift+v": "Ctrl+Shift+V",
+        }
+        self._paste_shortcut_var.set(
+            _shortcut_display_map.get(config.paste_shortcut, "Auto-detect")
+        )
         self._on_paste_confirm_toggled()
 
         # v0.9: API
@@ -1618,13 +2012,30 @@ class SettingsDialog:
             "ask_tts": "Ask AI + TTS (ask_tts)",
             "summary": "Transcribe + Paste (summary)",
             "prompt": "Ask AI + Paste (prompt)",
+            "claude_code": "Claude Code (claude_code)",
         }
         self._handsfree_pipeline_var.set(
             _pipeline_display.get(config.handsfree_pipeline, "Ask AI + TTS (ask_tts)")
         )
         self._silence_timeout_var.set(str(config.silence_timeout_seconds))
+        self._hf_silence_threshold_var.set(str(int(config.handsfree_silence_threshold_rms)))
         self._hf_max_recording_var.set(str(config.handsfree_max_recording_seconds))
         self._hf_cooldown_var.set(str(config.handsfree_cooldown_seconds))
+        self._hf_wake_model_var.set(config.handsfree_wake_model_size)
+
+        # v1.2: Claude Code tab
+        self._claude_code_enabled_var.set(config.claude_code_enabled)
+        self._claude_code_workdir_var.set(config.claude_code_working_dir)
+        self._claude_code_prompt_text.delete("1.0", self._tk.END)
+        if config.claude_code_system_prompt:
+            self._claude_code_prompt_text.insert("1.0", config.claude_code_system_prompt)
+        _mode_display = {"paste": "Paste", "speak": "Speak", "both": "Both"}
+        self._claude_code_mode_var.set(
+            _mode_display.get(config.claude_code_response_mode, "Speak")
+        )
+        self._claude_code_timeout_var.set(str(config.claude_code_timeout))
+        self._claude_code_skip_perms_var.set(config.claude_code_skip_permissions)
+        self._claude_code_continue_var.set(config.claude_code_continue_conversation)
 
         # Show/hide backend sub-frames
         self._update_backend_ui()
@@ -2151,18 +2562,13 @@ class SettingsDialog:
     def _get_tts_cache_dir(self) -> "Path":
         """Return the TTS cache directory path.
 
-        Uses the same logic as TTSAudioCache to locate the cache directory
-        at %LOCALAPPDATA%\\VoicePaste\\cache\\tts.
+        Uses platform_impl.get_cache_dir() for cross-platform support.
 
         Returns:
             Path to the TTS cache directory.
         """
-        import os
-        from pathlib import Path
-        local_appdata = os.environ.get("LOCALAPPDATA", "")
-        if not local_appdata:
-            local_appdata = str(Path.home() / "AppData" / "Local")
-        return Path(local_appdata) / "VoicePaste" / "cache" / "tts"
+        from platform_impl import get_cache_dir as _platform_cache_dir
+        return _platform_cache_dir() / "cache" / "tts"
 
     def _refresh_tts_cache_stats(self) -> None:
         """Read TTS cache stats from disk and update the usage label.
@@ -2240,16 +2646,17 @@ class SettingsDialog:
             )
 
     def _on_tts_cache_open_folder(self) -> None:
-        """Open the TTS cache folder in Windows Explorer.
-
-        Creates the directory if it does not exist, then opens it using
-        os.startfile (Windows-only).
-        """
+        """Open the TTS cache folder in the system file manager."""
         try:
             cache_dir = self._get_tts_cache_dir()
             cache_dir.mkdir(parents=True, exist_ok=True)
             import os
-            os.startfile(str(cache_dir))
+            import sys
+            if sys.platform == "win32":
+                os.startfile(str(cache_dir))
+            else:
+                import subprocess
+                subprocess.Popen(["xdg-open", str(cache_dir)])
         except Exception as e:
             logger.warning("Failed to open TTS cache folder: %s", e)
 
@@ -2678,6 +3085,28 @@ class SettingsDialog:
             changed_fields["stt_backend"] = new_backend
             config.stt_backend = new_backend
 
+        # Transcription language
+        lang_display = self._lang_var.get()
+        try:
+            lang_idx = self._lang_display_values.index(lang_display)
+            new_language = self._lang_code_keys[lang_idx]
+        except (ValueError, IndexError):
+            new_language = lang_display  # Direct code if not in display list
+        if new_language != config.transcription_language:
+            changed_fields["transcription_language"] = new_language
+            config.transcription_language = new_language
+
+        # Audio input device
+        device_label = self._audio_device_var.get()
+        new_device_index = None  # default
+        for idx, label in self._audio_device_map:
+            if label == device_label:
+                new_device_index = idx
+                break
+        if new_device_index != config.audio_device_index:
+            changed_fields["audio_device_index"] = new_device_index
+            config.audio_device_index = new_device_index
+
         # v0.4: Local STT fields
         new_model_size = self._get_selected_model_key()
         if new_model_size != config.local_model_size:
@@ -2811,6 +3240,16 @@ class SettingsDialog:
             changed_fields["tts_local_voice"] = new_tts_local_voice
             config.tts_local_voice = new_tts_local_voice
 
+        # TTS speed
+        try:
+            new_tts_speed = float(self._tts_speed_var.get())
+            new_tts_speed = max(0.5, min(new_tts_speed, 2.0))
+        except (ValueError, TypeError):
+            new_tts_speed = config.tts_speed
+        if new_tts_speed != config.tts_speed:
+            changed_fields["tts_speed"] = new_tts_speed
+            config.tts_speed = new_tts_speed
+
         # TTS Cache settings
         new_cache_enabled = self._tts_cache_enabled_var.get()
         if new_cache_enabled != config.tts_cache_enabled:
@@ -2890,6 +3329,19 @@ class SettingsDialog:
             changed_fields["paste_auto_enter"] = new_paste_auto_enter
             config.paste_auto_enter = new_paste_auto_enter
 
+        # Paste shortcut
+        _shortcut_save_map = {
+            "Auto-detect": "auto",
+            "Ctrl+V": "ctrl+v",
+            "Ctrl+Shift+V": "ctrl+shift+v",
+        }
+        new_paste_shortcut = _shortcut_save_map.get(
+            self._paste_shortcut_var.get(), "auto"
+        )
+        if new_paste_shortcut != config.paste_shortcut:
+            changed_fields["paste_shortcut"] = new_paste_shortcut
+            config.paste_shortcut = new_paste_shortcut
+
         # v0.9: API
         new_api_enabled = self._api_enabled_var.get()
         if new_api_enabled != config.api_enabled:
@@ -2934,6 +3386,7 @@ class SettingsDialog:
             "Ask AI + TTS (ask_tts)": "ask_tts",
             "Transcribe + Paste (summary)": "summary",
             "Ask AI + Paste (prompt)": "prompt",
+            "Claude Code (claude_code)": "claude_code",
         }
         new_pipeline = _pipeline_save_map.get(self._handsfree_pipeline_var.get(), "ask_tts")
         if new_pipeline != config.handsfree_pipeline:
@@ -2948,6 +3401,20 @@ class SettingsDialog:
         if new_silence_timeout != config.silence_timeout_seconds:
             changed_fields["silence_timeout_seconds"] = new_silence_timeout
             config.silence_timeout_seconds = new_silence_timeout
+
+        try:
+            new_silence_threshold = float(self._hf_silence_threshold_var.get())
+            new_silence_threshold = max(0.0, min(new_silence_threshold, 10000.0))
+        except (ValueError, TypeError):
+            new_silence_threshold = config.handsfree_silence_threshold_rms
+        if new_silence_threshold != config.handsfree_silence_threshold_rms:
+            changed_fields["handsfree_silence_threshold_rms"] = new_silence_threshold
+            config.handsfree_silence_threshold_rms = new_silence_threshold
+
+        new_wake_model = self._hf_wake_model_var.get().strip().lower()
+        if new_wake_model in ("tiny", "base", "small") and new_wake_model != config.handsfree_wake_model_size:
+            changed_fields["handsfree_wake_model_size"] = new_wake_model
+            config.handsfree_wake_model_size = new_wake_model
 
         try:
             new_hf_max = int(float(self._hf_max_recording_var.get()))
@@ -2966,6 +3433,47 @@ class SettingsDialog:
         if new_cooldown != config.handsfree_cooldown_seconds:
             changed_fields["handsfree_cooldown_seconds"] = new_cooldown
             config.handsfree_cooldown_seconds = new_cooldown
+
+        # v1.2: Claude Code
+        new_cc_enabled = self._claude_code_enabled_var.get()
+        if new_cc_enabled != config.claude_code_enabled:
+            changed_fields["claude_code_enabled"] = new_cc_enabled
+            config.claude_code_enabled = new_cc_enabled
+
+        new_cc_workdir = self._claude_code_workdir_var.get().strip()
+        if new_cc_workdir != config.claude_code_working_dir:
+            changed_fields["claude_code_working_dir"] = new_cc_workdir
+            config.claude_code_working_dir = new_cc_workdir
+
+        new_cc_prompt = self._claude_code_prompt_text.get("1.0", self._tk.END).strip()
+        if new_cc_prompt != config.claude_code_system_prompt:
+            changed_fields["claude_code_system_prompt"] = new_cc_prompt
+            config.claude_code_system_prompt = new_cc_prompt
+
+        _mode_save_map = {"Paste": "paste", "Speak": "speak", "Both": "both"}
+        new_cc_mode = _mode_save_map.get(self._claude_code_mode_var.get(), "speak")
+        if new_cc_mode != config.claude_code_response_mode:
+            changed_fields["claude_code_response_mode"] = new_cc_mode
+            config.claude_code_response_mode = new_cc_mode
+
+        try:
+            new_cc_timeout = int(self._claude_code_timeout_var.get())
+            new_cc_timeout = max(10, min(new_cc_timeout, 600))
+        except (ValueError, TypeError):
+            new_cc_timeout = config.claude_code_timeout
+        if new_cc_timeout != config.claude_code_timeout:
+            changed_fields["claude_code_timeout"] = new_cc_timeout
+            config.claude_code_timeout = new_cc_timeout
+
+        new_cc_skip_perms = self._claude_code_skip_perms_var.get()
+        if new_cc_skip_perms != config.claude_code_skip_permissions:
+            changed_fields["claude_code_skip_permissions"] = new_cc_skip_perms
+            config.claude_code_skip_permissions = new_cc_skip_perms
+
+        new_cc_continue = self._claude_code_continue_var.get()
+        if new_cc_continue != config.claude_code_continue_conversation:
+            changed_fields["claude_code_continue_conversation"] = new_cc_continue
+            config.claude_code_continue_conversation = new_cc_continue
 
         # Save non-secret fields to config.toml
         config.save_to_toml()

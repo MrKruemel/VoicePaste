@@ -1,4 +1,4 @@
-"""Configuration loading, validation, and persistence for the Voice-to-Summary Paste Tool.
+"""Configuration loading, validation, and persistence for VoicePaste.
 
 Reads config.toml from the application directory. Creates a template if missing.
 v0.3: Mutable AppConfig, keyring integration, migration, save_to_toml(),
@@ -15,9 +15,25 @@ from pathlib import Path
 from typing import Optional
 
 from constants import (
+    CLAUDE_CODE_RESPONSE_MODES,
+    DEFAULT_AUDIO_DEVICE_INDEX,
+    DEFAULT_CLAUDE_CODE_CONTINUE_CONVERSATION,
+    DEFAULT_CLAUDE_CODE_ENABLED,
+    DEFAULT_TERMINAL_MODE_HOTKEY,
+    DEFAULT_CLAUDE_CODE_HOTKEY,
+    DEFAULT_CLAUDE_CODE_RESPONSE_MODE,
+    DEFAULT_CLAUDE_CODE_SKIP_PERMISSIONS,
+    DEFAULT_CLAUDE_CODE_SYSTEM_PROMPT,
+    DEFAULT_CLAUDE_CODE_TIMEOUT,
+    DEFAULT_CLAUDE_CODE_WORKING_DIR,
     DEFAULT_HANDSFREE_COOLDOWN_SECONDS,
     DEFAULT_HANDSFREE_ENABLED,
     DEFAULT_HANDSFREE_MAX_RECORDING_SECONDS,
+    DEFAULT_HANDSFREE_SILENCE_THRESHOLD_RMS,
+    DEFAULT_HANDSFREE_WAKE_MODEL_SIZE,
+    HANDSFREE_WAKE_MODEL_SIZES,
+    DEFAULT_TRANSCRIPTION_LANGUAGE,
+    SUPPORTED_LANGUAGES,
     DEFAULT_HANDSFREE_PIPELINE,
     DEFAULT_HOTKEY,
     DEFAULT_API_ENABLED,
@@ -26,6 +42,7 @@ from constants import (
     DEFAULT_PASTE_CONFIRM,
     DEFAULT_PASTE_CONFIRMATION_TIMEOUT,
     DEFAULT_PASTE_DELAY_SECONDS,
+    DEFAULT_PASTE_SHORTCUT,
     DEFAULT_PIPER_VOICE,
     DEFAULT_PROMPT_HOTKEY,
     DEFAULT_SILENCE_TIMEOUT_SECONDS,
@@ -63,6 +80,7 @@ from constants import (
     OPENAI_DEFAULT_BASE_URL,
     OPENROUTER_DEFAULT_BASE_URL,
     OPENROUTER_DEFAULT_MODEL,
+    PASTE_SHORTCUT_OPTIONS,
     PIPER_VOICE_MODELS,
     STT_BACKENDS,
     SUMMARIZE_MODEL,
@@ -74,7 +92,7 @@ logger = logging.getLogger(__name__)
 
 # Template content for config.toml when it does not exist (v0.3)
 CONFIG_TEMPLATE = """\
-# Voice-to-Summary Paste Tool Configuration
+# VoicePaste Configuration
 # See README.md for full documentation of all options.
 
 # NOTE: API keys are stored securely in Windows Credential Manager.
@@ -95,10 +113,20 @@ combination = "ctrl+alt+r"
 # Voice Prompt hotkey: record speech, send as prompt to LLM, paste answer (default: "ctrl+alt+a")
 prompt_combination = "ctrl+alt+a"
 
+# Terminal Mode toggle: switch paste between Ctrl+V (GUI) and Ctrl+Shift+V (terminal)
+# Useful on Wayland where auto-detection of the focused window is unreliable.
+# terminal_mode_combination = "ctrl+alt+m"
+
 [transcription]
 # Backend: "cloud" (OpenAI Whisper API) or "local" (faster-whisper, offline)
 # Cloud requires an OpenAI API key. Local requires a downloaded Whisper model.
 backend = "cloud"
+# Transcription language: "auto" (let Whisper detect) or a language code
+# e.g. "de" (German), "en" (English), "fr" (French), "es" (Spanish)
+language = "de"
+# Audio input device index (-1 = system default microphone)
+# Use Settings dialog to select from available devices.
+audio_device_index = -1
 # Local STT model size (only used when backend = "local")
 # Options: tiny (~75MB, fast), base (~145MB, good quality),
 #          small (~480MB, better), medium (~1.5GB), large-v3 (~3GB)
@@ -137,6 +165,10 @@ delay_seconds = 0.0
 confirmation_timeout_seconds = 30.0
 # Automatically press Enter after pasting (e.g. to run a command in terminal)
 auto_enter = false
+# Paste shortcut: "auto" (detect terminal vs normal app), "ctrl+v", or "ctrl+shift+v"
+# "auto" uses GNOME Shell D-Bus on Wayland, xdotool/xprop on X11.
+# Override to "ctrl+shift+v" if auto-detection fails (e.g. non-GNOME Wayland).
+paste_shortcut = "auto"
 
 [tts_cache]
 # Cache TTS audio locally to avoid re-synthesis of the same text.
@@ -160,6 +192,7 @@ export_path = ""
 [feedback]
 # Play audio cues on recording start/stop (default: true)
 audio_cues = true
+
 [logging]
 # Log level: DEBUG, INFO, WARNING, ERROR
 level = "INFO"
@@ -219,6 +252,8 @@ class AppConfig:
 
     # --- v0.4: Local STT fields ---
     stt_backend: str = DEFAULT_STT_BACKEND
+    transcription_language: str = DEFAULT_TRANSCRIPTION_LANGUAGE
+    audio_device_index: Optional[int] = DEFAULT_AUDIO_DEVICE_INDEX
     local_model_size: str = LOCAL_STT_DEFAULT_MODEL_SIZE
     local_device: str = LOCAL_STT_DEFAULT_DEVICE
     local_compute_type: str = LOCAL_STT_DEFAULT_COMPUTE_TYPE
@@ -236,6 +271,7 @@ class AppConfig:
 
     # --- v0.7: Local TTS (Piper) fields ---
     tts_local_voice: str = DEFAULT_PIPER_VOICE
+    tts_speed: float = 1.0  # Piper length_scale: <1.0 = faster, >1.0 = slower
 
     # --- v0.9: HTTP API ---
     api_enabled: bool = DEFAULT_API_ENABLED
@@ -246,6 +282,7 @@ class AppConfig:
     paste_delay_seconds: float = DEFAULT_PASTE_DELAY_SECONDS
     paste_confirmation_timeout: float = DEFAULT_PASTE_CONFIRMATION_TIMEOUT
     paste_auto_enter: bool = DEFAULT_PASTE_AUTO_ENTER
+    paste_shortcut: str = DEFAULT_PASTE_SHORTCUT
 
     # --- v0.9: Hands-Free Mode ---
     handsfree_enabled: bool = DEFAULT_HANDSFREE_ENABLED
@@ -255,6 +292,8 @@ class AppConfig:
     handsfree_max_recording_seconds: int = DEFAULT_HANDSFREE_MAX_RECORDING_SECONDS
     handsfree_pipeline: str = DEFAULT_HANDSFREE_PIPELINE
     handsfree_cooldown_seconds: float = DEFAULT_HANDSFREE_COOLDOWN_SECONDS
+    handsfree_silence_threshold_rms: float = DEFAULT_HANDSFREE_SILENCE_THRESHOLD_RMS
+    handsfree_wake_model_size: str = DEFAULT_HANDSFREE_WAKE_MODEL_SIZE
 
     # --- v1.0: TTS Audio Cache ---
     tts_cache_enabled: bool = DEFAULT_TTS_CACHE_ENABLED
@@ -265,6 +304,19 @@ class AppConfig:
     # --- v1.0: TTS Audio Export ---
     tts_export_enabled: bool = DEFAULT_TTS_EXPORT_ENABLED
     tts_export_path: str = DEFAULT_TTS_EXPORT_PATH
+
+    # --- v1.3: Terminal Mode toggle hotkey ---
+    terminal_mode_hotkey: str = DEFAULT_TERMINAL_MODE_HOTKEY
+
+    # --- v1.2: Claude Code CLI integration ---
+    claude_code_enabled: bool = DEFAULT_CLAUDE_CODE_ENABLED
+    claude_code_hotkey: str = DEFAULT_CLAUDE_CODE_HOTKEY
+    claude_code_working_dir: str = DEFAULT_CLAUDE_CODE_WORKING_DIR
+    claude_code_system_prompt: str = DEFAULT_CLAUDE_CODE_SYSTEM_PROMPT
+    claude_code_timeout: int = DEFAULT_CLAUDE_CODE_TIMEOUT
+    claude_code_response_mode: str = DEFAULT_CLAUDE_CODE_RESPONSE_MODE
+    claude_code_skip_permissions: bool = DEFAULT_CLAUDE_CODE_SKIP_PERMISSIONS
+    claude_code_continue_conversation: bool = DEFAULT_CLAUDE_CODE_CONTINUE_CONVERSATION
 
     @property
     def config_path(self) -> Path:
@@ -365,10 +417,16 @@ prompt_combination = "{esc(self.prompt_hotkey)}"
 # TTS hotkeys (v0.6): read clipboard aloud / ask AI + TTS
 tts_combination = "{esc(self.tts_hotkey)}"
 tts_ask_combination = "{esc(self.tts_ask_hotkey)}"
+# Terminal Mode toggle: switch paste shortcut between Ctrl+V and Ctrl+Shift+V
+terminal_mode_combination = "{esc(self.terminal_mode_hotkey)}"
 
 [transcription]
 # Backend: "cloud" (OpenAI Whisper API) or "local" (faster-whisper, offline)
 backend = "{esc(self.stt_backend)}"
+# Transcription language: "auto" or a language code (de, en, fr, es, ...)
+language = "{esc(self.transcription_language)}"
+# Audio input device index (empty or -1 = system default microphone)
+audio_device_index = {self.audio_device_index if self.audio_device_index is not None else -1}
 # Local model size: tiny, base, small, medium, large-v2, large-v3
 model_size = "{esc(self.local_model_size)}"
 # Device: cpu, cuda, auto
@@ -397,6 +455,8 @@ output_format = "{esc(self.tts_output_format)}"
 # Voice model name. Available: de_DE-thorsten-medium, de_DE-thorsten-high,
 # en_US-lessac-medium, en_US-amy-medium. Download via Settings dialog.
 local_voice = "{esc(self.tts_local_voice)}"
+# Speech speed: 0.5 = double speed, 1.0 = normal, 2.0 = half speed
+speed = {self.tts_speed}
 
 [paste]
 # Confirm before pasting: show a preview notification and wait for Enter.
@@ -408,6 +468,9 @@ delay_seconds = {self.paste_delay_seconds}
 confirmation_timeout_seconds = {self.paste_confirmation_timeout}
 # Automatically press Enter after pasting (e.g. to execute a command in a terminal).
 auto_enter = {str(self.paste_auto_enter).lower()}
+# Paste shortcut: "auto" (detect terminal), "ctrl+v", or "ctrl+shift+v".
+# On Wayland, auto-detection uses GNOME Shell D-Bus. Override if detection fails.
+paste_shortcut = "{esc(self.paste_shortcut)}"
 
 [handsfree]
 # Hands-Free Mode: continuous wake word detection via STT keyword spotting.
@@ -421,10 +484,16 @@ match_mode = "{esc(self.wake_phrase_match_mode)}"
 silence_timeout = {self.silence_timeout_seconds}
 # Maximum recording duration in seconds (hands-free mode)
 max_recording_seconds = {self.handsfree_max_recording_seconds}
-# Pipeline: "ask_tts" (ask AI + speak), "summary" (transcribe + paste), "prompt" (ask AI + paste)
+# Pipeline: "ask_tts" (ask AI + speak), "summary" (transcribe + paste), "prompt" (ask AI + paste), "claude_code" (Claude Code CLI)
 pipeline = "{esc(self.handsfree_pipeline)}"
 # Cooldown in seconds after wake word detection (prevents re-trigger)
 cooldown_seconds = {self.handsfree_cooldown_seconds}
+# Silence detection threshold (RMS energy, int16 scale).
+# 0 = adaptive (auto-calibrate from ambient noise at recording start).
+# Set to a fixed value (e.g. 500-1000) if adaptive detection misbehaves.
+silence_threshold_rms = {self.handsfree_silence_threshold_rms}
+# Wake word STT model size: "tiny" (~75MB, fast), "base" (~145MB, better noise handling), "small" (~480MB)
+wake_model_size = "{esc(self.handsfree_wake_model_size)}"
 
 [tts_cache]
 # Cache TTS audio locally to avoid re-synthesis of the same text.
@@ -438,6 +507,17 @@ max_entries = {self.tts_cache_max_entries}
 enabled = {str(self.tts_export_enabled).lower()}
 export_path = "{esc(self.tts_export_path)}"
 
+[claude_code]
+# Claude Code CLI integration (requires `claude` in PATH)
+enabled = {str(self.claude_code_enabled).lower()}
+hotkey = "{esc(self.claude_code_hotkey)}"
+working_dir = "{esc(self.claude_code_working_dir)}"
+system_prompt = "{esc(self.claude_code_system_prompt)}"
+response_mode = "{esc(self.claude_code_response_mode)}"
+timeout = {self.claude_code_timeout}
+skip_permissions = {str(self.claude_code_skip_permissions).lower()}
+continue_conversation = {str(self.claude_code_continue_conversation).lower()}
+
 [feedback]
 audio_cues = {str(self.audio_cues_enabled).lower()}
 
@@ -450,6 +530,10 @@ level = "{esc(self.log_level)}"
             tmp_path = config_path.with_suffix(".toml.tmp")
             tmp_path.write_text(content, encoding="utf-8")
             tmp_path.replace(config_path)
+            # SEC-069: Restrict config file permissions on Linux (0600)
+            if sys.platform != "win32":
+                import stat
+                os.chmod(config_path, stat.S_IRUSR | stat.S_IWUSR)
             logger.info("Configuration saved to %s", config_path)
             return True
         except OSError as e:
@@ -518,6 +602,10 @@ def load_config() -> Optional[AppConfig]:
         )
         try:
             config_path.write_text(CONFIG_TEMPLATE, encoding="utf-8")
+            # SEC-069: Restrict config file permissions on Linux (0600)
+            if sys.platform != "win32":
+                import stat
+                os.chmod(config_path, stat.S_IRUSR | stat.S_IWUSR)
             logger.info("Created config.toml template at %s.", config_path)
         except OSError as e:
             logger.error("Failed to create config.toml template: %s", e)
@@ -580,6 +668,28 @@ def load_config() -> Optional[AppConfig]:
         )
         stt_backend = DEFAULT_STT_BACKEND
 
+    transcription_language = transcription_section.get(
+        "language", DEFAULT_TRANSCRIPTION_LANGUAGE
+    )
+    # Accept any non-empty string (Whisper supports many language codes beyond
+    # our SUPPORTED_LANGUAGES display list), but warn if not recognized.
+    if not transcription_language or not isinstance(transcription_language, str):
+        logger.warning(
+            "Invalid transcription language '%s'. Falling back to '%s'.",
+            transcription_language,
+            DEFAULT_TRANSCRIPTION_LANGUAGE,
+        )
+        transcription_language = DEFAULT_TRANSCRIPTION_LANGUAGE
+
+    # Audio input device index
+    _raw_device_idx = transcription_section.get("audio_device_index", -1)
+    try:
+        audio_device_index: Optional[int] = int(_raw_device_idx)
+        if audio_device_index is not None and audio_device_index < 0:
+            audio_device_index = None  # -1 or negative = system default
+    except (ValueError, TypeError):
+        audio_device_index = None
+
     local_model_size = transcription_section.get("model_size", LOCAL_STT_DEFAULT_MODEL_SIZE)
     if local_model_size not in LOCAL_MODEL_SIZES:
         logger.warning(
@@ -634,12 +744,13 @@ def load_config() -> Optional[AppConfig]:
                 "enabled" if vad_filter else "disabled",
             )
 
-    # Validate hotkey strings using the keyboard library
+    # Validate hotkey strings using the platform-aware parser from hotkey module
+    from hotkey import _parse_hotkey
+
     if hotkey and hotkey.strip():
         hotkey = hotkey.strip()
         try:
-            import keyboard as _kb
-            _kb.parse_hotkey(hotkey)
+            _parse_hotkey(hotkey)
             logger.info("Hotkey configured: '%s'", hotkey)
         except Exception as e:
             logger.warning(
@@ -656,8 +767,7 @@ def load_config() -> Optional[AppConfig]:
     if prompt_hotkey and prompt_hotkey.strip():
         prompt_hotkey = prompt_hotkey.strip()
         try:
-            import keyboard as _kb
-            _kb.parse_hotkey(prompt_hotkey)
+            _parse_hotkey(prompt_hotkey)
             logger.info("Prompt hotkey configured: '%s'", prompt_hotkey)
         except Exception as e:
             logger.warning(
@@ -676,8 +786,7 @@ def load_config() -> Optional[AppConfig]:
     if tts_hotkey and tts_hotkey.strip():
         tts_hotkey = tts_hotkey.strip()
         try:
-            import keyboard as _kb
-            _kb.parse_hotkey(tts_hotkey)
+            _parse_hotkey(tts_hotkey)
             logger.info("TTS hotkey configured: '%s'", tts_hotkey)
         except Exception as e:
             logger.warning(
@@ -692,8 +801,7 @@ def load_config() -> Optional[AppConfig]:
     if tts_ask_hotkey and tts_ask_hotkey.strip():
         tts_ask_hotkey = tts_ask_hotkey.strip()
         try:
-            import keyboard as _kb
-            _kb.parse_hotkey(tts_ask_hotkey)
+            _parse_hotkey(tts_ask_hotkey)
             logger.info("TTS Ask hotkey configured: '%s'", tts_ask_hotkey)
         except Exception as e:
             logger.warning(
@@ -727,6 +835,10 @@ def load_config() -> Optional[AppConfig]:
         )
         tts_local_voice = DEFAULT_PIPER_VOICE
 
+    # v1.1: TTS speed (Piper length_scale)
+    tts_speed = float(tts_section.get("speed", 1.0))
+    tts_speed = max(0.25, min(tts_speed, 4.0))  # clamp to sane range
+
     # --- v1.0: TTS Audio Cache ---
     tts_cache_section = data.get("tts_cache", {})
     tts_cache_enabled = bool(tts_cache_section.get("enabled", DEFAULT_TTS_CACHE_ENABLED))
@@ -741,6 +853,64 @@ def load_config() -> Optional[AppConfig]:
     tts_export_section = data.get("tts_export", {})
     tts_export_enabled = bool(tts_export_section.get("enabled", DEFAULT_TTS_EXPORT_ENABLED))
     tts_export_path = str(tts_export_section.get("export_path", DEFAULT_TTS_EXPORT_PATH)).strip()
+
+    # --- v1.2: Claude Code CLI integration ---
+    claude_section = data.get("claude_code", {})
+    claude_code_enabled = bool(claude_section.get("enabled", DEFAULT_CLAUDE_CODE_ENABLED))
+    claude_code_working_dir = str(claude_section.get(
+        "working_dir", DEFAULT_CLAUDE_CODE_WORKING_DIR)).strip()
+    claude_code_system_prompt = str(claude_section.get(
+        "system_prompt", DEFAULT_CLAUDE_CODE_SYSTEM_PROMPT))
+    claude_code_timeout = int(claude_section.get("timeout", DEFAULT_CLAUDE_CODE_TIMEOUT))
+    claude_code_timeout = max(10, min(claude_code_timeout, 600))
+    claude_code_response_mode = claude_section.get(
+        "response_mode", DEFAULT_CLAUDE_CODE_RESPONSE_MODE)
+    if claude_code_response_mode not in CLAUDE_CODE_RESPONSE_MODES:
+        logger.warning(
+            "Invalid claude_code_response_mode '%s'. Falling back to '%s'.",
+            claude_code_response_mode, DEFAULT_CLAUDE_CODE_RESPONSE_MODE,
+        )
+        claude_code_response_mode = DEFAULT_CLAUDE_CODE_RESPONSE_MODE
+    claude_code_skip_permissions = bool(claude_section.get(
+        "skip_permissions", DEFAULT_CLAUDE_CODE_SKIP_PERMISSIONS))
+    claude_code_continue_conversation = bool(claude_section.get(
+        "continue_conversation", DEFAULT_CLAUDE_CODE_CONTINUE_CONVERSATION))
+
+    claude_code_hotkey = hotkey_section.get(
+        "claude_code_combination", DEFAULT_CLAUDE_CODE_HOTKEY)
+    # Also check the [claude_code] section for the hotkey
+    if "hotkey" in claude_section:
+        claude_code_hotkey = str(claude_section["hotkey"]).strip()
+    if claude_code_hotkey and claude_code_hotkey.strip():
+        claude_code_hotkey = claude_code_hotkey.strip()
+        try:
+            _parse_hotkey(claude_code_hotkey)
+            logger.info("Claude Code hotkey configured: '%s'", claude_code_hotkey)
+        except Exception as e:
+            logger.warning(
+                "Invalid Claude Code hotkey '%s': %s. Falling back to '%s'.",
+                claude_code_hotkey, e, DEFAULT_CLAUDE_CODE_HOTKEY,
+            )
+            claude_code_hotkey = DEFAULT_CLAUDE_CODE_HOTKEY
+    else:
+        claude_code_hotkey = DEFAULT_CLAUDE_CODE_HOTKEY
+
+    # --- v1.3: Terminal Mode toggle hotkey ---
+    terminal_mode_hotkey = hotkey_section.get(
+        "terminal_mode_combination", DEFAULT_TERMINAL_MODE_HOTKEY)
+    if terminal_mode_hotkey and terminal_mode_hotkey.strip():
+        terminal_mode_hotkey = terminal_mode_hotkey.strip()
+        try:
+            _parse_hotkey(terminal_mode_hotkey)
+            logger.info("Terminal Mode hotkey configured: '%s'", terminal_mode_hotkey)
+        except Exception as e:
+            logger.warning(
+                "Invalid Terminal Mode hotkey '%s': %s. Falling back to '%s'.",
+                terminal_mode_hotkey, e, DEFAULT_TERMINAL_MODE_HOTKEY,
+            )
+            terminal_mode_hotkey = DEFAULT_TERMINAL_MODE_HOTKEY
+    else:
+        terminal_mode_hotkey = DEFAULT_TERMINAL_MODE_HOTKEY
 
     # --- v0.9: Hands-Free Mode ---
     handsfree_section = data.get("handsfree", {})
@@ -764,6 +934,17 @@ def load_config() -> Optional[AppConfig]:
         "cooldown_seconds", DEFAULT_HANDSFREE_COOLDOWN_SECONDS))
     handsfree_cooldown_seconds = max(1.0, min(handsfree_cooldown_seconds, 10.0))
 
+    # Silence threshold RMS (0.0 = adaptive auto-calibration)
+    handsfree_silence_threshold_rms = float(handsfree_section.get(
+        "silence_threshold_rms", DEFAULT_HANDSFREE_SILENCE_THRESHOLD_RMS))
+    handsfree_silence_threshold_rms = max(0.0, min(handsfree_silence_threshold_rms, 10000.0))
+
+    # Wake word model size
+    handsfree_wake_model_size = str(handsfree_section.get(
+        "wake_model_size", DEFAULT_HANDSFREE_WAKE_MODEL_SIZE)).strip().lower()
+    if handsfree_wake_model_size not in HANDSFREE_WAKE_MODEL_SIZES:
+        handsfree_wake_model_size = DEFAULT_HANDSFREE_WAKE_MODEL_SIZE
+
     # --- v0.9: Paste confirmation/delay ---
     paste_require_confirmation = bool(paste_section.get(
         "require_confirmation", DEFAULT_PASTE_CONFIRM))
@@ -773,6 +954,14 @@ def load_config() -> Optional[AppConfig]:
         "confirmation_timeout_seconds", DEFAULT_PASTE_CONFIRMATION_TIMEOUT))
     paste_auto_enter = bool(paste_section.get(
         "auto_enter", DEFAULT_PASTE_AUTO_ENTER))
+    paste_shortcut = str(paste_section.get(
+        "paste_shortcut", DEFAULT_PASTE_SHORTCUT)).strip().lower()
+    if paste_shortcut not in PASTE_SHORTCUT_OPTIONS:
+        logger.warning(
+            "Invalid paste_shortcut '%s'. Falling back to '%s'.",
+            paste_shortcut, DEFAULT_PASTE_SHORTCUT,
+        )
+        paste_shortcut = DEFAULT_PASTE_SHORTCUT
     # Clamp values to sane ranges
     paste_delay_seconds = max(0.0, min(paste_delay_seconds, 36000.0))
     paste_confirmation_timeout = max(5.0, min(paste_confirmation_timeout, 120.0))
@@ -832,6 +1021,8 @@ def load_config() -> Optional[AppConfig]:
         audio_cues_enabled=bool(audio_cues_enabled),
         app_directory=app_dir,
         stt_backend=stt_backend,
+        transcription_language=transcription_language,
+        audio_device_index=audio_device_index,
         local_model_size=local_model_size,
         local_device=local_device,
         local_compute_type=local_compute_type,
@@ -847,6 +1038,7 @@ def load_config() -> Optional[AppConfig]:
         tts_ask_hotkey=tts_ask_hotkey,
         # v0.7: Local TTS (Piper)
         tts_local_voice=tts_local_voice,
+        tts_speed=tts_speed,
         # v0.9: HTTP API
         api_enabled=api_enabled,
         api_port=api_port,
@@ -855,6 +1047,7 @@ def load_config() -> Optional[AppConfig]:
         paste_delay_seconds=paste_delay_seconds,
         paste_confirmation_timeout=paste_confirmation_timeout,
         paste_auto_enter=paste_auto_enter,
+        paste_shortcut=paste_shortcut,
         # v1.0: TTS Audio Cache
         tts_cache_enabled=tts_cache_enabled,
         tts_cache_max_size_mb=tts_cache_max_size_mb,
@@ -863,6 +1056,17 @@ def load_config() -> Optional[AppConfig]:
         # v1.0: TTS Audio Export
         tts_export_enabled=tts_export_enabled,
         tts_export_path=tts_export_path,
+        # v1.3: Terminal Mode toggle hotkey
+        terminal_mode_hotkey=terminal_mode_hotkey,
+        # v1.2: Claude Code CLI
+        claude_code_enabled=claude_code_enabled,
+        claude_code_hotkey=claude_code_hotkey,
+        claude_code_working_dir=claude_code_working_dir,
+        claude_code_system_prompt=claude_code_system_prompt,
+        claude_code_timeout=claude_code_timeout,
+        claude_code_response_mode=claude_code_response_mode,
+        claude_code_skip_permissions=claude_code_skip_permissions,
+        claude_code_continue_conversation=claude_code_continue_conversation,
         # v0.9: Hands-Free Mode
         handsfree_enabled=handsfree_enabled,
         wake_phrase=wake_phrase,
@@ -871,6 +1075,8 @@ def load_config() -> Optional[AppConfig]:
         handsfree_max_recording_seconds=handsfree_max_recording_seconds,
         handsfree_pipeline=handsfree_pipeline,
         handsfree_cooldown_seconds=handsfree_cooldown_seconds,
+        handsfree_silence_threshold_rms=handsfree_silence_threshold_rms,
+        handsfree_wake_model_size=handsfree_wake_model_size,
     )
 
     # REQ-S01: Only log the masked key

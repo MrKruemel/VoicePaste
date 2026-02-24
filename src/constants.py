@@ -1,4 +1,4 @@
-"""Shared constants and enums for the Voice-to-Summary Paste Tool."""
+"""Shared constants and enums for VoicePaste."""
 
 import enum
 from typing import Any
@@ -14,11 +14,17 @@ class AppState(enum.Enum):
         PROCESSING -> PASTING  (on STT/summarization complete)
         PROCESSING -> AWAITING_PASTE  (when confirmation/delay configured, v0.9)
         PROCESSING -> SPEAKING  (on Ask AI + TTS pipeline, v0.6)
+        PROCESSING -> IDLE  (on empty transcript, error)
         AWAITING_PASTE -> PASTING  (on Enter or delay elapsed, v0.9)
         AWAITING_PASTE -> IDLE  (on Escape cancel or timeout, v0.9)
         PASTING -> IDLE  (on paste complete)
         SPEAKING -> IDLE  (on TTS playback complete or Escape, v0.6)
-        Any error state -> IDLE  (on error)
+
+        Pipeline queueing (v1.1):
+        During PROCESSING, pressing the hotkey starts a new recording
+        (tracked by _recording_during_processing flag, not a new state).
+        When the current pipeline finishes, queued audio is processed
+        before returning to IDLE.  Queue depth = 1.
     """
 
     IDLE = "idle"
@@ -27,6 +33,28 @@ class AppState(enum.Enum):
     AWAITING_PASTE = "awaiting_paste"
     PASTING = "pasting"
     SPEAKING = "speaking"
+
+
+# Valid state transitions.  Key = (from_state, to_state).
+# Any transition not in this set is invalid and will be logged as an error.
+VALID_TRANSITIONS: frozenset[tuple[AppState, AppState]] = frozenset({
+    # Normal recording flow
+    (AppState.IDLE, AppState.RECORDING),
+    (AppState.RECORDING, AppState.PROCESSING),
+    (AppState.RECORDING, AppState.IDLE),          # cancel or no audio
+    (AppState.PROCESSING, AppState.PASTING),
+    (AppState.PROCESSING, AppState.AWAITING_PASTE),
+    (AppState.PROCESSING, AppState.SPEAKING),     # TTS ask mode
+    (AppState.PROCESSING, AppState.IDLE),          # empty transcript, error
+    (AppState.AWAITING_PASTE, AppState.PASTING),
+    (AppState.AWAITING_PASTE, AppState.IDLE),      # cancel or timeout
+    (AppState.PASTING, AppState.IDLE),
+    (AppState.SPEAKING, AppState.IDLE),
+
+    # TTS / API dispatch flows (start from IDLE)
+    (AppState.IDLE, AppState.PROCESSING),          # TTS pipeline, API tts
+    (AppState.IDLE, AppState.SPEAKING),            # replay cached audio
+})
 
 
 # Application metadata
@@ -43,13 +71,21 @@ DEFAULT_PROMPT_HOTKEY = "ctrl+alt+a"
 CANCEL_HOTKEY = "escape"
 
 # v0.6: TTS hotkeys
-DEFAULT_TTS_HOTKEY = "ctrl+alt+t"          # T = Talk/TTS — read clipboard aloud
-DEFAULT_TTS_ASK_HOTKEY = "ctrl+alt+y"      # Y = adjacent to T — Ask AI + TTS
+# Note: ctrl+alt+t is the GNOME Terminal shortcut on Ubuntu, so use
+# ctrl+alt+s (Speak) on Linux to avoid conflict.
+import sys as _sys
+if _sys.platform == "win32":
+    DEFAULT_TTS_HOTKEY = "ctrl+alt+t"      # T = Talk/TTS — read clipboard aloud
+    DEFAULT_TTS_ASK_HOTKEY = "ctrl+alt+y"  # Y = adjacent to T — Ask AI + TTS
+else:
+    DEFAULT_TTS_HOTKEY = "ctrl+alt+s"      # S = Speak — avoids GNOME ctrl+alt+t
+    DEFAULT_TTS_ASK_HOTKEY = "ctrl+alt+y"  # Y = Ask AI + TTS
 
 # Audio configuration
 DEFAULT_SAMPLE_RATE = 16000
 DEFAULT_CHANNELS = 1
 DEFAULT_DTYPE = "int16"
+DEFAULT_AUDIO_DEVICE_INDEX: int | None = None  # None = system default microphone
 
 # API configuration
 WHISPER_API_URL = "https://api.openai.com/v1/audio/transcriptions"
@@ -86,6 +122,8 @@ API_INITIAL_BACKOFF_SECONDS = 1.0
 
 # Paste configuration
 PASTE_DELAY_MS = 150
+DEFAULT_PASTE_SHORTCUT = "auto"  # "auto", "ctrl+v", "ctrl+shift+v"
+PASTE_SHORTCUT_OPTIONS = ("auto", "ctrl+v", "ctrl+shift+v")
 
 # v0.9: HTTP API configuration
 DEFAULT_API_ENABLED = False
@@ -108,7 +146,16 @@ DEFAULT_HANDSFREE_MAX_RECORDING_SECONDS = 120
 DEFAULT_HANDSFREE_PIPELINE = "ask_tts"  # "ask_tts", "summary", "prompt"
 DEFAULT_HANDSFREE_COOLDOWN_SECONDS = 3.0
 DEFAULT_HANDSFREE_BUFFER_SECONDS = 2.5
-HANDSFREE_PIPELINES = ("ask_tts", "summary", "prompt")
+DEFAULT_HANDSFREE_WAKE_MODEL_SIZE = "base"
+HANDSFREE_WAKE_MODEL_SIZES = ("tiny", "base", "small")
+HANDSFREE_PIPELINES = ("ask_tts", "summary", "prompt", "claude_code")
+
+# Adaptive silence detection calibration
+DEFAULT_HANDSFREE_SILENCE_THRESHOLD_RMS = 0.0  # 0 = adaptive (auto-calibrate)
+ADAPTIVE_CALIBRATION_SECONDS = 0.5             # Calibration window duration
+ADAPTIVE_THRESHOLD_MULTIPLIER = 1.5            # threshold = baseline_rms * multiplier
+ADAPTIVE_MIN_THRESHOLD = 100.0                 # Floor: never go below this
+ADAPTIVE_MAX_THRESHOLD = 5000.0                # Ceiling: reject pathologically loud environments
 
 # Wake word confirmation tone: rising triple chirp
 AUDIO_CUE_WAKEWORD_FREQS = (660, 880, 1100)
@@ -156,6 +203,24 @@ OPENROUTER_DEFAULT_MODEL = "openai/gpt-4o-mini"
 # STT backend options
 STT_BACKENDS = ("cloud", "local")
 DEFAULT_STT_BACKEND = "cloud"
+
+# Transcription language: "auto" lets Whisper detect, or use a language code.
+DEFAULT_TRANSCRIPTION_LANGUAGE = "de"
+SUPPORTED_LANGUAGES = {
+    "auto": "Auto-detect",
+    "de": "Deutsch (German)",
+    "en": "English",
+    "fr": "Fran\u00e7ais (French)",
+    "es": "Espa\u00f1ol (Spanish)",
+    "it": "Italiano (Italian)",
+    "pt": "Portugu\u00eas (Portuguese)",
+    "nl": "Nederlands (Dutch)",
+    "pl": "Polski (Polish)",
+    "ja": "\u65e5\u672c\u8a9e (Japanese)",
+    "zh": "\u4e2d\u6587 (Chinese)",
+    "ko": "\ud55c\uad6d\uc5b4 (Korean)",
+    "ru": "\u0420\u0443\u0441\u0441\u043a\u0438\u0439 (Russian)",
+}
 
 # Local model sizes (CTranslate2-format Whisper models from Hugging Face)
 LOCAL_MODEL_SIZES = ("tiny", "base", "small", "medium", "large-v2", "large-v3")
@@ -420,6 +485,22 @@ PIPER_VOICE_MODELS: dict[str, dict[str, Any]] = {
         },
     },
 }
+
+# --- v1.3: Terminal Mode toggle hotkey ---
+# Toggles paste shortcut between Ctrl+V (GUI) and Ctrl+Shift+V (terminal).
+# Useful on Wayland where auto-detection of the focused window is unreliable.
+DEFAULT_TERMINAL_MODE_HOTKEY = "ctrl+alt+m"
+
+# --- v1.2: Claude Code CLI integration ---
+DEFAULT_CLAUDE_CODE_ENABLED = False
+DEFAULT_CLAUDE_CODE_HOTKEY = "ctrl+alt+c"
+DEFAULT_CLAUDE_CODE_WORKING_DIR = ""      # empty = VoicePaste's cwd
+DEFAULT_CLAUDE_CODE_SYSTEM_PROMPT = ""
+DEFAULT_CLAUDE_CODE_TIMEOUT = 120         # seconds
+DEFAULT_CLAUDE_CODE_RESPONSE_MODE = "speak"  # "paste" | "speak" | "both"
+DEFAULT_CLAUDE_CODE_SKIP_PERMISSIONS = False
+DEFAULT_CLAUDE_CODE_CONTINUE_CONVERSATION = False
+CLAUDE_CODE_RESPONSE_MODES = ("paste", "speak", "both")
 
 # --- v1.0: TTS Audio Cache configuration ---
 DEFAULT_TTS_CACHE_ENABLED = True

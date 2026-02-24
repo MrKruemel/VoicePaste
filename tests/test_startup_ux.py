@@ -1,12 +1,12 @@
 """Tests for v0.2.1 startup UX improvements.
 
 Validates:
-- _show_fatal_error() calls MessageBoxW with correct flags.
-- _show_fatal_error() swallows exceptions from MessageBoxW.
-- _enable_debug_console() allocates a console and redirects stdout/stderr.
-- _enable_debug_console() swallows exceptions from AllocConsole.
-- --debug flag in sys.argv triggers _enable_debug_console() in main().
-- main() shows fatal error and exits on mutex conflict.
+- show_fatal_error() calls MessageBoxW with correct flags.
+- show_fatal_error() swallows exceptions from MessageBoxW.
+- enable_debug_console() allocates a console and redirects stdout/stderr.
+- enable_debug_console() swallows exceptions from AllocConsole.
+- --debug flag in sys.argv triggers enable_debug_console() in main().
+- main() shows fatal error and exits on mutex/lock conflict.
 - main() shows fatal error and exits on config failure.
 - main() shows fatal error on RuntimeError from app.run().
 - main() shows fatal error on unexpected Exception.
@@ -20,20 +20,26 @@ from unittest.mock import patch, MagicMock, call
 
 from constants import APP_NAME, APP_VERSION
 
+_windows_only = pytest.mark.skipif(
+    sys.platform != "win32",
+    reason="Tests Win32 platform_impl._windows functions",
+)
+
 
 # =========================================================================
 # _show_fatal_error
 # =========================================================================
 
+@_windows_only
 class TestShowFatalError:
-    """Test the _show_fatal_error() helper for MessageBox display."""
+    """Test the show_fatal_error() helper for MessageBox display."""
 
-    @patch("main.ctypes")
+    @patch("platform_impl._windows.ctypes")
     def test_calls_message_box_with_correct_params(self, mock_ctypes):
         """Should call MessageBoxW(0, message, title, flags)."""
-        from main import _show_fatal_error, _MB_OK, _MB_ICONERROR, _MB_TOPMOST
+        from platform_impl._windows import show_fatal_error, _MB_OK, _MB_ICONERROR, _MB_TOPMOST
 
-        _show_fatal_error("Something went wrong", "Error Title")
+        show_fatal_error("Something went wrong", "Error Title")
 
         expected_flags = _MB_OK | _MB_ICONERROR | _MB_TOPMOST
         mock_ctypes.windll.user32.MessageBoxW.assert_called_once_with(
@@ -43,32 +49,32 @@ class TestShowFatalError:
             expected_flags,
         )
 
-    @patch("main.ctypes")
+    @patch("platform_impl._windows.ctypes")
     def test_default_title_is_app_name(self, mock_ctypes):
-        """When no title is given, should default to APP_NAME."""
-        from main import _show_fatal_error
+        """When no title is given, should default to 'Voice Paste'."""
+        from platform_impl._windows import show_fatal_error
 
-        _show_fatal_error("Test message")
+        show_fatal_error("Test message")
 
         call_args = mock_ctypes.windll.user32.MessageBoxW.call_args
-        assert call_args[0][2] == APP_NAME
+        assert call_args[0][2] == "Voice Paste"
 
-    @patch("main.ctypes")
+    @patch("platform_impl._windows.ctypes")
     def test_swallows_messagebox_exception(self, mock_ctypes):
         """If MessageBoxW raises, the exception should be silently swallowed."""
-        from main import _show_fatal_error
+        from platform_impl._windows import show_fatal_error
 
         mock_ctypes.windll.user32.MessageBoxW.side_effect = OSError("No GUI")
 
         # Should not raise
-        _show_fatal_error("This should not crash")
+        show_fatal_error("This should not crash")
 
-    @patch("main.ctypes")
+    @patch("platform_impl._windows.ctypes")
     def test_flags_include_topmost(self, mock_ctypes):
         """Message box should be topmost (0x00040000) so it is visible."""
-        from main import _show_fatal_error, _MB_TOPMOST
+        from platform_impl._windows import show_fatal_error, _MB_TOPMOST
 
-        _show_fatal_error("Test")
+        show_fatal_error("Test")
 
         call_args = mock_ctypes.windll.user32.MessageBoxW.call_args
         actual_flags = call_args[0][3]
@@ -76,12 +82,12 @@ class TestShowFatalError:
             f"Flags 0x{actual_flags:08X} should include MB_TOPMOST 0x{_MB_TOPMOST:08X}"
         )
 
-    @patch("main.ctypes")
+    @patch("platform_impl._windows.ctypes")
     def test_flags_include_icon_error(self, mock_ctypes):
         """Message box should have the error icon (0x00000010)."""
-        from main import _show_fatal_error, _MB_ICONERROR
+        from platform_impl._windows import show_fatal_error, _MB_ICONERROR
 
-        _show_fatal_error("Test")
+        show_fatal_error("Test")
 
         call_args = mock_ctypes.windll.user32.MessageBoxW.call_args
         actual_flags = call_args[0][3]
@@ -94,26 +100,27 @@ class TestShowFatalError:
 # _enable_debug_console
 # =========================================================================
 
+@_windows_only
 class TestEnableDebugConsole:
-    """Test the _enable_debug_console() helper for --debug flag."""
+    """Test the enable_debug_console() helper for --debug flag."""
 
     @patch("builtins.open", create=True)
-    @patch("main.ctypes")
+    @patch("platform_impl._windows.ctypes")
     def test_calls_alloc_console(self, mock_ctypes, mock_open):
         """Should call kernel32.AllocConsole() to create a console window."""
-        from main import _enable_debug_console
+        from platform_impl._windows import enable_debug_console
 
-        _enable_debug_console()
+        enable_debug_console()
 
         mock_ctypes.windll.kernel32.AllocConsole.assert_called_once()
 
     @patch("builtins.open", create=True)
-    @patch("main.ctypes")
+    @patch("platform_impl._windows.ctypes")
     def test_reopens_stdout_and_stderr(self, mock_ctypes, mock_open):
         """After AllocConsole, should reopen stdout and stderr to CONOUT$."""
-        from main import _enable_debug_console
+        from platform_impl._windows import enable_debug_console
 
-        _enable_debug_console()
+        enable_debug_console()
 
         # Check that open("CONOUT$", ...) was called (for stdout and stderr)
         conout_calls = [
@@ -125,15 +132,15 @@ class TestEnableDebugConsole:
             f"got {len(conout_calls)}"
         )
 
-    @patch("main.ctypes")
+    @patch("platform_impl._windows.ctypes")
     def test_swallows_alloc_console_exception(self, mock_ctypes):
         """If AllocConsole fails (e.g., console already attached), should not crash."""
-        from main import _enable_debug_console
+        from platform_impl._windows import enable_debug_console
 
         mock_ctypes.windll.kernel32.AllocConsole.side_effect = OSError("Already attached")
 
         # Should not raise
-        _enable_debug_console()
+        enable_debug_console()
 
 
 # =========================================================================
@@ -143,9 +150,9 @@ class TestEnableDebugConsole:
 class TestMainDebugFlag:
     """Test that --debug flag in sys.argv triggers _enable_debug_console."""
 
-    @patch("main._enable_debug_console")
-    @patch("main._acquire_single_instance_mutex", return_value=12345)
-    @patch("main._release_single_instance_mutex")
+    @patch("main.enable_debug_console")
+    @patch("main.acquire_single_instance_lock", return_value=12345)
+    @patch("main.release_single_instance_lock")
     @patch("main.load_config")
     @patch("main.setup_logging")
     @patch("main.VoicePasteApp")
@@ -166,9 +173,9 @@ class TestMainDebugFlag:
 
         mock_enable_debug.assert_called_once()
 
-    @patch("main._enable_debug_console")
-    @patch("main._acquire_single_instance_mutex", return_value=12345)
-    @patch("main._release_single_instance_mutex")
+    @patch("main.enable_debug_console")
+    @patch("main.acquire_single_instance_lock", return_value=12345)
+    @patch("main.release_single_instance_lock")
     @patch("main.load_config")
     @patch("main.setup_logging")
     @patch("main.VoicePasteApp")
@@ -197,8 +204,8 @@ class TestMainDebugFlag:
 class TestMainMutexConflict:
     """Test that main() shows fatal error and exits on mutex conflict."""
 
-    @patch("main._show_fatal_error")
-    @patch("main._acquire_single_instance_mutex", return_value=None)
+    @patch("main.show_fatal_error")
+    @patch("main.acquire_single_instance_lock", return_value=None)
     def test_mutex_conflict_calls_show_fatal_error(
         self, mock_acquire, mock_fatal
     ):
@@ -212,8 +219,8 @@ class TestMainMutexConflict:
         assert exc_info.value.code == 1
         mock_fatal.assert_called_once()
 
-    @patch("main._show_fatal_error")
-    @patch("main._acquire_single_instance_mutex", return_value=None)
+    @patch("main.show_fatal_error")
+    @patch("main.acquire_single_instance_lock", return_value=None)
     def test_mutex_conflict_message_mentions_already_running(
         self, mock_acquire, mock_fatal
     ):
@@ -229,8 +236,8 @@ class TestMainMutexConflict:
             f"Message should mention 'already running'. Got: {message}"
         )
 
-    @patch("main._show_fatal_error")
-    @patch("main._acquire_single_instance_mutex", return_value=None)
+    @patch("main.show_fatal_error")
+    @patch("main.acquire_single_instance_lock", return_value=None)
     def test_mutex_conflict_exits_with_code_1(
         self, mock_acquire, mock_fatal
     ):
@@ -256,9 +263,9 @@ class TestMainConfigFailure:
     so the user can configure via the Settings dialog.
     """
 
-    @patch("main._show_fatal_error")
-    @patch("main._release_single_instance_mutex")
-    @patch("main._acquire_single_instance_mutex", return_value=12345)
+    @patch("main.show_fatal_error")
+    @patch("main.release_single_instance_lock")
+    @patch("main.acquire_single_instance_lock", return_value=12345)
     @patch("main.load_config", return_value=None)
     @patch("main.setup_logging")
     @patch("main.VoicePasteApp")
@@ -278,9 +285,9 @@ class TestMainConfigFailure:
         # Fatal error should NOT be shown
         mock_fatal.assert_not_called()
 
-    @patch("main._show_fatal_error")
-    @patch("main._release_single_instance_mutex")
-    @patch("main._acquire_single_instance_mutex", return_value=12345)
+    @patch("main.show_fatal_error")
+    @patch("main.release_single_instance_lock")
+    @patch("main.acquire_single_instance_lock", return_value=12345)
     @patch("main.load_config", return_value=None)
     @patch("main.setup_logging")
     @patch("main.VoicePasteApp")
@@ -296,9 +303,9 @@ class TestMainConfigFailure:
 
         mock_release.assert_called_once_with(12345)
 
-    @patch("main._show_fatal_error")
-    @patch("main._release_single_instance_mutex")
-    @patch("main._acquire_single_instance_mutex", return_value=12345)
+    @patch("main.show_fatal_error")
+    @patch("main.release_single_instance_lock")
+    @patch("main.acquire_single_instance_lock", return_value=12345)
     @patch("main.load_config", return_value=None)
     @patch("main.setup_logging")
     @patch("main.VoicePasteApp")
@@ -314,9 +321,9 @@ class TestMainConfigFailure:
 
         mock_setup_log.assert_called_once()
 
-    @patch("main._show_fatal_error")
-    @patch("main._release_single_instance_mutex")
-    @patch("main._acquire_single_instance_mutex", return_value=12345)
+    @patch("main.show_fatal_error")
+    @patch("main.release_single_instance_lock")
+    @patch("main.acquire_single_instance_lock", return_value=12345)
     @patch("main.load_config", return_value=None)
     @patch("main.setup_logging")
     @patch("main.VoicePasteApp")
@@ -337,9 +344,9 @@ class TestMainConfigFailure:
         # It should have empty API key (default)
         assert actual_config.openai_api_key == ""
 
-    @patch("main._show_fatal_error")
-    @patch("main._release_single_instance_mutex")
-    @patch("main._acquire_single_instance_mutex", return_value=12345)
+    @patch("main.show_fatal_error")
+    @patch("main.release_single_instance_lock")
+    @patch("main.acquire_single_instance_lock", return_value=12345)
     @patch("main.load_config", return_value=None)
     @patch("main.setup_logging")
     @patch("main.VoicePasteApp")
@@ -362,9 +369,9 @@ class TestMainConfigFailure:
 class TestMainRuntimeError:
     """Test that main() shows fatal error on RuntimeError from app.run()."""
 
-    @patch("main._show_fatal_error")
-    @patch("main._release_single_instance_mutex")
-    @patch("main._acquire_single_instance_mutex", return_value=12345)
+    @patch("main.show_fatal_error")
+    @patch("main.release_single_instance_lock")
+    @patch("main.acquire_single_instance_lock", return_value=12345)
     @patch("main.load_config")
     @patch("main.setup_logging")
     @patch("main.VoicePasteApp")
@@ -392,9 +399,9 @@ class TestMainRuntimeError:
         mock_fatal.assert_called_once()
         assert "Could not register hotkey" in mock_fatal.call_args[0][0]
 
-    @patch("main._show_fatal_error")
-    @patch("main._release_single_instance_mutex")
-    @patch("main._acquire_single_instance_mutex", return_value=12345)
+    @patch("main.show_fatal_error")
+    @patch("main.release_single_instance_lock")
+    @patch("main.acquire_single_instance_lock", return_value=12345)
     @patch("main.load_config")
     @patch("main.setup_logging")
     @patch("main.VoicePasteApp")
@@ -426,9 +433,9 @@ class TestMainRuntimeError:
 class TestMainUnexpectedException:
     """Test catch-all exception handler in main()."""
 
-    @patch("main._show_fatal_error")
-    @patch("main._release_single_instance_mutex")
-    @patch("main._acquire_single_instance_mutex", return_value=12345)
+    @patch("main.show_fatal_error")
+    @patch("main.release_single_instance_lock")
+    @patch("main.acquire_single_instance_lock", return_value=12345)
     @patch("main.load_config")
     @patch("main.setup_logging")
     @patch("main.VoicePasteApp")
@@ -455,9 +462,9 @@ class TestMainUnexpectedException:
         message = mock_fatal.call_args[0][0]
         assert "unexpected error" in message.lower()
 
-    @patch("main._show_fatal_error")
-    @patch("main._release_single_instance_mutex")
-    @patch("main._acquire_single_instance_mutex", return_value=12345)
+    @patch("main.show_fatal_error")
+    @patch("main.release_single_instance_lock")
+    @patch("main.acquire_single_instance_lock", return_value=12345)
     @patch("main.load_config")
     @patch("main.setup_logging")
     @patch("main.VoicePasteApp")
@@ -590,9 +597,9 @@ class TestTrayStartupBalloon:
 class TestMainHappyPath:
     """Test that main() completes successfully under normal conditions."""
 
-    @patch("main._show_fatal_error")
-    @patch("main._release_single_instance_mutex")
-    @patch("main._acquire_single_instance_mutex", return_value=12345)
+    @patch("main.show_fatal_error")
+    @patch("main.release_single_instance_lock")
+    @patch("main.acquire_single_instance_lock", return_value=12345)
     @patch("main.load_config")
     @patch("main.setup_logging")
     @patch("main.VoicePasteApp")
@@ -614,9 +621,9 @@ class TestMainHappyPath:
 
         mock_fatal.assert_not_called()
 
-    @patch("main._show_fatal_error")
-    @patch("main._release_single_instance_mutex")
-    @patch("main._acquire_single_instance_mutex", return_value=12345)
+    @patch("main.show_fatal_error")
+    @patch("main.release_single_instance_lock")
+    @patch("main.acquire_single_instance_lock", return_value=12345)
     @patch("main.load_config")
     @patch("main.setup_logging")
     @patch("main.VoicePasteApp")
@@ -638,9 +645,9 @@ class TestMainHappyPath:
 
         mock_release.assert_called_once_with(12345)
 
-    @patch("main._show_fatal_error")
-    @patch("main._release_single_instance_mutex")
-    @patch("main._acquire_single_instance_mutex", return_value=12345)
+    @patch("main.show_fatal_error")
+    @patch("main.release_single_instance_lock")
+    @patch("main.acquire_single_instance_lock", return_value=12345)
     @patch("main.load_config")
     @patch("main.setup_logging")
     @patch("main.VoicePasteApp")
