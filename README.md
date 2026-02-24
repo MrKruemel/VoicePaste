@@ -418,7 +418,13 @@ Voice models are cached in `%LOCALAPPDATA%\VoicePaste\models\tts\` (Windows) or 
 
 ## Settings Dialog
 
-Right-click the tray icon and select **Settings** to open the configuration dialog. Tabs:
+Right-click the tray icon and select **Settings** to open the configuration dialog.
+
+<p align="center">
+  <img src="docs/VoicePasteSetingsViewExample.png" alt="Settings dialog" width="600" />
+</p>
+
+Tabs:
 
 - **Transcription**: Choose cloud (OpenAI Whisper) or local (faster-whisper) backend. Download local models, set device/compute type, enable/disable VAD filter.
 - **Summarization**: Enable/disable text cleanup. Choose provider (OpenAI, OpenRouter, Ollama). Custom prompts.
