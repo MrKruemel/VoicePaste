@@ -163,6 +163,12 @@ class ClaudeCodeBackend:
             len(prompt),
         )
 
+        # On Windows, claude.cmd is executed by cmd.exe which opens a
+        # visible console window.  CREATE_NO_WINDOW suppresses it.
+        creationflags = (
+            subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0
+        )
+
         start = time.monotonic()
         try:
             result = subprocess.run(
@@ -172,6 +178,7 @@ class ClaudeCodeBackend:
                 text=True,
                 timeout=self.timeout_seconds,
                 cwd=cwd,
+                creationflags=creationflags,
             )
         except FileNotFoundError:
             raise ClaudeCodeNotFoundError(
@@ -234,12 +241,16 @@ class ClaudeCodeBackend:
         claude_bin = _find_claude_binary()
         if not claude_bin:
             return None
+        creationflags = (
+            subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0
+        )
         try:
             result = subprocess.run(
                 [claude_bin, "--version"],
                 capture_output=True,
                 text=True,
                 timeout=10,
+                creationflags=creationflags,
             )
             if result.returncode == 0:
                 return result.stdout.strip()
