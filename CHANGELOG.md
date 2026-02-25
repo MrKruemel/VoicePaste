@@ -10,6 +10,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 - **Paste Shortcut Configuration**: New `[paste] paste_shortcut` option ("auto"/"ctrl+v"/"ctrl+shift+v") for manual override of terminal paste detection. Wayland terminal detection now uses GNOME Shell D-Bus (`gdbus`) for reliable detection. X11 continues to use xprop/xdotool.
 - **Claude Code CLI Integration** (v1.3): Voice input control for Claude Code command-line tool. New `[claude_code]` config section with hotkey (default Ctrl+Alt+C), working directory, system prompt, response mode (paste/speak/both), permission handling, and conversation context. Requires `claude` in PATH. Hands-Free compatible.
+- **Whisper Vocabulary Hints**: New `[transcription] vocabulary_hints` config field. Pass domain-specific terms (e.g. "Kubernetes, pytest, Anamnese") as prompt to Whisper for better transcription of technical jargon. Works with both cloud and local STT backends. Configurable via Settings > Transcription tab.
+- **Audio Quality Indicator**: After recording stops, audio is analyzed for quality issues. Toast notification warns if recording is too quiet (RMS below threshold) or clipping (>5% samples at max amplitude). Non-blocking — pipeline continues regardless.
+- **Processing Tooltip Steps**: Tray tooltip now shows granular progress during pipeline: "Checking audio...", "Transcribing...", "Summarizing...", "Pasting...", "Speaking..." for better user feedback.
+- **Detected Language Attribute**: Local STT backend now stores `detected_language` attribute after transcription for programmatic access.
 
 ### Changed
 - **Paste Shortcut Auto-Detection**: Enhanced with D-Bus integration on Wayland for terminal detection. Auto-detection now more reliable across terminal emulators on both X11 and Wayland.

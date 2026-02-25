@@ -90,6 +90,12 @@ compute_type = "int8"
 # Default: true for script, false for frozen .exe (auto-detected at startup).
 vad_filter = true
 
+# Vocabulary hints: domain-specific terms for better transcription accuracy.
+# Whisper uses this as a prompt/context to bias recognition toward these words.
+# Separate terms with commas or spaces. Leave empty for default behavior.
+# Example: "Kubernetes, pytest, Anamnese, NGINX, TypeScript"
+vocabulary_hints = ""
+
 [summarization]
 # Enable text cleanup and summarization (default: true)
 # When false, raw transcription is pasted without LLM processing.

@@ -134,7 +134,7 @@ STT, summarization, and TTS each use a `Protocol` class with a factory function:
 |---------|---------|---------|
 | `[hotkey]` | `combination`, `prompt_combination`, `tts_combination`, `tts_ask_combination`, `terminal_mode_combination` | Global hotkey bindings |
 | `[api]` | `api_enabled`, `api_port` | HTTP API server configuration |
-| `[transcription]` | `backend`, `model_size`, `device`, `compute_type`, `vad_filter`, `language`, `audio_device_index` | STT backend selection and parameters |
+| `[transcription]` | `backend`, `model_size`, `device`, `compute_type`, `vad_filter`, `language`, `audio_device_index`, `vocabulary_hints` | STT backend selection and parameters |
 | `[summarization]` | `enabled`, `provider`, `model`, `base_url`, `custom_prompt` | Text cleanup and LLM selection |
 | `[tts]` | `enabled`, `provider`, `voice_id`, `local_voice`, `speed`, `model_id`, `output_format` | Text-to-speech backend and voice selection |
 | `[paste]` | `delay_seconds`, `require_confirmation`, `confirmation_timeout_seconds`, `auto_enter`, `paste_shortcut` | Paste behavior and keystroke simulation |
@@ -150,7 +150,7 @@ STT, summarization, and TTS each use a `Protocol` class with a factory function:
 | Module | Purpose |
 |--------|---------|
 | `main.py` | Entry point, `VoicePasteApp` orchestrator class, pipeline logic |
-| `audio.py` | Microphone recording via sounddevice (in-memory WAV buffer) |
+| `audio.py` | Microphone recording via sounddevice (in-memory WAV buffer), audio quality analysis |
 | `hotkey.py` | Global hotkey dispatcher (keyboard on Windows, pynput on Linux X11, evdev on Linux Wayland) |
 | `evdev_hotkey.py` | Linux Wayland hotkey support. Monitors /dev/input/* for keypresses via evdev, spawns daemon listener thread. Auto-detects key codes via keyboard layout. |
 | `tray.py` | System tray icon/menu via pystray, state-colored icons |

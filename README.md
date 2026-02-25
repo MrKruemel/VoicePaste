@@ -37,6 +37,8 @@
 - **Silent operation**: Runs in system tray. Never steals focus.
 - **Audio feedback**: Beeps confirm recording start/stop/cancel/error. Disable in settings for silent mode.
 - **Visual feedback**: Tray icon color changes per state (grey=idle, red=recording, yellow=processing, teal=awaiting paste, green=pasting, blue=speaking).
+- **Audio quality indicator**: Warns via toast if recording is too quiet or clipping. Pipeline continues — warning only.
+- **Vocabulary hints**: Provide domain-specific terms (e.g. "Kubernetes, Anamnese") to improve Whisper transcription accuracy.
 - **Cancel anytime**: Press Escape during recording to discard and return to idle.
 - **Clipboard safety**: Original clipboard contents restored after pasting.
 - **Toast notifications**: Errors appear as system notifications, not modal dialogs.
@@ -250,6 +252,7 @@ All options can be set via the **Settings dialog** (right-click tray → Setting
 | `[transcription]` `device` | string | `"cpu"` | Compute device: `"cpu"` (works everywhere) or `"cuda"` (NVIDIA GPU, faster). Only for local backend. |
 | `[transcription]` `compute_type` | string | `"int8"` | Quantization: `"int8"` (fastest, CPU), `"float16"` (GPU), `"float32"` (highest quality). Only for local backend. |
 | `[transcription]` `vad_filter` | boolean | `true` (script) / `false` (.exe) | Voice Activity Detection: skip silence before transcription. Improves accuracy. Auto-disabled in frozen .exe. |
+| `[transcription]` `vocabulary_hints` | string | `""` | Domain-specific terms for better transcription accuracy. Whisper uses this as context prompt. Example: `"Kubernetes, pytest, Anamnese"`. |
 
 ### Summarization (Text Cleanup & Summarization)
 
