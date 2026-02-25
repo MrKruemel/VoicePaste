@@ -60,6 +60,43 @@ def calibrate_rms_threshold(
     return max(min_threshold, min(threshold, max_threshold))
 
 
+def analyze_audio_quality(wav_bytes: bytes) -> dict:
+    """Analyze audio quality from WAV bytes.
+
+    Checks for common recording issues (too quiet, clipping) and returns
+    metrics. Does not modify the audio data.
+
+    Args:
+        wav_bytes: Complete WAV file as bytes.
+
+    Returns:
+        Dict with keys: rms, peak, is_too_quiet, is_clipping, clip_pct.
+    """
+    try:
+        buf = io.BytesIO(wav_bytes)
+        with wave.open(buf, "rb") as wf:
+            raw = wf.readframes(wf.getnframes())
+        arr = np.frombuffer(raw, dtype=np.int16)
+        if len(arr) == 0:
+            return {"rms": 0.0, "peak": 0, "is_too_quiet": True, "is_clipping": False, "clip_pct": 0.0}
+
+        rms = float(np.sqrt(np.mean(arr.astype(np.float32) ** 2)))
+        peak = int(np.max(np.abs(arr)))
+        clip_count = int(np.sum(np.abs(arr) >= 32000))
+        clip_pct = (clip_count / len(arr)) * 100.0
+
+        return {
+            "rms": rms,
+            "peak": peak,
+            "is_too_quiet": rms < ADAPTIVE_MIN_THRESHOLD,
+            "is_clipping": clip_pct > 5.0,
+            "clip_pct": clip_pct,
+        }
+    except Exception as e:
+        logger.warning("Audio quality analysis failed: %s", e)
+        return {"rms": 0.0, "peak": 0, "is_too_quiet": False, "is_clipping": False, "clip_pct": 0.0}
+
+
 class AudioRecorder:
     """Records audio from the default microphone into an in-memory WAV buffer.
 

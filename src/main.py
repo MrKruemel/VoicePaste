@@ -884,6 +884,7 @@ class VoicePasteApp:
             "local_model_size",
             "local_device",
             "local_compute_type",
+            "vocabulary_hints",
         }
         if changed_fields.keys() & stt_keys:
             # Unload previous local model if switching away from local
@@ -1362,6 +1363,25 @@ class VoicePasteApp:
             self._set_state(AppState.IDLE)
             return
 
+        # Audio quality check (non-blocking warning, pipeline continues)
+        self._tray_manager.set_processing_step("Checking audio...")
+        from audio import analyze_audio_quality
+        quality = analyze_audio_quality(audio_data)
+        if quality["is_too_quiet"]:
+            self._tray_manager.notify(
+                APP_NAME, "Audio seems very quiet \u2014 check your microphone."
+            )
+            logger.warning("Low audio quality: RMS=%.1f", quality["rms"])
+        elif quality["is_clipping"]:
+            self._tray_manager.notify(
+                APP_NAME,
+                "Audio is clipping \u2014 try speaking further from the mic.",
+            )
+            logger.warning(
+                "Audio clipping detected: %.1f%% samples clipping",
+                quality["clip_pct"],
+            )
+
         # Run the pipeline in a worker thread to avoid blocking
         self._pipeline_thread = threading.Thread(
             target=self._run_pipeline,
@@ -1573,6 +1593,7 @@ class VoicePasteApp:
                     clip_backup = None  # Don't restore old clipboard
                     logger.info("Claude answer placed on clipboard.")
                     if self._tts:
+                        self._tray_manager.set_processing_step("Speaking...")
                         try:
                             self._tts_orchestrator.synthesize_for_ask(response_text)
                         except TTSError as e:
@@ -1608,6 +1629,7 @@ class VoicePasteApp:
                 # Prevent the finally block from overwriting the AI answer
                 clip_backup = None
 
+                self._tray_manager.set_processing_step("Speaking...")
                 try:
                     self._tts_orchestrator.synthesize_for_ask(summary)
                 except TTSError as e:
@@ -1626,6 +1648,7 @@ class VoicePasteApp:
                 # User cancelled or timed out — do NOT paste
                 return
 
+            self._tray_manager.set_processing_step("Pasting...")
             self._set_state(AppState.PASTING)
             _paste_shortcut = self._get_effective_paste_shortcut()
             success = paste_text(summary, paste_shortcut=_paste_shortcut)

@@ -77,6 +77,7 @@ class CloudWhisperSTT:
         api_key: str,
         model: str = WHISPER_MODEL,
         timeout: int = API_TIMEOUT_SECONDS,
+        prompt: str = "",
     ) -> None:
         """Initialize the cloud Whisper STT backend.
 
@@ -84,6 +85,7 @@ class CloudWhisperSTT:
             api_key: OpenAI API key (REQ-S02: never hardcoded).
             model: Whisper model identifier.
             timeout: Timeout for the API call in seconds.
+            prompt: Optional vocabulary hints / context prompt for Whisper.
         """
         self._client = openai.OpenAI(
             api_key=api_key,
@@ -91,6 +93,7 @@ class CloudWhisperSTT:
         )
         self._model = model
         self._timeout = timeout
+        self._prompt = prompt.strip() if prompt else ""
 
     def transcribe(self, audio_data: bytes, language: str | None = "de") -> str:
         """Transcribe audio using the OpenAI Whisper API.
@@ -138,6 +141,8 @@ class CloudWhisperSTT:
                 )
                 if language is not None:
                     api_kwargs["language"] = language
+                if self._prompt:
+                    api_kwargs["prompt"] = self._prompt
 
                 response = self._client.audio.transcriptions.create(**api_kwargs)
 
@@ -281,6 +286,7 @@ def create_stt_backend(config: "AppConfig") -> "STTBackend | None":
                 compute_type=config.local_compute_type,
                 model_path=model_path,
                 vad_filter=config.vad_filter,
+                initial_prompt=config.vocabulary_hints,
             )
 
         except STTError as e:
@@ -313,4 +319,7 @@ def create_stt_backend(config: "AppConfig") -> "STTBackend | None":
         if not config.openai_api_key:
             logger.warning("No API key for cloud STT.")
             return None
-        return CloudWhisperSTT(api_key=config.openai_api_key)
+        return CloudWhisperSTT(
+            api_key=config.openai_api_key,
+            prompt=config.vocabulary_hints,
+        )

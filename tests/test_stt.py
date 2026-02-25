@@ -181,6 +181,7 @@ class TestCreateSTTBackend:
             compute_type="int8",
             model_path=Path("/fake/models/base"),
             vad_filter=True,
+            initial_prompt="",
         )
 
     def test_local_backend_returns_none_when_not_available(self):
@@ -247,4 +248,5 @@ class TestCreateSTTBackend:
             compute_type="float16",
             model_path=Path("/models/small"),
             vad_filter=True,
+            initial_prompt="",
         )

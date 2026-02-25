@@ -243,6 +243,10 @@ LOCAL_STT_VALID_COMPUTE_TYPES = ("int8", "float16", "float32", "auto")
 LOCAL_STT_DEFAULT_VAD_FILTER = True
 LOCAL_STT_FROZEN_VAD_FILTER = False
 
+# Vocabulary hints: domain-specific terms passed as prompt to Whisper
+# for better transcription of technical jargon, names, etc.
+DEFAULT_VOCABULARY_HINTS = ""
+
 # Local model display information (for Settings dialog)
 LOCAL_MODEL_DISPLAY: dict[str, dict[str, str]] = {
     "tiny": {

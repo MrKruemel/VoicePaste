@@ -555,6 +555,25 @@ class SettingsDialog:
         )
         lang_hint.pack(side=tk.LEFT, padx=(8, 0))
 
+        # Vocabulary hints row
+        hints_row = ttk.Frame(parent)
+        hints_row.pack(fill=tk.X, pady=(0, 4))
+
+        ttk.Label(hints_row, text="Hints:", width=10, anchor=tk.W).pack(side=tk.LEFT)
+        self._vocab_hints_var = tk.StringVar()
+        self._vocab_hints_entry = ttk.Entry(
+            hints_row,
+            textvariable=self._vocab_hints_var,
+            width=40,
+        )
+        self._vocab_hints_entry.pack(side=tk.LEFT, padx=(4, 0))
+        ttk.Label(
+            hints_row,
+            text="Domain terms for better accuracy (e.g. Kubernetes, pytest, Anamnese)",
+            foreground="#999999",
+            font=("", 8),
+        ).pack(side=tk.LEFT, padx=(8, 0))
+
         # Audio input device selector row
         mic_row = ttk.Frame(parent)
         mic_row.pack(fill=tk.X, pady=(0, 4))
@@ -2000,6 +2019,9 @@ class SettingsDialog:
             # Unknown language code -- show it directly
             self._lang_var.set(lang_code)
 
+        # Vocabulary hints
+        self._vocab_hints_var.set(config.vocabulary_hints)
+
         # Audio input device
         device_idx = config.audio_device_index
         if device_idx is not None:
@@ -3430,6 +3452,12 @@ class SettingsDialog:
         if new_language != config.transcription_language:
             changed_fields["transcription_language"] = new_language
             config.transcription_language = new_language
+
+        # Vocabulary hints
+        new_vocab_hints = self._vocab_hints_var.get().strip()
+        if new_vocab_hints != config.vocabulary_hints:
+            changed_fields["vocabulary_hints"] = new_vocab_hints
+            config.vocabulary_hints = new_vocab_hints
 
         # Audio input device
         device_label = self._audio_device_var.get()

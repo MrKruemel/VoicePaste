@@ -349,6 +349,7 @@ class LocalWhisperSTT:
         model_path: Optional[Path] = None,
         beam_size: int = LOCAL_STT_DEFAULT_BEAM_SIZE,
         vad_filter: bool = LOCAL_STT_DEFAULT_VAD_FILTER,
+        initial_prompt: str = "",
     ) -> None:
         """Initialize the local Whisper STT backend.
 
@@ -369,6 +370,7 @@ class LocalWhisperSTT:
             beam_size: Beam search width (lower = faster, higher = more accurate).
             vad_filter: Enable Silero VAD to filter silence before Whisper.
                 Defaults to True in script mode, False in frozen exe.
+            initial_prompt: Optional vocabulary hints / context for Whisper.
 
         Raises:
             STTError: If faster-whisper is not installed.
@@ -385,8 +387,10 @@ class LocalWhisperSTT:
         self._model_path = model_path
         self._beam_size = beam_size
         self._vad_filter = vad_filter
+        self._initial_prompt = initial_prompt.strip() if initial_prompt else ""
         self._model = None  # Lazy loaded
         self._model_loaded = False
+        self.detected_language: str | None = None  # Set after transcription
         self._load_lock = threading.Lock()
 
         # Pre-configure onnxruntime for frozen exe before any model load
@@ -680,6 +684,8 @@ class LocalWhisperSTT:
                 beam_size=self._beam_size,
                 vad_filter=self._vad_filter,
             )
+            if self._initial_prompt:
+                transcribe_kwargs["initial_prompt"] = self._initial_prompt
             if self._vad_filter:
                 transcribe_kwargs["vad_parameters"] = dict(
                     min_silence_duration_ms=500,
@@ -702,6 +708,9 @@ class LocalWhisperSTT:
             transcript = " ".join(transcript_parts).strip()
 
             elapsed = time.monotonic() - t0
+
+            # Store detected language for external access
+            self.detected_language = info.language
 
             # REQ-S24/S25: Do not log transcript content, only metadata
             logger.info(

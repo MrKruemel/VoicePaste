@@ -267,6 +267,7 @@ class AppConfig:
     local_device: str = LOCAL_STT_DEFAULT_DEVICE
     local_compute_type: str = LOCAL_STT_DEFAULT_COMPUTE_TYPE
     vad_filter: bool = LOCAL_STT_DEFAULT_VAD_FILTER
+    vocabulary_hints: str = ""
 
     # --- v0.6: TTS (Text-to-Speech) fields ---
     tts_enabled: bool = False
@@ -457,6 +458,10 @@ device = "{esc(self.local_device)}"
 compute_type = "{esc(self.local_compute_type)}"
 # Silero VAD: filter silence before Whisper (disable if .exe crashes during transcription)
 vad_filter = {str(self.vad_filter).lower()}
+# Vocabulary hints: domain terms for better transcription accuracy.
+# Whisper uses this as a prompt/context. Separate terms with commas or spaces.
+# Example: "Kubernetes, pytest, Anamnese, NGINX"
+vocabulary_hints = "{esc(self.vocabulary_hints)}"
 
 [summarization]
 enabled = {str(self.summarization_enabled).lower()}
@@ -785,6 +790,9 @@ def load_config() -> Optional[AppConfig]:
                 "enabled" if vad_filter else "disabled",
             )
 
+    # Vocabulary hints for better transcription of domain-specific terms
+    vocabulary_hints = str(transcription_section.get("vocabulary_hints", "")).strip()
+
     # Validate hotkey strings using the platform-aware parser from hotkey module
     from hotkey import _parse_hotkey
 
@@ -1104,6 +1112,7 @@ def load_config() -> Optional[AppConfig]:
         local_device=local_device,
         local_compute_type=local_compute_type,
         vad_filter=vad_filter,
+        vocabulary_hints=vocabulary_hints,
         # v0.6: TTS fields
         tts_enabled=bool(tts_enabled),
         tts_provider=tts_provider,
