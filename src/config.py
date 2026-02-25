@@ -104,8 +104,8 @@ CONFIG_TEMPLATE = """\
 # VoicePaste Configuration
 # See README.md for full documentation of all options.
 
-# NOTE: API keys are stored securely in Windows Credential Manager.
-# Use the Settings dialog (right-click tray icon > Settings) to manage keys.
+# NOTE: API keys are stored securely in the OS credential store.
+# Use the Settings dialog (General tab > API Keys) to manage keys.
 # If you prefer to store keys in this file, add them below and they will
 # be migrated to Credential Manager on next startup.
 
@@ -426,8 +426,8 @@ class AppConfig:
 # Managed by Settings dialog. Manual edits are preserved on next save.
 
 [api]
-# API keys are stored in Windows Credential Manager.
-# Use the Settings dialog (right-click tray icon > Settings) to manage keys.
+# API keys are stored in the OS credential store.
+# Use the Settings dialog (General tab > API Keys) to manage keys.
 # HTTP API: allow external programs to control Voice Paste via localhost.
 api_enabled = {str(self.api_enabled).lower()}
 api_port = {self.api_port}

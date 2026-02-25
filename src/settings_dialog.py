@@ -583,31 +583,13 @@ class SettingsDialog:
         # --- Cloud sub-frame (shown when backend = cloud) ---
         self._cloud_frame = ttk.Frame(parent)
 
-        # OpenAI API Key row
-        key_row = ttk.Frame(self._cloud_frame)
-        key_row.pack(fill=tk.X, pady=(0, 2))
-
-        ttk.Label(key_row, text="API Key:", width=10, anchor=tk.W).pack(side=tk.LEFT)
-
-        self._openai_key_var = tk.StringVar()
-        self._openai_key_entry = ttk.Entry(
-            key_row, textvariable=self._openai_key_var, show="*", width=40
-        )
-        self._openai_key_entry.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(4, 4))
-
-        self._openai_key_btn = ttk.Button(
-            key_row, text="Edit", width=6, command=self._toggle_openai_key_edit
-        )
-        self._openai_key_btn.pack(side=tk.LEFT)
-
-        # Cloud hint
-        cloud_hint = ttk.Label(
+        # Hint: API key is now in the General tab
+        ttk.Label(
             self._cloud_frame,
-            text="Required for cloud transcription. Get a key at platform.openai.com",
-            foreground="#999999",
+            text="API Key: Configure in General tab \u2192 API Keys",
+            foreground="#66CC66",
             font=("", 8),
-        )
-        cloud_hint.pack(fill=tk.X, padx=(0, 0), pady=(0, 4))
+        ).pack(fill=tk.X, pady=(0, 4))
 
         # --- Local sub-frame (shown when backend = local) ---
         self._local_frame = ttk.Frame(parent)
@@ -772,37 +754,15 @@ class SettingsDialog:
         self._provider_combo.pack(side=tk.LEFT, padx=(4, 0))
         self._provider_combo.bind("<<ComboboxSelected>>", self._on_provider_changed)
 
-        # OpenRouter API Key row (hidden when provider is OpenAI)
+        # OpenRouter hint frame (shown when provider is OpenRouter)
         self._openrouter_key_frame = ttk.Frame(parent)
 
-        or_key_row = ttk.Frame(self._openrouter_key_frame)
-        or_key_row.pack(fill=tk.X, pady=(0, 2))
-
-        ttk.Label(or_key_row, text="API Key:", width=10, anchor=tk.W).pack(side=tk.LEFT)
-
-        self._openrouter_key_var = tk.StringVar()
-        self._openrouter_key_entry = ttk.Entry(
-            or_key_row, textvariable=self._openrouter_key_var, show="*", width=40
-        )
-        self._openrouter_key_entry.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(4, 4))
-
-        self._openrouter_key_btn = ttk.Button(
-            or_key_row, text="Edit", width=6, command=self._toggle_openrouter_key_edit
-        )
-        self._openrouter_key_btn.pack(side=tk.LEFT)
-
-        or_hint = ttk.Label(
+        ttk.Label(
             self._openrouter_key_frame,
-            text="Required for OpenRouter. Get a key at openrouter.ai",
-            foreground="#999999",
+            text="API Key: Configure in General tab \u2192 API Keys",
+            foreground="#66CC66",
             font=("", 8),
-        )
-        or_hint.pack(fill=tk.X, pady=(0, 4))
-
-        # OpenRouter error label
-        self._openrouter_error = ttk.Label(
-            self._openrouter_key_frame, text="", foreground="#FF6B6B", font=("", 8)
-        )
+        ).pack(fill=tk.X, pady=(0, 4))
 
         # Model row
         model_row = ttk.Frame(parent)
@@ -880,14 +840,13 @@ class SettingsDialog:
         prompt_hint.pack(fill=tk.X, pady=(0, 4))
 
         # Store references to summarization widgets for enable/disable
+        # Note: API key widgets are in the General tab and always accessible.
         self._summarization_widgets = [
             self._provider_combo,
             self._model_entry,
             self._base_url_entry,
             self._prompt_text,
             self._prompt_reset_btn,
-            self._openrouter_key_entry,
-            self._openrouter_key_btn,
         ]
 
     def _build_tts_tab(self, parent: "ttk.Frame") -> None:
@@ -929,34 +888,13 @@ class SettingsDialog:
         # --- TTS Cloud sub-frame (ElevenLabs, shown when backend = cloud) ---
         self._tts_cloud_frame = ttk.Frame(parent)
 
-        # ElevenLabs API Key row
-        tts_key_row = ttk.Frame(self._tts_cloud_frame)
-        tts_key_row.pack(fill=tk.X, pady=(0, 2))
-
-        ttk.Label(tts_key_row, text="API Key:", width=10, anchor=tk.W).pack(side=tk.LEFT)
-
-        self._elevenlabs_key_var = tk.StringVar()
-        self._elevenlabs_key_entry = ttk.Entry(
-            tts_key_row, textvariable=self._elevenlabs_key_var, show="*", width=40
-        )
-        self._elevenlabs_key_entry.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(4, 4))
-
-        self._elevenlabs_key_btn = ttk.Button(
-            tts_key_row, text="Edit", width=6, command=self._toggle_elevenlabs_key_edit
-        )
-        self._elevenlabs_key_btn.pack(side=tk.LEFT)
-
-        # Track editing state for ElevenLabs key
-        self._elevenlabs_key_editing = False
-        self._elevenlabs_key_actual = self._config.elevenlabs_api_key
-
-        tts_key_hint = ttk.Label(
+        # Hint: ElevenLabs API key is now in the General tab
+        ttk.Label(
             self._tts_cloud_frame,
-            text="Get a key at elevenlabs.io. Stored in Windows Credential Manager.",
-            foreground="#999999",
+            text="API Key: Configure in General tab \u2192 API Keys",
+            foreground="#66CC66",
             font=("", 8),
-        )
-        tts_key_hint.pack(fill=tk.X, pady=(0, 4))
+        ).pack(fill=tk.X, pady=(0, 4))
 
         # Voice row
         tts_voice_row = ttk.Frame(self._tts_cloud_frame)
@@ -1013,10 +951,10 @@ class SettingsDialog:
         # --- TTS OpenAI sub-frame (shown when backend = Cloud (OpenAI)) ---
         self._tts_openai_frame = ttk.Frame(parent)
 
-        # OpenAI API key hint (reuses OpenAI key from Transcription tab)
+        # OpenAI API key hint (key is now in the General tab)
         tts_openai_key_hint = ttk.Label(
             self._tts_openai_frame,
-            text="Uses your OpenAI API key from the Transcription tab.",
+            text="API Key: Configure in General tab \u2192 API Keys",
             foreground="#66CC66",
             font=("", 8),
         )
@@ -1360,10 +1298,9 @@ class SettingsDialog:
         ).pack(fill=tk.X, pady=(0, 4))
 
         # Store references for enable/disable
+        # Note: API key widgets are in the General tab and always accessible.
         self._tts_widgets = [
             self._tts_backend_combo,
-            self._elevenlabs_key_entry,
-            self._elevenlabs_key_btn,
             self._tts_voice_combo,
             self._tts_voice_id_entry,
             self._tts_model_combo,
@@ -1387,6 +1324,110 @@ class SettingsDialog:
             self._tts_preprocess_prompt_text,
         ]
 
+    def _build_api_keys_section(self, parent: "ttk.Frame") -> None:
+        """Build the centralized API Keys section.
+
+        All API key fields are managed here instead of being scattered
+        across individual feature tabs.  This makes it easier for users
+        to find and configure their keys in one place.
+
+        Args:
+            parent: The frame to populate (typically the General tab).
+        """
+        tk = self._tk
+        ttk = self._ttk
+        config = self._config
+
+        api_keys_label = ttk.Label(
+            parent, text="API Keys", font=("", 10, "bold")
+        )
+        api_keys_label.pack(fill=tk.X, pady=(0, 6))
+
+        # --- OpenAI / Compatible ---
+        openai_row = ttk.Frame(parent)
+        openai_row.pack(fill=tk.X, pady=(0, 2))
+
+        ttk.Label(openai_row, text="OpenAI:", width=12, anchor=tk.W).pack(side=tk.LEFT)
+
+        self._openai_key_var = tk.StringVar()
+        self._openai_key_entry = ttk.Entry(
+            openai_row, textvariable=self._openai_key_var, show="*", width=36
+        )
+        self._openai_key_entry.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(4, 4))
+
+        self._openai_key_btn = ttk.Button(
+            openai_row, text="Edit", width=6, command=self._toggle_openai_key_edit
+        )
+        self._openai_key_btn.pack(side=tk.LEFT)
+
+        ttk.Label(
+            parent,
+            text="For cloud STT, OpenAI summarization, and OpenAI TTS. Supports OpenAI-compatible endpoints.",
+            foreground="#999999",
+            font=("", 8),
+        ).pack(fill=tk.X, pady=(0, 4))
+
+        # --- OpenRouter ---
+        openrouter_row = ttk.Frame(parent)
+        openrouter_row.pack(fill=tk.X, pady=(0, 2))
+
+        ttk.Label(openrouter_row, text="OpenRouter:", width=12, anchor=tk.W).pack(side=tk.LEFT)
+
+        self._openrouter_key_var = tk.StringVar()
+        self._openrouter_key_entry = ttk.Entry(
+            openrouter_row, textvariable=self._openrouter_key_var, show="*", width=36
+        )
+        self._openrouter_key_entry.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(4, 4))
+
+        self._openrouter_key_btn = ttk.Button(
+            openrouter_row, text="Edit", width=6, command=self._toggle_openrouter_key_edit
+        )
+        self._openrouter_key_btn.pack(side=tk.LEFT)
+
+        ttk.Label(
+            parent,
+            text="For OpenRouter summarization.",
+            foreground="#999999",
+            font=("", 8),
+        ).pack(fill=tk.X, pady=(0, 4))
+
+        # --- ElevenLabs ---
+        elevenlabs_row = ttk.Frame(parent)
+        elevenlabs_row.pack(fill=tk.X, pady=(0, 2))
+
+        ttk.Label(elevenlabs_row, text="ElevenLabs:", width=12, anchor=tk.W).pack(side=tk.LEFT)
+
+        self._elevenlabs_key_var = tk.StringVar()
+        self._elevenlabs_key_entry = ttk.Entry(
+            elevenlabs_row, textvariable=self._elevenlabs_key_var, show="*", width=36
+        )
+        self._elevenlabs_key_entry.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(4, 4))
+
+        self._elevenlabs_key_btn = ttk.Button(
+            elevenlabs_row, text="Edit", width=6, command=self._toggle_elevenlabs_key_edit
+        )
+        self._elevenlabs_key_btn.pack(side=tk.LEFT)
+
+        self._elevenlabs_key_editing = False
+        self._elevenlabs_key_actual = config.elevenlabs_api_key
+
+        ttk.Label(
+            parent,
+            text="For ElevenLabs TTS.",
+            foreground="#999999",
+            font=("", 8),
+        ).pack(fill=tk.X, pady=(0, 4))
+
+        # Footer
+        ttk.Label(
+            parent,
+            text="Keys are stored securely in the OS credential store.",
+            foreground="#888888",
+            font=("", 8, "italic"),
+        ).pack(fill=tk.X, pady=(0, 4))
+
+        ttk.Separator(parent, orient=tk.HORIZONTAL).pack(fill=tk.X, pady=(4, 8))
+
     def _build_general_tab(self, parent: "ttk.Frame") -> None:
         """Build widgets for the General tab.
 
@@ -1395,6 +1436,9 @@ class SettingsDialog:
         """
         tk = self._tk
         ttk = self._ttk
+
+        # --- API Keys section (centralized) ---
+        self._build_api_keys_section(parent)
 
         # --- Hotkeys section ---
         hotkeys_label = ttk.Label(
@@ -2533,7 +2577,7 @@ class SettingsDialog:
         return "base"  # fallback
 
     def _update_provider_ui(self) -> None:
-        """Show/hide the OpenRouter API key field based on provider selection."""
+        """Show/hide the OpenRouter hint based on provider selection."""
         provider = self._provider_var.get()
         if provider == "OpenRouter":
             self._openrouter_key_frame.pack(
@@ -2567,12 +2611,6 @@ class SettingsDialog:
                     elif widget == self._prompt_text:
                         widget.config(state="normal",
                                       bg=self._text_bg, fg=self._text_fg)
-                    elif widget in (self._openrouter_key_entry,):
-                        # Respect editing state
-                        if self._openrouter_key_editing:
-                            widget.config(state="normal")
-                        else:
-                            widget.config(state="readonly")
                     else:
                         widget.config(state="normal")
                 else:
@@ -2662,11 +2700,6 @@ class SettingsDialog:
                         self._tts_preprocess_preset_combo,
                     ):
                         widget.config(state="readonly")
-                    elif widget == self._elevenlabs_key_entry:
-                        if self._elevenlabs_key_editing:
-                            widget.config(state="normal")
-                        else:
-                            widget.config(state="readonly")
                     elif widget in (self._tts_download_btn, self._tts_delete_btn):
                         # Only enable download/delete if local backend is active
                         # and model status warrants it (handled by _update_tts_model_status)
@@ -3255,35 +3288,56 @@ class SettingsDialog:
         Returns:
             Error message string if validation fails, None if OK.
         """
+        # Helper: switch to the General tab and focus a key entry.
+        # Tab indices: 0=Transcription, 1=Summarization, 2=TTS, 3=General
+        GENERAL_TAB_INDEX = 3
+
+        def _focus_key(entry):
+            self._notebook.select(GENERAL_TAB_INDEX)
+            entry.focus_set()
+
         backend = self._backend_var.get()
         is_cloud = "Cloud" in backend
 
         # Transcription API key (only required for cloud backend)
+        # No format restriction — supports OpenAI-compatible endpoints.
         if is_cloud:
             if self._openai_key_editing:
                 key = self._openai_key_var.get().strip()
                 if not key:
-                    self._openai_key_entry.focus_set()
-                    return "Transcription API key is required for cloud mode."
-                if not key.startswith("sk-"):
-                    self._openai_key_entry.focus_set()
-                    return 'API key should start with "sk-". Check your key.'
+                    _focus_key(self._openai_key_entry)
+                    return "OpenAI API key is required for cloud transcription. Configure in General tab \u2192 API Keys."
             elif not self._openai_key_actual:
-                return "Transcription API key is required for cloud mode. Click Edit to enter one."
+                self._notebook.select(GENERAL_TAB_INDEX)
+                return "OpenAI API key is required for cloud transcription. Configure in General tab \u2192 API Keys."
 
         # Summarization
         if self._summarization_enabled_var.get():
             provider = self._provider_var.get()
+
+            # OpenAI provider: needs OpenAI key
+            if provider == "OpenAI":
+                if self._openai_key_editing:
+                    key = self._openai_key_var.get().strip()
+                    if not key:
+                        _focus_key(self._openai_key_entry)
+                        return "OpenAI API key is required for OpenAI summarization. Configure in General tab \u2192 API Keys."
+                elif not self._openai_key_actual:
+                    if not is_cloud:
+                        # Only warn if not already caught by the transcription check above
+                        self._notebook.select(GENERAL_TAB_INDEX)
+                        return "OpenAI API key is required for OpenAI summarization. Configure in General tab \u2192 API Keys."
 
             # OpenRouter key required
             if provider == "OpenRouter":
                 if self._openrouter_key_editing:
                     or_key = self._openrouter_key_var.get().strip()
                     if not or_key:
-                        self._openrouter_key_entry.focus_set()
-                        return "OpenRouter API key is required when OpenRouter is selected."
+                        _focus_key(self._openrouter_key_entry)
+                        return "OpenRouter API key is required. Configure in General tab \u2192 API Keys."
                 elif not self._openrouter_key_actual:
-                    return "OpenRouter API key is required. Click Edit to enter one."
+                    self._notebook.select(GENERAL_TAB_INDEX)
+                    return "OpenRouter API key is required. Configure in General tab \u2192 API Keys."
 
             # Model required
             if not self._model_var.get().strip():
@@ -3301,25 +3355,38 @@ class SettingsDialog:
                 self._base_url_entry.focus_set()
                 return "Base URL must start with https:// for security (except localhost)."
 
-        # TTS validation (v0.6, v0.7 local Piper)
+        # TTS validation
         if self._tts_enabled_var.get():
             tts_backend = self._tts_backend_var.get()
-            is_tts_cloud = "Cloud" in tts_backend
 
-            if is_tts_cloud:
-                # Cloud (ElevenLabs) -- require API key and voice ID
+            if "ElevenLabs" in tts_backend:
+                # Cloud (ElevenLabs) -- require ElevenLabs API key and voice ID
                 if self._elevenlabs_key_editing:
                     el_key = self._elevenlabs_key_var.get().strip()
                     if not el_key:
-                        self._elevenlabs_key_entry.focus_set()
-                        return "ElevenLabs API key is required for cloud TTS."
+                        _focus_key(self._elevenlabs_key_entry)
+                        return "ElevenLabs API key is required for cloud TTS. Configure in General tab \u2192 API Keys."
                 elif not self._elevenlabs_key_actual:
-                    return "ElevenLabs API key is required for cloud TTS. Click Edit to enter one."
+                    self._notebook.select(GENERAL_TAB_INDEX)
+                    return "ElevenLabs API key is required for cloud TTS. Configure in General tab \u2192 API Keys."
 
                 voice_id = self._tts_voice_id_var.get().strip()
                 if not voice_id:
                     self._tts_voice_id_entry.focus_set()
-                    return "Voice ID is required for cloud TTS."
+                    return "Voice ID is required for ElevenLabs TTS."
+
+            elif "OpenAI" in tts_backend:
+                # Cloud (OpenAI) -- require OpenAI API key
+                if self._openai_key_editing:
+                    key = self._openai_key_var.get().strip()
+                    if not key:
+                        _focus_key(self._openai_key_entry)
+                        return "OpenAI API key is required for OpenAI TTS. Configure in General tab \u2192 API Keys."
+                elif not self._openai_key_actual:
+                    if not is_cloud:
+                        self._notebook.select(GENERAL_TAB_INDEX)
+                        return "OpenAI API key is required for OpenAI TTS. Configure in General tab \u2192 API Keys."
+
             else:
                 # Local (Piper) -- just require a voice selection
                 piper_voice = self._get_selected_tts_voice_key()
