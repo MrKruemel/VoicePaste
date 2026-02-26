@@ -239,6 +239,29 @@ sentence_pause_ms = 350
 # noise_scale = 0.667
 # noise_w = 0.8
 
+# --- TTS Audio Effects (v1.2+, Piper only) ---
+# Post-process synthesized audio with optional effects: pitch shift, formant shift, EQ, reverb.
+# All effects are processed in 5 steps: pitch → formant → bass EQ → treble EQ → reverb → RMS normalization.
+# RMS loudness normalization (step 5) restores original volume after processing, with gain capped at 4x.
+# Test effects in real-time with the Preview button in Settings > Text-to-Speech > Audio Effects.
+# Only applies to Piper local TTS (not ElevenLabs cloud).
+
+# Enable audio effects (default: false)
+audio_fx_enabled = false
+# Pitch shift in semitones: -6.0 to +6.0 (default: 0.0 = no shift)
+# Positive values raise pitch, negative values lower it.
+audio_fx_pitch_semitones = 0.0
+# Formant shift factor: 0.7 to 1.4 (default: 1.0 = no shift)
+# Values < 1.0 deepen the voice (longer vocal tract), values > 1.0 raise formants (shorter vocal tract).
+audio_fx_formant_shift = 1.0
+# Bass shelf gain in decibels at 200 Hz: -12.0 to +12.0 (default: 0.0 = flat)
+audio_fx_bass_db = 0.0
+# Treble shelf gain in decibels at 3000 Hz: -12.0 to +12.0 (default: 0.0 = flat)
+audio_fx_treble_db = 0.0
+# Reverb wet/dry mix: 0.0 to 0.5 (default: 0.0 = no reverb)
+# 0.0 = fully dry (no reverb), 0.5 = equal wet and dry.
+audio_fx_reverb_mix = 0.0
+
 # --- TTS LLM Preprocessing (for Ctrl+Alt+T clipboard readback) ---
 # Preprocess clipboard text with LLM before TTS synthesis.
 # Rewrites messy text (bullets, markdown, URLs, code) into natural spoken prose.

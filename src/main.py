@@ -383,6 +383,33 @@ class VoicePasteApp:
             if config.tts_noise_w != DEFAULT_TTS_NOISE_W
             else None
         )
+        # Build audio FX config for Piper local TTS (ignored by cloud backends).
+        # Master toggle: if audio_fx_enabled is False, skip entirely.
+        # Otherwise only create when at least one value deviates from neutral
+        # defaults -- pass None so effects are fully disabled.
+        from audio_fx import AudioFXConfig
+        if not config.audio_fx_enabled:
+            audio_fx = None
+            logger.debug("Audio FX: master toggle OFF, effects disabled.")
+        else:
+            audio_fx = AudioFXConfig(
+                pitch_semitones=config.audio_fx_pitch_semitones,
+                formant_shift=config.audio_fx_formant_shift,
+                bass_db=config.audio_fx_bass_db,
+                treble_db=config.audio_fx_treble_db,
+                reverb_mix=config.audio_fx_reverb_mix,
+            )
+            if audio_fx.is_bypass:
+                audio_fx = None
+                logger.debug("Audio FX: all defaults, effects disabled (bypass).")
+            else:
+                logger.info(
+                    "Audio FX active: pitch=%.1f, formant=%.2f, bass=%.1f, "
+                    "treble=%.1f, reverb=%.2f",
+                    audio_fx.pitch_semitones, audio_fx.formant_shift,
+                    audio_fx.bass_db, audio_fx.treble_db, audio_fx.reverb_mix,
+                )
+
         self._tts = create_tts_backend(
             api_key=tts_api_key,
             provider=config.tts_provider,
@@ -399,6 +426,7 @@ class VoicePasteApp:
             openai_tts_format=config.tts_openai_format,
             openai_tts_instructions=config.tts_openai_instructions,
             speaker_id=config.tts_piper_speaker_id,
+            audio_fx_config=audio_fx,
         )
         if self._tts is not None:
             logger.info("TTS backend ready: %s", config.tts_provider)
@@ -919,6 +947,12 @@ class VoicePasteApp:
             "tts_output_format",
             "tts_local_voice",
             "tts_piper_speaker_id",
+            "audio_fx_enabled",
+            "audio_fx_pitch_semitones",
+            "audio_fx_formant_shift",
+            "audio_fx_bass_db",
+            "audio_fx_treble_db",
+            "audio_fx_reverb_mix",
         }
         if changed_fields.keys() & tts_keys:
             # Unload previous local TTS model if switching away

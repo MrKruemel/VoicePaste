@@ -8,8 +8,13 @@ v0.7: Added Piper local TTS via direct ONNX inference.
 v0.9.2: Added OpenAI TTS (gpt-4o-mini-tts, tts-1, tts-1-hd).
 """
 
+from __future__ import annotations
+
 import logging
-from typing import Optional, Protocol
+from typing import TYPE_CHECKING, Optional, Protocol
+
+if TYPE_CHECKING:
+    from audio_fx import AudioFXConfig
 
 logger = logging.getLogger(__name__)
 
@@ -234,6 +239,7 @@ def create_tts_backend(
     openai_tts_format: str = "",
     openai_tts_instructions: str = "",
     speaker_id: int = 0,
+    audio_fx_config: Optional["AudioFXConfig"] = None,
 ) -> Optional[TTSBackend]:
     """Factory: create a TTS backend from configuration.
 
@@ -278,6 +284,7 @@ def create_tts_backend(
                 noise_scale=noise_scale,
                 noise_w=noise_w,
                 speaker_id=speaker_id,
+                audio_fx_config=audio_fx_config,
             )
 
         except ImportError as e:

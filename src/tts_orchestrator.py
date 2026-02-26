@@ -15,7 +15,12 @@ from typing import Callable, Optional
 
 import numpy as np
 
-from constants import AppState, ELEVENLABS_VOICE_PRESETS, TTS_EMOTION_TAGGING_PROMPT
+from constants import (
+    AppState,
+    ELEVENLABS_VOICE_PRESETS,
+    TTS_EMOTION_PROMPT_DE,
+    TTS_DIALOG_PROMPT_EN,
+)
 from tts import TTSError
 from tts_cache import CacheKey
 
@@ -85,9 +90,23 @@ class TTSOrchestrator:
         """Build a CacheKey from the current TTS config and text."""
         config = self.config
         if config.tts_provider == "piper":
+            # Include audio FX parameters in cache key so different
+            # effect settings produce different cache entries.
+            from audio_fx import AudioFXConfig
+            fx = AudioFXConfig(
+                pitch_semitones=config.audio_fx_pitch_semitones,
+                formant_shift=config.audio_fx_formant_shift,
+                bass_db=config.audio_fx_bass_db,
+                treble_db=config.audio_fx_treble_db,
+                reverb_mix=config.audio_fx_reverb_mix,
+            )
+            fx_suffix = fx.to_cache_suffix()
+            voice_id = config.tts_local_voice
+            if fx_suffix:
+                voice_id = f"{voice_id}|{fx_suffix}"
             return CacheKey(
                 provider="piper",
-                voice_id=config.tts_local_voice,
+                voice_id=voice_id,
                 text=text,
             )
         if config.tts_provider == "openai":
@@ -134,6 +153,10 @@ class TTSOrchestrator:
         clipboard text (bullets, markdown, URLs) into natural spoken
         prose via the summarizer.
 
+        When no custom prompt is configured, the default prompt is
+        selected automatically based on the Piper voice language
+        (German or English).
+
         Returns the original text if preprocessing is disabled or
         if the summarizer is unavailable.
         """
@@ -144,11 +167,23 @@ class TTSOrchestrator:
             logger.debug("TTS preprocess enabled but no summarizer available.")
             return text
 
-        # Determine the effective prompt
-        from constants import TTS_PREPROCESS_DEFAULT_PROMPT
+        # Determine the effective prompt, with language-adaptive default
+        from constants import (
+            TTS_PREPROCESS_DEFAULT_PROMPT,
+            TTS_PREPROCESS_DEFAULT_PROMPT_EN,
+            get_voice_language,
+        )
         prompt = config.tts_preprocess_prompt.strip()
         if not prompt:
-            prompt = TTS_PREPROCESS_DEFAULT_PROMPT
+            lang = get_voice_language(config.tts_local_voice)
+            if lang == "en":
+                prompt = TTS_PREPROCESS_DEFAULT_PROMPT_EN
+            else:
+                prompt = TTS_PREPROCESS_DEFAULT_PROMPT
+            logger.debug(
+                "TTS preprocess: using %s default prompt (voice=%s).",
+                lang, config.tts_local_voice,
+            )
 
         try:
             processed = self.summarizer.summarize(
@@ -169,18 +204,41 @@ class TTSOrchestrator:
     # -- Dynamic emotion tagging --
 
     def _should_use_dynamic_emotions(self) -> bool:
-        """Check if dynamic emotion tagging should be used."""
-        return (
-            self.config.tts_dynamic_emotions
-            and getattr(self.tts, "supports_streaming", False) is True
-            and getattr(self.tts, "speaker_id_map", None) is not None
-            and self.summarizer is not None
-        )
+        """Check if dynamic emotion tagging should be used.
+
+        Requires: dynamic_emotions enabled, streaming TTS with speaker map,
+        and a REAL LLM summarizer (not PassthroughSummarizer).
+        """
+        if not self.config.tts_dynamic_emotions:
+            return False
+        if not (getattr(self.tts, "supports_streaming", False) is True
+                and getattr(self.tts, "speaker_id_map", None) is not None):
+            return False
+        if self.summarizer is None:
+            logger.debug("Dynamic emotions: no summarizer available.")
+            return False
+        # PassthroughSummarizer just returns text unchanged — can't do tagging
+        cls_name = type(self.summarizer).__name__
+        if cls_name == "PassthroughSummarizer":
+            logger.warning(
+                "Dynamic emotions requires a real LLM summarizer (not Passthrough). "
+                "Enable summarization in Settings with an API key."
+            )
+            return False
+        return True
 
     def _tag_emotions(
         self, text: str,
     ) -> Optional[list[tuple[str, Optional[int]]]]:
-        """Use the LLM to tag each sentence with an emotion.
+        """Use the LLM to tag each sentence with an emotion or character.
+
+        Automatically selects the German emotion prompt or English dialog
+        prompt based on the current Piper voice language. Uses
+        ``speaker_examples`` from the voice model registry when available,
+        falling back to auto-generated generic examples.
+
+        A custom prompt (``config.tts_emotion_prompt``) takes priority
+        over the auto-selected prompt.
 
         Returns a list of (sentence_text, speaker_id) tuples, or None
         if tagging fails (caller should fall back to normal streaming).
@@ -190,30 +248,65 @@ class TTSOrchestrator:
             return None
 
         # Build descriptions from voice model registry
-        from constants import PIPER_VOICE_MODELS
+        from constants import PIPER_VOICE_MODELS, get_voice_language
         voice_info = PIPER_VOICE_MODELS.get(self.config.tts_local_voice, {})
         descriptions = voice_info.get("speaker_descriptions", {})
+        speaker_examples = voice_info.get("speaker_examples", {})
 
-        emotion_names = sorted(sid_map.keys())
+        label_names = sorted(sid_map.keys())
+        label_list_str = ", ".join(label_names)
         desc_lines = []
-        for name in emotion_names:
+        for name in label_names:
             desc = descriptions.get(name, "")
             if desc:
                 desc_lines.append(f"- {name}: {desc}")
             else:
                 desc_lines.append(f"- {name}")
 
-        # Build examples using first few labels
-        example_labels = emotion_names[:3] if len(emotion_names) >= 3 else emotion_names
-        examples = "\n".join(
-            f"{label}: Example sentence for {label}."
-            for label in example_labels
+        # Build examples: prefer speaker_examples from registry, fall back
+        # to generic auto-generated placeholders.
+        if speaker_examples:
+            example_labels = [k for k in label_names if k in speaker_examples]
+            if not example_labels:
+                example_labels = label_names[:3]
+            examples = "\n".join(
+                f"{label}: {speaker_examples.get(label, 'Example sentence.')}"
+                for label in example_labels
+            )
+        else:
+            example_labels = label_names[:3] if len(label_names) >= 3 else label_names
+            examples = "\n".join(
+                f"{label}: Example sentence for {label}."
+                for label in example_labels
+            )
+
+        # Select prompt: custom > auto (by voice language)
+        custom_prompt = getattr(self.config, "tts_emotion_prompt", "")
+        if custom_prompt and custom_prompt.strip():
+            prompt_template = custom_prompt.strip()
+            logger.debug("Emotion tagging: using custom prompt.")
+        else:
+            lang = get_voice_language(self.config.tts_local_voice)
+            if lang == "en":
+                prompt_template = TTS_DIALOG_PROMPT_EN
+            else:
+                prompt_template = TTS_EMOTION_PROMPT_DE
+            logger.debug(
+                "Emotion tagging: using %s prompt (voice=%s).",
+                lang, self.config.tts_local_voice,
+            )
+
+        prompt = prompt_template.format(
+            label_descriptions="\n".join(desc_lines),
+            label_list=label_list_str,
+            examples=examples,
+            # Keep backward compat with old {emotion_descriptions} placeholder
+            emotion_descriptions="\n".join(desc_lines),
         )
 
-        prompt = TTS_EMOTION_TAGGING_PROMPT.format(
-            emotion_descriptions="\n".join(desc_lines),
-            examples=examples,
-            text=text,
+        logger.debug(
+            "Emotion tagging prompt (%d chars):\n%s",
+            len(prompt), prompt[:500],
         )
 
         try:
@@ -221,6 +314,7 @@ class TTSOrchestrator:
             if not tagged or not tagged.strip():
                 logger.warning("Emotion tagging returned empty result.")
                 return None
+            logger.debug("Emotion tagging LLM response:\n%s", tagged[:500])
         except Exception:
             logger.exception("Emotion tagging LLM call failed.")
             return None
@@ -251,12 +345,16 @@ class TTSOrchestrator:
                 sentence_text = match.group(2).strip()
                 sid = sid_map.get(emotion_label)
                 if sid is None:
-                    logger.debug(
-                        "Unknown emotion '%s', using default.", emotion_label,
+                    logger.warning(
+                        "Unknown emotion label '%s' (valid: %s), using default.",
+                        emotion_label, ", ".join(sorted(sid_map.keys())),
                     )
+                else:
+                    logger.debug("Matched label '%s' -> speaker_id=%d", emotion_label, sid)
                 segments.append((sentence_text, sid))
             else:
-                # Line doesn't match pattern — use as-is with default speaker
+                # Line doesn't match "label: text" pattern — use as-is with default
+                logger.debug("No label match for line: %.60s", line)
                 segments.append((line, None))
 
         if not segments:

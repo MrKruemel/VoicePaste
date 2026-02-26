@@ -301,6 +301,12 @@ def open_settings_dialog(
             _apply_dark_title_bar(dialog._dialog)
 
             def _on_close():
+                # Stop any running FX preview playback
+                if dialog._preview_player is not None:
+                    try:
+                        dialog._preview_player.stop()
+                    except Exception:
+                        pass
                 root.quit()
 
             dialog.protocol("WM_DELETE_WINDOW", _on_close)
@@ -366,14 +372,18 @@ class SettingsDialog:
         self._dialog = tk.Toplevel(parent)
         self._dialog.title("Voice Paste - Settings")
         self._dialog.configure(bg=self._bg_color)
-        self._dialog.resizable(False, False)
-        self._dialog.minsize(540, 580)
+        self._dialog.resizable(True, True)
+        self._dialog.minsize(720, 580)
 
         # Track editing state for API key fields
         self._openai_key_editing = False
         self._openrouter_key_editing = False
         self._openai_key_actual = config.openai_api_key
         self._openrouter_key_actual = config.openrouter_api_key
+
+        # Audio FX preview state
+        self._preview_player = None  # AudioPlayer instance during preview
+        self._preview_playing = False
 
         # Model download state
         self._download_thread: threading.Thread | None = None
@@ -391,13 +401,16 @@ class SettingsDialog:
         self._build_ui()
         self._populate_from_config()
 
-        # Center on screen
+        # Set a fixed initial size and center on screen.
+        # Width 680 accommodates all 6 tab labels; height 640 fits most
+        # tabs without scrolling and always shows Save/Cancel.
         self._dialog.update_idletasks()
-        w = self._dialog.winfo_width()
-        h = self._dialog.winfo_height()
+        w = 720
+        screen_h = self._dialog.winfo_screenheight()
+        h = min(640, screen_h - 80)
         x = (self._dialog.winfo_screenwidth() // 2) - (w // 2)
-        y = (self._dialog.winfo_screenheight() // 2) - (h // 2)
-        self._dialog.geometry(f"+{x}+{y}")
+        y = (screen_h // 2) - (h // 2)
+        self._dialog.geometry(f"{w}x{h}+{x}+{y}")
 
         # Focus and keyboard bindings
         self._dialog.focus_force()
@@ -411,15 +424,17 @@ class SettingsDialog:
     def _build_ui(self) -> None:
         """Build all UI widgets using a tabbed Notebook layout.
 
-        Layout structure:
+        Layout structure (pack order matters -- bottom-anchored widgets first):
             main_frame
-                notebook (ttk.Notebook)
-                    Tab 1: Transcription
-                    Tab 2: Summarization
-                    Tab 3: Text-to-Speech
-                    Tab 4: General
-                error_label (shown on validation failure)
-                button_frame (Save / Cancel)
+                button_frame (Save / Cancel) -- packed side=BOTTOM first
+                error_label (shown on validation failure) -- packed before button_frame
+                notebook (ttk.Notebook) -- packed side=TOP, expand=True, fills rest
+                    Tab 1: Transcription   (scrollable)
+                    Tab 2: Summarization   (scrollable)
+                    Tab 3: Text-to-Speech  (scrollable)
+                    Tab 4: General         (scrollable)
+                    Tab 5: Hands-Free      (scrollable)
+                    Tab 6: Claude Code     (scrollable)
         """
         tk = self._tk
         ttk = self._ttk
@@ -429,24 +444,94 @@ class SettingsDialog:
         main_frame = ttk.Frame(dialog, padding=12)
         main_frame.pack(fill=tk.BOTH, expand=True)
 
-        # === Notebook (tabbed container) ===
+        # === Button Bar (pack FIRST with side=BOTTOM so it always gets space) ===
+        self._button_frame = ttk.Frame(main_frame)
+        self._button_frame.pack(side=tk.BOTTOM, fill=tk.X, pady=(12, 0))
+
+        ttk.Button(
+            self._button_frame,
+            text="Save",
+            width=10,
+            command=self._on_save_clicked,
+        ).pack(side=tk.RIGHT)
+
+        ttk.Button(
+            self._button_frame,
+            text="Cancel",
+            width=10,
+            command=self._on_cancel_clicked,
+        ).pack(side=tk.RIGHT, padx=(0, 8))
+
+        # === Error label (above buttons, hidden by default) ===
+        self._error_label = ttk.Label(
+            main_frame, text="", foreground="#FF6B6B", wraplength=620
+        )
+        # Not packed initially; shown by _on_save_clicked on validation error
+
+        # === Notebook (tabbed container — fills remaining space above buttons) ===
         self._notebook = ttk.Notebook(main_frame)
-        self._notebook.pack(fill=tk.BOTH, expand=True)
+        self._notebook.pack(side=tk.TOP, fill=tk.BOTH, expand=True)
 
-        # Create tab frames with internal padding
-        transcription_tab = ttk.Frame(self._notebook, padding=(10, 8))
-        summarization_tab = ttk.Frame(self._notebook, padding=(10, 8))
-        tts_tab = ttk.Frame(self._notebook, padding=(10, 8))
-        general_tab = ttk.Frame(self._notebook, padding=(10, 8))
-        handsfree_tab = ttk.Frame(self._notebook, padding=(10, 8))
-        claude_code_tab = ttk.Frame(self._notebook, padding=(10, 8))
+        # All tabs use a scrollable canvas so content that exceeds the
+        # window height can be reached via mousewheel / scrollbar.
+        self._scrollable_canvases: list = []  # [(outer_frame, canvas)]
 
-        self._notebook.add(transcription_tab, text="Transcription")
-        self._notebook.add(summarization_tab, text="Summarization")
-        self._notebook.add(tts_tab, text="Text-to-Speech")
-        self._notebook.add(general_tab, text="General")
-        self._notebook.add(handsfree_tab, text="Hands-Free")
-        self._notebook.add(claude_code_tab, text="Claude Code")
+        def _make_scrollable_tab(label: str) -> "tuple[ttk.Frame, ttk.Frame]":
+            """Create a notebook tab with a vertical-scroll canvas.
+
+            Returns (outer_frame added to notebook, inner_frame to pack widgets into).
+            """
+            outer = ttk.Frame(self._notebook)
+            canvas = tk.Canvas(
+                outer, highlightthickness=0, borderwidth=0, bg=self._bg_color,
+            )
+            scrollbar = ttk.Scrollbar(outer, orient=tk.VERTICAL, command=canvas.yview)
+            inner = ttk.Frame(canvas, padding=(10, 8))
+
+            canvas.create_window((0, 0), window=inner, anchor=tk.NW, tags="inner")
+            canvas.configure(yscrollcommand=scrollbar.set)
+            scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+            canvas.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+
+            # Keep scrollregion in sync with content size
+            inner.bind(
+                "<Configure>",
+                lambda e, c=canvas: c.configure(scrollregion=c.bbox("all")),
+            )
+            # Keep inner frame width matching the canvas
+            canvas.bind(
+                "<Configure>",
+                lambda e, c=canvas: c.itemconfig("inner", width=e.width),
+            )
+
+            self._notebook.add(outer, text=label)
+            self._scrollable_canvases.append((outer, canvas))
+            return outer, inner
+
+        # Create all six tabs
+        _stt_outer, transcription_tab = _make_scrollable_tab("Transcription")
+        _sum_outer, summarization_tab = _make_scrollable_tab("Summarization")
+        _tts_outer, tts_tab = _make_scrollable_tab("Text-to-Speech")
+        _gen_outer, general_tab = _make_scrollable_tab("General")
+        _hf_outer, handsfree_tab = _make_scrollable_tab("Hands-Free")
+        _cc_outer, claude_code_tab = _make_scrollable_tab("Claude Code")
+
+        # Mousewheel scrolling — route to the currently-visible tab's canvas
+        def _on_mousewheel(event):
+            sel = self._notebook.select()
+            for outer, canvas in self._scrollable_canvases:
+                if str(outer) == str(sel):
+                    canvas.yview_scroll(int(-1 * (event.delta / 120)), "units")
+                    break
+
+        def _on_tab_changed(_event):
+            # Re-bind globally so the active tab receives wheel events
+            self._notebook.unbind_all("<MouseWheel>")
+            self._notebook.bind_all("<MouseWheel>", _on_mousewheel)
+
+        self._notebook.bind("<<NotebookTabChanged>>", _on_tab_changed)
+        # Activate for the initially selected tab
+        self._notebook.bind_all("<MouseWheel>", _on_mousewheel)
 
         # ---------------------------------------------------------------
         # Tab 1: Transcription
@@ -473,30 +558,6 @@ class SettingsDialog:
         # Tab 6: Claude Code
         # ---------------------------------------------------------------
         self._build_claude_code_tab(claude_code_tab)
-
-        # === Error label (below notebook, hidden by default) ===
-        self._error_label = ttk.Label(
-            main_frame, text="", foreground="#FF6B6B", wraplength=480
-        )
-        # Not packed initially; shown by _on_save_clicked on validation error
-
-        # === Button Bar (below notebook) ===
-        self._button_frame = ttk.Frame(main_frame)
-        self._button_frame.pack(fill=tk.X, pady=(12, 0))
-
-        ttk.Button(
-            self._button_frame,
-            text="Save",
-            width=10,
-            command=self._on_save_clicked,
-        ).pack(side=tk.RIGHT)
-
-        ttk.Button(
-            self._button_frame,
-            text="Cancel",
-            width=10,
-            command=self._on_cancel_clicked,
-        ).pack(side=tk.RIGHT, padx=(0, 8))
 
     # ------------------------------------------------------------------
     # Tab builder methods
@@ -820,7 +881,7 @@ class SettingsDialog:
         prompt_label_row.pack(fill=tk.X, pady=(0, 2))
 
         ttk.Label(
-            prompt_label_row, text="Cleanup Prompt:", anchor=tk.W
+            prompt_label_row, text="Cleanup Prompt (Ctrl+Alt+R):", anchor=tk.W
         ).pack(side=tk.LEFT)
 
         self._prompt_reset_btn = ttk.Button(
@@ -852,11 +913,75 @@ class SettingsDialog:
 
         prompt_hint = ttk.Label(
             parent,
-            text="Instructs the LLM how to clean up the transcription. Leave empty for default.",
+            text="Used for dictation (Ctrl+Alt+R) only. Instructs the LLM how to clean up transcriptions.",
             foreground="#999999",
             font=("", 8),
         )
         prompt_hint.pack(fill=tk.X, pady=(0, 4))
+
+        # --- TTS LLM Preprocessing section (moved from TTS tab) ---
+        ttk.Separator(parent, orient=tk.HORIZONTAL).pack(fill=tk.X, pady=(8, 8))
+
+        ttk.Label(
+            parent, text="TTS Preprocessing (Ctrl+Alt+T)", font=("", 9, "bold"),
+        ).pack(fill=tk.X, pady=(0, 4))
+
+        self._tts_preprocess_var = tk.BooleanVar()
+        self._tts_preprocess_checkbox = ttk.Checkbutton(
+            parent,
+            text="Preprocess text with LLM before speaking",
+            variable=self._tts_preprocess_var,
+        )
+        self._tts_preprocess_checkbox.pack(fill=tk.X, pady=(0, 4))
+
+        # Preset dropdown
+        preprocess_preset_row = ttk.Frame(parent)
+        preprocess_preset_row.pack(fill=tk.X, pady=(0, 2))
+        ttk.Label(preprocess_preset_row, text="Preset:", width=10, anchor=tk.W).pack(side=tk.LEFT)
+
+        from constants import TTS_PREPROCESS_PRESETS
+        self._tts_preprocess_preset_labels = [
+            info["label_en"] for info in TTS_PREPROCESS_PRESETS.values()
+        ]
+        self._tts_preprocess_preset_keys = list(TTS_PREPROCESS_PRESETS.keys())
+        preset_display = self._tts_preprocess_preset_labels + ["Custom"]
+
+        self._tts_preprocess_preset_var = tk.StringVar()
+        self._tts_preprocess_preset_combo = ttk.Combobox(
+            preprocess_preset_row,
+            textvariable=self._tts_preprocess_preset_var,
+            values=preset_display,
+            state="readonly",
+            width=35,
+        )
+        self._tts_preprocess_preset_combo.pack(side=tk.LEFT, padx=(4, 0))
+        self._tts_preprocess_preset_combo.bind(
+            "<<ComboboxSelected>>", self._on_tts_preprocess_preset_changed
+        )
+
+        # Prompt text box
+        preprocess_prompt_row = ttk.Frame(parent)
+        preprocess_prompt_row.pack(fill=tk.X, pady=(0, 4))
+        ttk.Label(preprocess_prompt_row, text="Prompt:", width=10, anchor=tk.W).pack(
+            side=tk.LEFT, anchor=tk.N,
+        )
+        self._tts_preprocess_prompt_text = tk.Text(
+            preprocess_prompt_row, height=3, width=45, wrap=tk.WORD,
+        )
+        self._tts_preprocess_prompt_text.pack(
+            side=tk.LEFT, fill=tk.X, expand=True, padx=(4, 0),
+        )
+        # Track edits to auto-switch preset to "Custom"
+        self._tts_preprocess_prompt_text.bind(
+            "<KeyRelease>", self._on_tts_preprocess_prompt_edited
+        )
+
+        ttk.Label(
+            parent,
+            text="Rewrites clipboard text into spoken prose before TTS (Ctrl+Alt+T). Uses the provider and API key above.",
+            foreground="#999999",
+            font=("", 8),
+        ).pack(fill=tk.X, pady=(0, 4))
 
         # Store references to summarization widgets for enable/disable
         # Note: API key widgets are in the General tab and always accessible.
@@ -866,6 +991,9 @@ class SettingsDialog:
             self._base_url_entry,
             self._prompt_text,
             self._prompt_reset_btn,
+            self._tts_preprocess_checkbox,
+            self._tts_preprocess_preset_combo,
+            self._tts_preprocess_prompt_text,
         ]
 
     def _build_tts_tab(self, parent: "ttk.Frame") -> None:
@@ -1146,13 +1274,47 @@ class SettingsDialog:
         )
         self._tts_dynamic_emotions_check.pack(fill=tk.X, pady=(0, 2))
 
-        tts_dynamic_hint = ttk.Label(
+        self._tts_dynamic_hint = ttk.Label(
             self._tts_speaker_frame,
-            text="Requires summarization enabled. LLM assigns emotions per sentence.",
+            text="Requires: Summarization tab ON + API key configured. LLM assigns emotions per sentence.",
             foreground="#999999",
             font=("", 8),
         )
-        tts_dynamic_hint.pack(fill=tk.X, pady=(0, 4))
+        self._tts_dynamic_hint.pack(fill=tk.X, pady=(0, 2))
+
+        # Emotion/Dialog prompt section (visible when dynamic emotions enabled)
+        self._tts_emotion_prompt_frame = ttk.Frame(self._tts_speaker_frame)
+        self._tts_emotion_prompt_frame.pack(fill=tk.X, pady=(0, 4))
+
+        emotion_prompt_label_row = ttk.Frame(self._tts_emotion_prompt_frame)
+        emotion_prompt_label_row.pack(fill=tk.X, pady=(0, 2))
+        ttk.Label(emotion_prompt_label_row, text="Prompt:", width=10, anchor=tk.W).pack(
+            side=tk.LEFT,
+        )
+        self._tts_emotion_prompt_default_btn = ttk.Button(
+            emotion_prompt_label_row, text="Show Default", width=14,
+            command=self._on_emotion_prompt_show_default,
+        )
+        self._tts_emotion_prompt_default_btn.pack(side=tk.RIGHT)
+        self._tts_emotion_prompt_clear_btn = ttk.Button(
+            emotion_prompt_label_row, text="Clear (Auto)", width=14,
+            command=self._on_emotion_prompt_clear,
+        )
+        self._tts_emotion_prompt_clear_btn.pack(side=tk.RIGHT, padx=(0, 4))
+
+        self._tts_emotion_prompt_text = tk.Text(
+            self._tts_emotion_prompt_frame, height=5, width=45, wrap=tk.WORD,
+        )
+        self._tts_emotion_prompt_text.pack(
+            fill=tk.X, expand=True, pady=(0, 2),
+        )
+
+        ttk.Label(
+            self._tts_emotion_prompt_frame,
+            text="Extra LLM call during TTS to tag emotions. Applied after preprocessing (if active). Empty = auto (DE/EN).",
+            foreground="#999999",
+            font=("", 8),
+        ).pack(fill=tk.X, pady=(0, 2))
 
         # Piper privacy hint
         tts_local_hint = ttk.Label(
@@ -1173,69 +1335,107 @@ class SettingsDialog:
         self._tts_download_total: int = 0
         self._tts_download_poll_count: int = 0
 
-        # --- TTS LLM Preprocessing section ---
+        # --- Audio Effects section (Piper local only) ---
         ttk.Separator(parent, orient=tk.HORIZONTAL).pack(fill=tk.X, pady=(8, 8))
 
         ttk.Label(
-            parent, text="TTS Preprocessing", font=("", 9, "bold"),
+            parent, text="Audio Effects (Local TTS only)", font=("", 9, "bold"),
         ).pack(fill=tk.X, pady=(0, 4))
 
-        self._tts_preprocess_var = tk.BooleanVar()
-        self._tts_preprocess_checkbox = ttk.Checkbutton(
-            parent,
-            text="Preprocess text with LLM before speaking",
-            variable=self._tts_preprocess_var,
-        )
-        self._tts_preprocess_checkbox.pack(fill=tk.X, pady=(0, 4))
+        fx_enable_row = ttk.Frame(parent)
+        fx_enable_row.pack(fill=tk.X, pady=(0, 4))
 
-        # Preset dropdown
-        preprocess_preset_row = ttk.Frame(parent)
-        preprocess_preset_row.pack(fill=tk.X, pady=(0, 2))
-        ttk.Label(preprocess_preset_row, text="Preset:", width=10, anchor=tk.W).pack(side=tk.LEFT)
+        self._fx_enabled_var = tk.BooleanVar()
+        self._fx_enabled_checkbox = ttk.Checkbutton(
+            fx_enable_row,
+            text="Enable Audio Effects",
+            variable=self._fx_enabled_var,
+            command=self._on_fx_enabled_toggled,
+        )
+        self._fx_enabled_checkbox.pack(side=tk.LEFT)
 
-        from constants import TTS_PREPROCESS_PRESETS
-        self._tts_preprocess_preset_labels = [
-            info["label"] for info in TTS_PREPROCESS_PRESETS.values()
-        ]
-        self._tts_preprocess_preset_keys = list(TTS_PREPROCESS_PRESETS.keys())
-        preset_display = self._tts_preprocess_preset_labels + ["Custom"]
-
-        self._tts_preprocess_preset_var = tk.StringVar()
-        self._tts_preprocess_preset_combo = ttk.Combobox(
-            preprocess_preset_row,
-            textvariable=self._tts_preprocess_preset_var,
-            values=preset_display,
-            state="readonly",
-            width=35,
+        self._fx_preview_btn = ttk.Button(
+            fx_enable_row, text="Preview", width=10,
+            command=self._on_fx_preview_clicked,
         )
-        self._tts_preprocess_preset_combo.pack(side=tk.LEFT, padx=(4, 0))
-        self._tts_preprocess_preset_combo.bind(
-            "<<ComboboxSelected>>", self._on_tts_preprocess_preset_changed
-        )
-
-        # Prompt text box
-        preprocess_prompt_row = ttk.Frame(parent)
-        preprocess_prompt_row.pack(fill=tk.X, pady=(0, 4))
-        ttk.Label(preprocess_prompt_row, text="Prompt:", width=10, anchor=tk.W).pack(
-            side=tk.LEFT, anchor=tk.N,
-        )
-        self._tts_preprocess_prompt_text = tk.Text(
-            preprocess_prompt_row, height=3, width=45, wrap=tk.WORD,
-        )
-        self._tts_preprocess_prompt_text.pack(
-            side=tk.LEFT, fill=tk.X, expand=True, padx=(4, 0),
-        )
-        # Track edits to auto-switch preset to "Custom"
-        self._tts_preprocess_prompt_text.bind(
-            "<KeyRelease>", self._on_tts_preprocess_prompt_edited
-        )
+        self._fx_preview_btn.pack(side=tk.RIGHT)
 
         ttk.Label(
             parent,
-            text="Rewrites clipboard text into natural spoken prose before TTS. Requires summarization.",
+            text="Post-processing effects for Piper local TTS. No effect on cloud backends.",
             foreground="#999999",
             font=("", 8),
         ).pack(fill=tk.X, pady=(0, 4))
+
+        # Pitch shift
+        fx_pitch_row = ttk.Frame(parent)
+        fx_pitch_row.pack(fill=tk.X, pady=(0, 2))
+        ttk.Label(fx_pitch_row, text="Pitch:", width=12, anchor=tk.W).pack(side=tk.LEFT)
+        self._fx_pitch_var = tk.StringVar(value="0.0")
+        self._fx_pitch_spin = ttk.Spinbox(
+            fx_pitch_row, from_=-6.0, to=6.0, increment=0.5, width=6,
+            textvariable=self._fx_pitch_var,
+        )
+        self._fx_pitch_spin.pack(side=tk.LEFT, padx=(4, 0))
+        ttk.Label(fx_pitch_row, text="semitones (-6 to +6)").pack(
+            side=tk.LEFT, padx=(4, 0)
+        )
+
+        # Formant / Voice Depth
+        fx_formant_row = ttk.Frame(parent)
+        fx_formant_row.pack(fill=tk.X, pady=(0, 2))
+        ttk.Label(fx_formant_row, text="Voice Depth:", width=12, anchor=tk.W).pack(side=tk.LEFT)
+        self._fx_formant_var = tk.StringVar(value="1.0")
+        self._fx_formant_spin = ttk.Spinbox(
+            fx_formant_row, from_=0.7, to=1.4, increment=0.05, width=6,
+            textvariable=self._fx_formant_var,
+        )
+        self._fx_formant_spin.pack(side=tk.LEFT, padx=(4, 0))
+        ttk.Label(fx_formant_row, text="(<1.0 = deeper, >1.0 = brighter)").pack(
+            side=tk.LEFT, padx=(4, 0)
+        )
+
+        # Bass EQ
+        fx_bass_row = ttk.Frame(parent)
+        fx_bass_row.pack(fill=tk.X, pady=(0, 2))
+        ttk.Label(fx_bass_row, text="Bass:", width=12, anchor=tk.W).pack(side=tk.LEFT)
+        self._fx_bass_var = tk.StringVar(value="0.0")
+        self._fx_bass_spin = ttk.Spinbox(
+            fx_bass_row, from_=-12.0, to=12.0, increment=1.0, width=6,
+            textvariable=self._fx_bass_var,
+        )
+        self._fx_bass_spin.pack(side=tk.LEFT, padx=(4, 0))
+        ttk.Label(fx_bass_row, text="dB at 200 Hz (-12 to +12)").pack(
+            side=tk.LEFT, padx=(4, 0)
+        )
+
+        # Treble EQ
+        fx_treble_row = ttk.Frame(parent)
+        fx_treble_row.pack(fill=tk.X, pady=(0, 2))
+        ttk.Label(fx_treble_row, text="Treble:", width=12, anchor=tk.W).pack(side=tk.LEFT)
+        self._fx_treble_var = tk.StringVar(value="0.0")
+        self._fx_treble_spin = ttk.Spinbox(
+            fx_treble_row, from_=-12.0, to=12.0, increment=1.0, width=6,
+            textvariable=self._fx_treble_var,
+        )
+        self._fx_treble_spin.pack(side=tk.LEFT, padx=(4, 0))
+        ttk.Label(fx_treble_row, text="dB at 3000 Hz (-12 to +12)").pack(
+            side=tk.LEFT, padx=(4, 0)
+        )
+
+        # Reverb
+        fx_reverb_row = ttk.Frame(parent)
+        fx_reverb_row.pack(fill=tk.X, pady=(0, 2))
+        ttk.Label(fx_reverb_row, text="Reverb:", width=12, anchor=tk.W).pack(side=tk.LEFT)
+        self._fx_reverb_var = tk.StringVar(value="0.0")
+        self._fx_reverb_spin = ttk.Spinbox(
+            fx_reverb_row, from_=0.0, to=0.5, increment=0.05, width=6,
+            textvariable=self._fx_reverb_var,
+        )
+        self._fx_reverb_spin.pack(side=tk.LEFT, padx=(4, 0))
+        ttk.Label(fx_reverb_row, text="mix (0.0 = off, 0.5 = max)").pack(
+            side=tk.LEFT, padx=(4, 0)
+        )
 
         # --- TTS Cache section ---
         ttk.Separator(parent, orient=tk.HORIZONTAL).pack(fill=tk.X, pady=(8, 8))
@@ -1351,6 +1551,15 @@ class SettingsDialog:
 
         # Store references for enable/disable
         # Note: API key widgets are in the General tab and always accessible.
+        # FX spinboxes stored separately for enable/disable by master toggle
+        self._fx_spinboxes = [
+            self._fx_pitch_spin,
+            self._fx_formant_spin,
+            self._fx_bass_spin,
+            self._fx_treble_spin,
+            self._fx_reverb_spin,
+        ]
+
         self._tts_widgets = [
             self._tts_backend_combo,
             self._tts_voice_combo,
@@ -1371,9 +1580,10 @@ class SettingsDialog:
             self._tts_export_checkbox,
             self._tts_export_path_entry,
             self._tts_export_browse_btn,
-            self._tts_preprocess_checkbox,
-            self._tts_preprocess_preset_combo,
-            self._tts_preprocess_prompt_text,
+            self._tts_emotion_prompt_text,
+            self._fx_enabled_checkbox,
+            self._fx_preview_btn,
+            *self._fx_spinboxes,
         ]
 
     def _build_api_keys_section(self, parent: "ttk.Frame") -> None:
@@ -2225,22 +2435,26 @@ class SettingsDialog:
         from constants import TTS_PREPROCESS_PRESETS, TTS_PREPROCESS_DEFAULT_PROMPT
         current_prompt = config.tts_preprocess_prompt.strip()
         # Find matching preset or set "Custom"
+        # Check against both prompt_de and prompt_en for the match.
         matched_preset = None
         if not current_prompt:
             # Empty = default preset ("Clean & Natural")
             matched_preset = "clean"
         else:
             for key, info in TTS_PREPROCESS_PRESETS.items():
-                if current_prompt == info["prompt"].strip():
+                if (current_prompt == info["prompt_de"].strip()
+                        or current_prompt == info["prompt_en"].strip()):
                     matched_preset = key
                     break
         if matched_preset:
             self._tts_preprocess_preset_var.set(
-                TTS_PREPROCESS_PRESETS[matched_preset]["label"]
+                TTS_PREPROCESS_PRESETS[matched_preset]["label_en"]
             )
+            # Show the prompt variant matching the currently selected Piper voice
+            prompt_key = self._get_preset_prompt_key()
             self._tts_preprocess_prompt_text.delete("1.0", self._tk.END)
             self._tts_preprocess_prompt_text.insert(
-                "1.0", TTS_PREPROCESS_PRESETS[matched_preset]["prompt"]
+                "1.0", TTS_PREPROCESS_PRESETS[matched_preset][prompt_key]
             )
         else:
             self._tts_preprocess_preset_var.set("Custom")
@@ -2252,6 +2466,20 @@ class SettingsDialog:
 
         # Show/hide TTS cloud vs local sub-frames
         self._update_tts_backend_ui()
+
+        # Emotion/Dialog prompt — show custom or preview of auto-generated default
+        self._tts_emotion_prompt_text.delete("1.0", self._tk.END)
+        if config.tts_emotion_prompt:
+            self._tts_emotion_prompt_text.insert("1.0", config.tts_emotion_prompt)
+
+        # Audio FX fields
+        self._fx_enabled_var.set(config.audio_fx_enabled)
+        self._fx_pitch_var.set(str(config.audio_fx_pitch_semitones))
+        self._fx_formant_var.set(str(config.audio_fx_formant_shift))
+        self._fx_bass_var.set(str(config.audio_fx_bass_db))
+        self._fx_treble_var.set(str(config.audio_fx_treble_db))
+        self._fx_reverb_var.set(str(config.audio_fx_reverb_mix))
+        self._on_fx_enabled_toggled()  # Apply initial spinbox state
 
         # TTS Cache fields
         self._tts_cache_enabled_var.set(config.tts_cache_enabled)
@@ -2661,19 +2889,21 @@ class SettingsDialog:
     def _on_summarization_toggled(self) -> None:
         """Enable/disable summarization widgets based on checkbox."""
         enabled = self._summarization_enabled_var.get()
+        readonly_combos = (self._provider_combo, self._tts_preprocess_preset_combo)
+        text_widgets = (self._prompt_text, self._tts_preprocess_prompt_text)
 
         for widget in self._summarization_widgets:
             try:
                 if enabled:
-                    if widget == self._provider_combo:
+                    if widget in readonly_combos:
                         widget.config(state="readonly")
-                    elif widget == self._prompt_text:
+                    elif widget in text_widgets:
                         widget.config(state="normal",
                                       bg=self._text_bg, fg=self._text_fg)
                     else:
                         widget.config(state="normal")
                 else:
-                    if widget == self._prompt_text:
+                    if widget in text_widgets:
                         # tk.Text has no disabledbackground — set manually
                         widget.config(state="disabled",
                                       bg=_DARK_COLORS["disabled_bg"],
@@ -2748,20 +2978,25 @@ class SettingsDialog:
         for widget in self._tts_widgets:
             try:
                 if enabled:
+                    # FX spinboxes respect the master FX toggle
+                    if widget in self._fx_spinboxes:
+                        fx_on = self._fx_enabled_var.get()
+                        widget.config(state="normal" if fx_on else "disabled")
                     # Comboboxes -> readonly
-                    if widget in (
+                    elif widget in (
                         self._tts_backend_combo,
                         self._tts_voice_combo,
                         self._tts_model_combo,
                         self._tts_openai_voice_combo,
                         self._tts_openai_model_combo,
                         self._tts_piper_voice_combo,
-                        self._tts_preprocess_preset_combo,
                     ):
                         widget.config(state="readonly")
-                    elif widget in (self._tts_download_btn, self._tts_delete_btn):
-                        # Only enable download/delete if local backend is active
-                        # and model status warrants it (handled by _update_tts_model_status)
+                    elif widget in (
+                        self._tts_download_btn, self._tts_delete_btn,
+                        self._fx_preview_btn,
+                    ):
+                        # Only enable download/delete/preview if local backend is active
                         if is_local:
                             widget.config(state="normal")
                         else:
@@ -2780,6 +3015,190 @@ class SettingsDialog:
         # Refresh Voice ID entry state (readonly for presets, normal for custom)
         if enabled and not is_local:
             self._on_tts_voice_changed()
+
+    def _on_fx_enabled_toggled(self) -> None:
+        """Enable/disable Audio FX spinboxes based on the master toggle."""
+        fx_on = self._fx_enabled_var.get()
+        for widget in self._fx_spinboxes:
+            try:
+                widget.config(state="normal" if fx_on else "disabled")
+            except Exception:
+                pass
+
+    def _get_selected_piper_voice_key(self) -> str | None:
+        """Resolve the currently selected Piper voice key from the dropdown."""
+        from constants import PIPER_VOICE_MODELS
+        selected_display = self._tts_piper_voice_var.get()
+        for vkey, vinfo in PIPER_VOICE_MODELS.items():
+            if vinfo["label"] == selected_display:
+                return vkey
+        return None
+
+    def _on_fx_preview_clicked(self) -> None:
+        """Preview Audio FX with a short TTS sample."""
+        if self._preview_playing:
+            # Stop current preview (player may not be assigned yet if
+            # the user clicks Stop before the daemon thread starts playback)
+            if self._preview_player is not None:
+                self._preview_player.stop()
+            # Reset button immediately so user sees feedback
+            self._preview_playing = False
+            self._fx_preview_btn.config(text="Preview")
+            return
+
+        voice_key = self._get_selected_piper_voice_key()
+        if not voice_key:
+            return
+
+        # Check if voice model is downloaded
+        from tts_model_manager import is_tts_model_available
+        if not is_tts_model_available(voice_key):
+            from tkinter import messagebox
+            messagebox.showinfo(
+                "Preview",
+                "Download the Piper voice model first.",
+                parent=self._dialog,
+            )
+            return
+
+        # Read current FX values from spinboxes (not saved config)
+        from audio_fx import AudioFXConfig
+        fx_config = None
+        if self._fx_enabled_var.get():
+            try:
+                fx_config = AudioFXConfig(
+                    pitch_semitones=float(self._fx_pitch_var.get()),
+                    formant_shift=float(self._fx_formant_var.get()),
+                    bass_db=float(self._fx_bass_var.get()),
+                    treble_db=float(self._fx_treble_var.get()),
+                    reverb_mix=float(self._fx_reverb_var.get()),
+                )
+                if fx_config.is_bypass:
+                    fx_config = None
+            except (ValueError, TypeError):
+                fx_config = None
+
+        self._preview_playing = True
+        self._fx_preview_btn.config(text="Stop")
+
+        def _do_preview():
+            try:
+                from local_tts import PiperLocalTTS
+                from audio_playback import AudioPlayer
+                from constants import get_voice_language
+
+                tts = PiperLocalTTS(
+                    voice_name=voice_key,
+                    audio_fx_config=fx_config,
+                )
+
+                player = AudioPlayer()
+                self._preview_player = player
+
+                lang = get_voice_language(voice_key)
+                if lang == "en":
+                    text = (
+                        "This is a preview of the current audio effects. "
+                        "The voice can be deeper, brighter, or with reverb."
+                    )
+                else:
+                    text = (
+                        "Dies ist eine Vorschau der aktuellen Audioeffekte. "
+                        "Die Stimme kann tiefer, heller oder mit Hall versehen werden."
+                    )
+
+                wav_bytes = tts.synthesize(text)
+                player.play(wav_bytes)
+
+            except Exception:
+                logger.exception("FX preview failed.")
+            finally:
+                try:
+                    self._dialog.after(0, self._on_preview_finished)
+                except Exception:
+                    self._preview_playing = False
+
+        threading.Thread(
+            target=_do_preview, daemon=True, name="fx-preview",
+        ).start()
+
+    def _on_preview_finished(self) -> None:
+        """Reset preview button after playback finishes."""
+        self._preview_playing = False
+        self._preview_player = None
+        try:
+            self._fx_preview_btn.config(text="Preview")
+        except Exception:
+            pass
+
+    def _build_emotion_default_prompt(self) -> str:
+        """Build the auto-generated emotion/dialog prompt for the current voice.
+
+        Uses the same logic as tts_orchestrator._tag_emotions to generate
+        a preview of what the auto prompt would look like.
+        """
+        from constants import (
+            PIPER_VOICE_MODELS, get_voice_language,
+            TTS_EMOTION_PROMPT_DE, TTS_DIALOG_PROMPT_EN,
+        )
+        # Determine current voice key from dropdown
+        selected_display = self._tts_piper_voice_var.get()
+        voice_key = None
+        for vkey, vinfo in PIPER_VOICE_MODELS.items():
+            if vinfo["label"] == selected_display:
+                voice_key = vkey
+                break
+        if not voice_key:
+            return "(no multi-speaker voice selected)"
+
+        voice_info = PIPER_VOICE_MODELS.get(voice_key, {})
+        sid_map = voice_info.get("speaker_id_map", {})
+        if not sid_map:
+            return "(selected voice has no speaker map)"
+
+        descriptions = voice_info.get("speaker_descriptions", {})
+        speaker_examples = voice_info.get("speaker_examples", {})
+        label_names = sorted(sid_map.keys())
+
+        desc_lines = []
+        for name in label_names:
+            desc = descriptions.get(name, "")
+            desc_lines.append(f"- {name}: {desc}" if desc else f"- {name}")
+
+        if speaker_examples:
+            example_labels = [k for k in label_names if k in speaker_examples]
+            if not example_labels:
+                example_labels = label_names[:3]
+            examples = "\n".join(
+                f"{label}: {speaker_examples.get(label, 'Example sentence.')}"
+                for label in example_labels
+            )
+        else:
+            example_labels = label_names[:3] if len(label_names) >= 3 else label_names
+            examples = "\n".join(
+                f"{label}: Example sentence for {label}."
+                for label in example_labels
+            )
+
+        lang = get_voice_language(voice_key)
+        template = TTS_DIALOG_PROMPT_EN if lang == "en" else TTS_EMOTION_PROMPT_DE
+
+        return template.format(
+            label_descriptions="\n".join(desc_lines),
+            label_list=", ".join(label_names),
+            examples=examples,
+            emotion_descriptions="\n".join(desc_lines),
+        )
+
+    def _on_emotion_prompt_show_default(self) -> None:
+        """Fill the emotion prompt text with the auto-generated default."""
+        default_prompt = self._build_emotion_default_prompt()
+        self._tts_emotion_prompt_text.delete("1.0", self._tk.END)
+        self._tts_emotion_prompt_text.insert("1.0", default_prompt)
+
+    def _on_emotion_prompt_clear(self) -> None:
+        """Clear the emotion prompt text (reverts to auto-detect)."""
+        self._tts_emotion_prompt_text.delete("1.0", self._tk.END)
 
     def _on_tts_voice_changed(self, event=None) -> None:
         """Handle TTS voice dropdown change. Update voice ID field."""
@@ -2830,6 +3249,26 @@ class SettingsDialog:
             if voice_display:
                 self._tts_openai_voice_var.set(voice_display[0])
 
+    def _get_preset_prompt_key(self) -> str:
+        """Return the preset dict key for the prompt matching the selected Piper voice.
+
+        Uses ``get_voice_language()`` on the currently selected local TTS voice
+        to pick ``"prompt_de"`` or ``"prompt_en"``.
+
+        Returns:
+            ``"prompt_en"`` for English voices, ``"prompt_de"`` otherwise.
+        """
+        from constants import get_voice_language, PIPER_VOICE_MODELS
+        # Try to resolve the currently selected Piper voice key
+        selected_label = getattr(self, "_tts_piper_voice_var", None)
+        if selected_label is not None:
+            selected_display = selected_label.get()
+            for vkey, vinfo in PIPER_VOICE_MODELS.items():
+                if vinfo["label"] == selected_display:
+                    lang = get_voice_language(vkey)
+                    return f"prompt_{lang}"
+        return "prompt_de"
+
     def _on_tts_preprocess_preset_changed(self, event=None) -> None:
         """Handle TTS preprocess preset dropdown change."""
         from constants import TTS_PREPROCESS_PRESETS
@@ -2838,10 +3277,11 @@ class SettingsDialog:
         if selected == "Custom":
             return  # Leave text box as-is
 
+        prompt_key = self._get_preset_prompt_key()
         for key, info in TTS_PREPROCESS_PRESETS.items():
-            if info["label"] == selected:
+            if info["label_en"] == selected:
                 self._tts_preprocess_prompt_text.delete("1.0", self._tk.END)
-                self._tts_preprocess_prompt_text.insert("1.0", info["prompt"])
+                self._tts_preprocess_prompt_text.insert("1.0", info[prompt_key])
                 return
 
     def _on_tts_preprocess_prompt_edited(self, event=None) -> None:
@@ -2853,10 +3293,11 @@ class SettingsDialog:
         if current_preset == "Custom":
             return
 
-        # Check if the text still matches the selected preset
+        # Check if the text still matches the selected preset (either language)
         for key, info in TTS_PREPROCESS_PRESETS.items():
-            if info["label"] == current_preset:
-                if current_text != info["prompt"].strip():
+            if info["label_en"] == current_preset:
+                if (current_text != info["prompt_de"].strip()
+                        and current_text != info["prompt_en"].strip()):
                     self._tts_preprocess_preset_var.set("Custom")
                 return
 
@@ -3730,6 +4171,18 @@ class SettingsDialog:
             changed_fields["tts_dynamic_emotions"] = new_dynamic_emotions
             config.tts_dynamic_emotions = new_dynamic_emotions
 
+        # Warn if dynamic emotions enabled but summarization is off
+        if new_dynamic_emotions and not self._summarization_enabled_var.get():
+            from tkinter import messagebox
+            messagebox.showwarning(
+                "Dynamic Emotions",
+                "Dynamic emotions requires summarization to be enabled "
+                "(Summarization tab) with an API key configured.\n\n"
+                "Without it, emotions will silently fall back to the "
+                "default speaker.",
+                parent=self._dialog,
+            )
+
         # TTS LLM Preprocessing
         new_preprocess = self._tts_preprocess_var.get()
         if new_preprocess != config.tts_preprocess_with_llm:
@@ -3739,13 +4192,73 @@ class SettingsDialog:
         new_preprocess_prompt = self._tts_preprocess_prompt_text.get(
             "1.0", self._tk.END
         ).strip()
-        # If prompt matches the default preset, store empty
-        from constants import TTS_PREPROCESS_DEFAULT_PROMPT
-        if new_preprocess_prompt == TTS_PREPROCESS_DEFAULT_PROMPT.strip():
+        # If prompt matches either default preset (DE or EN), store empty
+        from constants import TTS_PREPROCESS_DEFAULT_PROMPT, TTS_PREPROCESS_DEFAULT_PROMPT_EN
+        if (new_preprocess_prompt == TTS_PREPROCESS_DEFAULT_PROMPT.strip()
+                or new_preprocess_prompt == TTS_PREPROCESS_DEFAULT_PROMPT_EN.strip()):
             new_preprocess_prompt = ""
         if new_preprocess_prompt != config.tts_preprocess_prompt:
             changed_fields["tts_preprocess_prompt"] = new_preprocess_prompt
             config.tts_preprocess_prompt = new_preprocess_prompt
+
+        # Emotion/Dialog prompt
+        new_emotion_prompt = self._tts_emotion_prompt_text.get(
+            "1.0", self._tk.END
+        ).strip()
+        if new_emotion_prompt != config.tts_emotion_prompt:
+            changed_fields["tts_emotion_prompt"] = new_emotion_prompt
+            config.tts_emotion_prompt = new_emotion_prompt
+
+        # Audio FX settings
+        new_fx_enabled = self._fx_enabled_var.get()
+        if new_fx_enabled != config.audio_fx_enabled:
+            changed_fields["audio_fx_enabled"] = new_fx_enabled
+            config.audio_fx_enabled = new_fx_enabled
+
+        try:
+            new_fx_pitch = float(self._fx_pitch_var.get())
+            new_fx_pitch = max(-6.0, min(new_fx_pitch, 6.0))
+        except (ValueError, TypeError):
+            new_fx_pitch = config.audio_fx_pitch_semitones
+        if new_fx_pitch != config.audio_fx_pitch_semitones:
+            changed_fields["audio_fx_pitch_semitones"] = new_fx_pitch
+            config.audio_fx_pitch_semitones = new_fx_pitch
+
+        try:
+            new_fx_formant = float(self._fx_formant_var.get())
+            new_fx_formant = max(0.7, min(new_fx_formant, 1.4))
+        except (ValueError, TypeError):
+            new_fx_formant = config.audio_fx_formant_shift
+        if new_fx_formant != config.audio_fx_formant_shift:
+            changed_fields["audio_fx_formant_shift"] = new_fx_formant
+            config.audio_fx_formant_shift = new_fx_formant
+
+        try:
+            new_fx_bass = float(self._fx_bass_var.get())
+            new_fx_bass = max(-12.0, min(new_fx_bass, 12.0))
+        except (ValueError, TypeError):
+            new_fx_bass = config.audio_fx_bass_db
+        if new_fx_bass != config.audio_fx_bass_db:
+            changed_fields["audio_fx_bass_db"] = new_fx_bass
+            config.audio_fx_bass_db = new_fx_bass
+
+        try:
+            new_fx_treble = float(self._fx_treble_var.get())
+            new_fx_treble = max(-12.0, min(new_fx_treble, 12.0))
+        except (ValueError, TypeError):
+            new_fx_treble = config.audio_fx_treble_db
+        if new_fx_treble != config.audio_fx_treble_db:
+            changed_fields["audio_fx_treble_db"] = new_fx_treble
+            config.audio_fx_treble_db = new_fx_treble
+
+        try:
+            new_fx_reverb = float(self._fx_reverb_var.get())
+            new_fx_reverb = max(0.0, min(new_fx_reverb, 0.5))
+        except (ValueError, TypeError):
+            new_fx_reverb = config.audio_fx_reverb_mix
+        if new_fx_reverb != config.audio_fx_reverb_mix:
+            changed_fields["audio_fx_reverb_mix"] = new_fx_reverb
+            config.audio_fx_reverb_mix = new_fx_reverb
 
         # TTS Cache settings
         new_cache_enabled = self._tts_cache_enabled_var.get()

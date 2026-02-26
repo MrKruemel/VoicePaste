@@ -43,6 +43,12 @@ from constants import (
     DEFAULT_PASTE_CONFIRMATION_TIMEOUT,
     DEFAULT_PASTE_DELAY_SECONDS,
     DEFAULT_PASTE_SHORTCUT,
+    DEFAULT_AUDIO_FX_BASS_DB,
+    DEFAULT_AUDIO_FX_ENABLED,
+    DEFAULT_AUDIO_FX_FORMANT_SHIFT,
+    DEFAULT_AUDIO_FX_PITCH_SEMITONES,
+    DEFAULT_AUDIO_FX_REVERB_MIX,
+    DEFAULT_AUDIO_FX_TREBLE_DB,
     DEFAULT_PIPER_VOICE,
     DEFAULT_PROMPT_HOTKEY,
     DEFAULT_SILENCE_TIMEOUT_SECONDS,
@@ -296,9 +302,20 @@ class AppConfig:
     tts_piper_speaker_id: int = DEFAULT_TTS_PIPER_SPEAKER_ID
     tts_dynamic_emotions: bool = DEFAULT_TTS_DYNAMIC_EMOTIONS
 
+    # --- Audio Effects (Piper post-processing) ---
+    audio_fx_enabled: bool = DEFAULT_AUDIO_FX_ENABLED
+    audio_fx_pitch_semitones: float = DEFAULT_AUDIO_FX_PITCH_SEMITONES
+    audio_fx_formant_shift: float = DEFAULT_AUDIO_FX_FORMANT_SHIFT
+    audio_fx_bass_db: float = DEFAULT_AUDIO_FX_BASS_DB
+    audio_fx_treble_db: float = DEFAULT_AUDIO_FX_TREBLE_DB
+    audio_fx_reverb_mix: float = DEFAULT_AUDIO_FX_REVERB_MIX
+
     # --- TTS LLM Preprocessing (Ctrl+Alt+T readback) ---
     tts_preprocess_with_llm: bool = DEFAULT_TTS_PREPROCESS_WITH_LLM
     tts_preprocess_prompt: str = ""  # empty = use default preset
+
+    # --- TTS Emotion/Dialog prompt (custom override) ---
+    tts_emotion_prompt: str = ""  # empty = auto-detect DE/EN by voice
 
     # --- v0.9: HTTP API ---
     api_enabled: bool = DEFAULT_API_ENABLED
@@ -507,12 +524,30 @@ speaker_id = {self.tts_piper_speaker_id}
 # Dynamic emotions: let LLM tag each sentence with an emotion before synthesis.
 # Requires tts_preprocess_with_llm = true and a multi-speaker model.
 dynamic_emotions = {str(self.tts_dynamic_emotions).lower()}
+# --- Audio Effects (Piper post-processing, pure numpy) ---
+# These effects apply ONLY to the Piper local TTS backend, not cloud providers.
+# Master toggle: set to false to disable all audio effects regardless of values below.
+audio_fx_enabled = {str(self.audio_fx_enabled).lower()}
+# All values at their defaults = no processing (zero overhead).
+# Pitch shift in semitones (-6.0 to +6.0, 0 = no shift)
+audio_fx_pitch_semitones = {self.audio_fx_pitch_semitones}
+# Formant/voice depth shift (0.7 to 1.4, <1.0 = deeper, >1.0 = higher, 1.0 = off)
+audio_fx_formant_shift = {self.audio_fx_formant_shift}
+# Bass shelf EQ at 200 Hz in dB (-12 to +12, 0 = flat)
+audio_fx_bass_db = {self.audio_fx_bass_db}
+# Treble shelf EQ at 3000 Hz in dB (-12 to +12, 0 = flat)
+audio_fx_treble_db = {self.audio_fx_treble_db}
+# Reverb wet/dry mix (0.0 to 0.5, 0.0 = off)
+audio_fx_reverb_mix = {self.audio_fx_reverb_mix}
+
 # --- TTS LLM Preprocessing (for Ctrl+Alt+T clipboard readback) ---
 # Preprocess clipboard text with LLM before TTS synthesis.
 # Rewrites messy text (bullets, markdown, URLs) into natural spoken prose.
 tts_preprocess_with_llm = {str(self.tts_preprocess_with_llm).lower()}
 # Custom preprocessing prompt (empty = use default "Clean & Natural" preset).
 tts_preprocess_prompt = "{esc(self.tts_preprocess_prompt)}"
+# Custom emotion/dialog tagging prompt (empty = auto-detect DE/EN by voice model).
+tts_emotion_prompt = "{esc(self.tts_emotion_prompt)}"
 
 [paste]
 # Confirm before pasting: show a preview notification and wait for Enter.
@@ -937,11 +972,31 @@ def load_config() -> Optional[AppConfig]:
         tts_section.get("dynamic_emotions", DEFAULT_TTS_DYNAMIC_EMOTIONS)
     )
 
+    # Audio Effects (Piper post-processing)
+    audio_fx_enabled = bool(
+        tts_section.get("audio_fx_enabled", DEFAULT_AUDIO_FX_ENABLED))
+    audio_fx_pitch_semitones = float(
+        tts_section.get("audio_fx_pitch_semitones", DEFAULT_AUDIO_FX_PITCH_SEMITONES))
+    audio_fx_pitch_semitones = max(-6.0, min(audio_fx_pitch_semitones, 6.0))
+    audio_fx_formant_shift = float(
+        tts_section.get("audio_fx_formant_shift", DEFAULT_AUDIO_FX_FORMANT_SHIFT))
+    audio_fx_formant_shift = max(0.7, min(audio_fx_formant_shift, 1.4))
+    audio_fx_bass_db = float(
+        tts_section.get("audio_fx_bass_db", DEFAULT_AUDIO_FX_BASS_DB))
+    audio_fx_bass_db = max(-12.0, min(audio_fx_bass_db, 12.0))
+    audio_fx_treble_db = float(
+        tts_section.get("audio_fx_treble_db", DEFAULT_AUDIO_FX_TREBLE_DB))
+    audio_fx_treble_db = max(-12.0, min(audio_fx_treble_db, 12.0))
+    audio_fx_reverb_mix = float(
+        tts_section.get("audio_fx_reverb_mix", DEFAULT_AUDIO_FX_REVERB_MIX))
+    audio_fx_reverb_mix = max(0.0, min(audio_fx_reverb_mix, 0.5))
+
     # TTS LLM Preprocessing
     tts_preprocess_with_llm = bool(
         tts_section.get("tts_preprocess_with_llm", DEFAULT_TTS_PREPROCESS_WITH_LLM)
     )
     tts_preprocess_prompt = str(tts_section.get("tts_preprocess_prompt", "")).strip()
+    tts_emotion_prompt = str(tts_section.get("tts_emotion_prompt", "")).strip()
 
     # --- v1.0: TTS Audio Cache ---
     tts_cache_section = data.get("tts_cache", {})
@@ -1154,9 +1209,17 @@ def load_config() -> Optional[AppConfig]:
         tts_noise_w=tts_noise_w,
         tts_piper_speaker_id=tts_piper_speaker_id,
         tts_dynamic_emotions=tts_dynamic_emotions,
+        # Audio Effects (Piper post-processing)
+        audio_fx_enabled=audio_fx_enabled,
+        audio_fx_pitch_semitones=audio_fx_pitch_semitones,
+        audio_fx_formant_shift=audio_fx_formant_shift,
+        audio_fx_bass_db=audio_fx_bass_db,
+        audio_fx_treble_db=audio_fx_treble_db,
+        audio_fx_reverb_mix=audio_fx_reverb_mix,
         # TTS LLM Preprocessing
         tts_preprocess_with_llm=tts_preprocess_with_llm,
         tts_preprocess_prompt=tts_preprocess_prompt,
+        tts_emotion_prompt=tts_emotion_prompt,
         # v0.9: HTTP API
         api_enabled=api_enabled,
         api_port=api_port,

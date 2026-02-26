@@ -5,27 +5,46 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.9.3] - 2026-02-26
 
 ### Added
-- **Paste Shortcut Configuration**: New `[paste] paste_shortcut` option ("auto"/"ctrl+v"/"ctrl+shift+v") for manual override of terminal paste detection. Wayland terminal detection now uses GNOME Shell D-Bus (`gdbus`) for reliable detection. X11 continues to use xprop/xdotool.
-- **Claude Code CLI Integration** (v1.3): Voice input control for Claude Code command-line tool. New `[claude_code]` config section with hotkey (default Ctrl+Alt+C), working directory, system prompt, response mode (paste/speak/both), permission handling, and conversation context. Requires `claude` in PATH. Hands-Free compatible.
-- **Whisper Vocabulary Hints**: New `[transcription] vocabulary_hints` config field. Pass domain-specific terms (e.g. "Kubernetes, pytest, Anamnese") as prompt to Whisper for better transcription of technical jargon. Works with both cloud and local STT backends. Configurable via Settings > Transcription tab.
-- **Audio Quality Indicator**: After recording stops, audio is analyzed for quality issues. Toast notification warns if recording is too quiet (RMS below threshold) or clipping (>5% samples at max amplitude). Non-blocking — pipeline continues regardless.
-- **Processing Tooltip Steps**: Tray tooltip now shows granular progress during pipeline: "Checking audio...", "Transcribing...", "Summarizing...", "Pasting...", "Speaking..." for better user feedback.
-- **Detected Language Attribute**: Local STT backend now stores `detected_language` attribute after transcription for programmatic access.
+- **Streaming TTS with Parallel Synthesis**: Piper local TTS now synthesizes sentences in parallel and streams audio for lower latency. First audio plays within ~200ms.
+- **Dynamic Emotion Tagging**: LLM assigns emotions (DE) or character voices (EN) per sentence for multi-speaker Piper models. Bilingual prompts with explicit label constraints.
+- **Audio FX Post-Processing**: Pure-numpy effects chain for Piper local TTS: pitch shift (phase vocoder), formant/voice depth, bass/treble EQ, reverb. Master toggle and per-effect controls.
+- **Audio FX Preview Button**: "Preview" button in Settings > TTS > Audio Effects. Plays sample text with current FX settings. Toggles to "Stop" during playback. Auto-selects DE/EN sample text based on voice.
+- **Audio FX RMS Loudness Normalization**: Effects chain restores original loudness after processing via RMS normalization. Output clipped to [-1, 1]. Gain capped at 4x.
+- **TTS Preprocessing Presets**: Four bilingual presets (Clean, Concise, Professional, Bullets-to-Prose) for LLM text rewriting before TTS. Custom prompt support.
+- **Emotion/Dialog Prompt UI**: Custom prompt override for emotion tagging with "Show Default" and "Clear (Auto)" buttons. Auto-selects German emotion or English dialog prompt based on voice.
+- **OpenAI TTS Provider**: New cloud TTS option via OpenAI API (gpt-4o-mini-tts, tts-1, tts-1-hd). 13 voices with instructions support.
+- **Segment Crossfade**: 8ms raised-cosine fade at sentence boundaries prevents audio pops/clicks in streaming playback.
+- **Whisper Vocabulary Hints**: `[transcription] vocabulary_hints` field for domain-specific terms to improve transcription accuracy.
+- **Audio Quality Indicator**: Toast notification warns about quiet recordings or clipping after recording stops.
+- **Processing Tooltip Steps**: Tray tooltip shows granular pipeline progress ("Transcribing...", "Summarizing...", etc.).
+- **Paste Shortcut Configuration**: `[paste] paste_shortcut` option for manual override of terminal paste detection.
+- **Claude Code CLI Integration**: Voice input control for Claude Code with `[claude_code]` config section.
 
 ### Changed
-- **Paste Shortcut Auto-Detection**: Enhanced with D-Bus integration on Wayland for terminal detection. Auto-detection now more reliable across terminal emulators on both X11 and Wayland.
+- **Settings UX: Three-Prompt Clarity**: Each prompt field now shows which hotkey/pipeline it applies to:
+  - Cleanup Prompt labeled "(Ctrl+Alt+R)" with hint "Used for dictation only"
+  - TTS Preprocessing header labeled "(Ctrl+Alt+T)"
+  - Dynamic emotions hint: "Requires: Summarization tab ON + API key configured"
+  - Emotion prompt hint: "Extra LLM call during TTS to tag emotions"
+  - Save-time warning when dynamic emotions enabled but summarization off
+- **EspeakPhonemizer Singleton**: espeak-ng phonemizer is now a process-level singleton with thread-safe locking. Prevents double-initialization corruption when multiple PiperLocalTTS instances exist (e.g., preview + main pipeline).
+- **Hotkey Callbacks Dispatched to Threads**: All hotkey callbacks now run on daemon threads instead of the Windows keyboard hook thread. Prevents stuck modifier keys (Ctrl/Alt) after hotkey press.
+- **APP_VERSION**: Bumped to 0.9.3.
 
 ### Fixed
-- **SEC-082: UInput Capabilities Restricted**: UInput device now restricted to only Ctrl, Shift, and V key codes instead of unrestricted all-key capabilities. Limits attack surface if process is compromised.
-- **SEC-083: UInput Cleanup on Shutdown**: Added explicit `cleanup_uinput()` call on Linux shutdown to ensure clean device removal from `/sys/devices/virtual/input/`.
+- **Stuck Modifier Keys After Hotkey**: After pressing Ctrl+Alt+T, just pressing "T" re-triggered TTS because Ctrl/Alt key-up events were missed while the hook thread was blocked by synchronous callbacks.
+- **Emotion Tagging Not Working**: Prompts too vague (LLM used wrong labels), PassthroughSummarizer silently broke tagging, no debug logging. Fixed with explicit `{label_list}` constraints and summarizer type check.
+- **Audio FX Volume Loss**: Processed audio was noticeably quieter than original. Fixed with RMS normalization at end of effects chain.
+- **FX Preview Nonsense Audio**: Second and subsequent preview clicks produced corrupted audio. Root cause: espeak-ng C library re-initialized by separate PiperLocalTTS instances. Fixed with singleton pattern.
+- **SEC-082: UInput Capabilities Restricted**: UInput device now restricted to paste-only key codes.
+- **SEC-083: UInput Cleanup on Shutdown**: Explicit `cleanup_uinput()` on Linux shutdown.
 
 ### Security
 - SEC-082: Restrict UInput capabilities to paste-only key codes (Ctrl, Shift, V).
 - SEC-083: Clean up UInput device on shutdown.
-- SEC-078 (carried): Clipboard write return codes should be checked on Linux (See SECURITY_REVIEW_2026-02-22.md for details).
 
 ---
 

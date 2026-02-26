@@ -59,7 +59,7 @@ VALID_TRANSITIONS: frozenset[tuple[AppState, AppState]] = frozenset({
 
 # Application metadata
 APP_NAME = "Voice Paste"
-APP_VERSION = "0.9.1"
+APP_VERSION = "0.9.3"
 
 # Hotkey configuration
 # Hotkey history:
@@ -344,6 +344,17 @@ DEFAULT_TTS_SENTENCE_PAUSE_MS = 350  # silence between sentences (ms)
 DEFAULT_TTS_NOISE_SCALE = 0.667  # phoneme noise (higher = more expressive)
 DEFAULT_TTS_NOISE_W = 0.8        # phoneme width noise (higher = more varied duration)
 
+# --- Piper Audio Effects (post-processing, pure numpy) ---
+DEFAULT_AUDIO_FX_ENABLED = True          # Master toggle for audio effects
+DEFAULT_AUDIO_FX_PITCH_SEMITONES = 0.0   # -6.0 to +6.0
+DEFAULT_AUDIO_FX_FORMANT_SHIFT = 1.0     # 0.7 to 1.4
+DEFAULT_AUDIO_FX_BASS_DB = 0.0           # -12.0 to +12.0
+DEFAULT_AUDIO_FX_TREBLE_DB = 0.0         # -12.0 to +12.0
+DEFAULT_AUDIO_FX_REVERB_MIX = 0.0        # 0.0 to 0.5
+
+# --- Segment crossfade (anti-pop) ---
+SEGMENT_FADE_MS = 8  # raised-cosine fade at segment boundaries (ms)
+
 # --- Piper speaker/emotion ---
 DEFAULT_TTS_PIPER_SPEAKER_ID = 0
 DEFAULT_TTS_DYNAMIC_EMOTIONS = False
@@ -358,58 +369,107 @@ TTS_PREPROCESS_DEFAULT_PROMPT = (
     "Antworte NUR mit dem umgeschriebenen Text."
 )
 
+TTS_PREPROCESS_DEFAULT_PROMPT_EN = (
+    "Rewrite the text as natural spoken language. "
+    "Remove formatting, URLs and code. Expand abbreviations. "
+    "Convert lists into flowing sentences. Keep the same language. "
+    "Reply ONLY with the rewritten text."
+)
+
 TTS_PREPROCESS_PRESETS: dict[str, dict[str, str]] = {
     "clean": {
-        "label": "Clean & Natural (Default)",
-        "prompt": (
+        "label_de": "Bereinigen & Natuerlich",
+        "label_en": "Clean & Natural",
+        "prompt_de": (
             "Schreibe den Text als natuerliche gesprochene Sprache um. "
             "Entferne Formatierung, URLs und Code. Expandiere Abkuerzungen. "
             "Wandle Listen in fliessende Saetze um. Behalte dieselbe Sprache. "
             "Antworte NUR mit dem umgeschriebenen Text."
         ),
+        "prompt_en": (
+            "Rewrite the text as natural spoken language. "
+            "Remove formatting, URLs and code. Expand abbreviations. "
+            "Convert lists into flowing sentences. Keep the same language. "
+            "Reply ONLY with the rewritten text."
+        ),
     },
     "concise": {
-        "label": "Concise Summary",
-        "prompt": (
+        "label_de": "Zusammenfassung (Kurz)",
+        "label_en": "Concise Summary",
+        "prompt_de": (
             "Fasse den Text in 2-3 Saetzen zusammen, geeignet zum Vorlesen. "
             "Behalte die wichtigsten Informationen. Behalte dieselbe Sprache. "
             "Antworte NUR mit der Zusammenfassung."
         ),
+        "prompt_en": (
+            "Summarize the text in 2-3 sentences suitable for reading aloud. "
+            "Keep the most important information. Keep the same language. "
+            "Reply ONLY with the summary."
+        ),
     },
     "professional": {
-        "label": "Professional / Formal",
-        "prompt": (
+        "label_de": "Professionell / Formell",
+        "label_en": "Professional / Formal",
+        "prompt_de": (
             "Formuliere den Text in einem professionellen, formellen Stil um, "
             "geeignet fuer Sprachsynthese. Korrigiere Grammatik, entferne "
             "informelle Sprache. Behalte dieselbe Sprache. "
             "Antworte NUR mit dem umgeschriebenen Text."
         ),
+        "prompt_en": (
+            "Rewrite the text in a professional, formal style suitable for "
+            "speech synthesis. Correct grammar and remove informal language. "
+            "Keep the same language. "
+            "Reply ONLY with the rewritten text."
+        ),
     },
     "bullets_to_prose": {
-        "label": "Bullet Points to Prose",
-        "prompt": (
+        "label_de": "Aufzaehlung zu Fliesstext",
+        "label_en": "Bullet Points to Prose",
+        "prompt_de": (
             "Wandle die Aufzaehlung/Liste in einen fliessenden, natuerlich "
             "klingenden Absatz um. Verwende Uebergangswoerter wie erstens, "
             "zweitens, ausserdem, schliesslich. Behalte dieselbe Sprache. "
             "Antworte NUR mit dem Absatz."
         ),
+        "prompt_en": (
+            "Convert the bullet points or list into a flowing, natural-sounding "
+            "paragraph. Use transition words like first, second, furthermore, "
+            "finally. Keep the same language. "
+            "Reply ONLY with the paragraph."
+        ),
     },
 }
 
-# --- Dynamic emotion tagging prompt ---
-# The LLM tags each sentence with an emotion from the Piper emotional model.
-# Output format: one line per sentence, prefixed with "emotion: text"
-TTS_EMOTION_TAGGING_PROMPT = (
-    "You will receive a text. Split it into individual sentences and assign "
-    "EXACTLY ONE label to each sentence. Available labels:\n"
-    "{emotion_descriptions}\n\n"
-    "Reply ONLY in the format: label: sentence text\n"
-    "One sentence per line. No explanations, no numbering. "
-    "Do NOT change the text, only prepend the label.\n\n"
-    "Example:\n"
-    "{examples}\n\n"
-    "Text:\n{text}"
+# --- Dynamic emotion / character tagging prompts ---
+# The LLM tags each sentence with an emotion (DE) or character (EN) label
+# from the Piper multi-speaker model.
+# Output format: one line per sentence, prefixed with "label: text"
+
+TTS_EMOTION_PROMPT_DE = (
+    "Teile den Text in Saetze auf. Weise jedem Satz GENAU EIN Label zu.\n"
+    "Erlaubte Labels (NUR diese verwenden!): {label_list}\n\n"
+    "Beschreibungen:\n{label_descriptions}\n\n"
+    "Waehle das Label, das den Ton des Satzes am besten beschreibt.\n"
+    "Format: label: Satztext\n"
+    "Ein Satz pro Zeile. Text NICHT aendern. NUR das Label voranstellen.\n"
+    "Verwende KEINE anderen Labels als die oben genannten.\n\n"
+    "Beispiel:\n{examples}"
 )
+
+TTS_DIALOG_PROMPT_EN = (
+    "Split the text into sentences. Assign each sentence to EXACTLY ONE character.\n"
+    "Allowed characters (use ONLY these!): {label_list}\n\n"
+    "Descriptions:\n{label_descriptions}\n\n"
+    "Choose the character whose personality best fits the sentence's tone and intent.\n"
+    "Format: label: sentence text\n"
+    "One sentence per line. Do NOT alter the text. Only prepend the label.\n"
+    "Do NOT invent, modify, or combine labels.\n\n"
+    "Example:\n{examples}"
+)
+
+# Backward-compatible alias (used by older code / tests).
+TTS_EMOTION_TAGGING_PROMPT = TTS_EMOTION_PROMPT_DE
 
 # Clause-boundary conjunctions for graduated pause splitting
 CLAUSE_CONJUNCTIONS_DE = frozenset({
@@ -479,6 +539,11 @@ PIPER_VOICE_MODELS: dict[str, dict[str, Any]] = {
             "sleepy": "muede, schlaefrig",
             "surprised": "ueberrascht, erstaunt",
             "whisper": "fluestern, leise",
+        },
+        "speaker_examples": {
+            "amused": "Das ist ja wirklich lustig, das haette ich nicht erwartet!",
+            "angry": "Das ist absolut inakzeptabel, so geht das nicht weiter!",
+            "neutral": "Der Termin ist am Mittwoch um vierzehn Uhr.",
         },
     },
     "de_DE-mls-medium": {
@@ -686,8 +751,32 @@ PIPER_VOICE_MODELS: dict[str, dict[str, Any]] = {
             "obadiah": "sad, gloomy, depressive",
             "poppy": "happy, cheerful, outgoing",
         },
+        "speaker_examples": {
+            "prudence": "Let me think about this carefully before we decide.",
+            "spike": "That is completely wrong and you know it!",
+            "obadiah": "I doubt this will work out, it never does.",
+            "poppy": "This is so exciting, I can not wait to get started!",
+        },
     },
 }
+
+def get_voice_language(voice_name: str) -> str:
+    """Detect language from Piper voice model name prefix.
+
+    Piper voices follow the naming convention ``{lang}_{REGION}-{name}-{quality}``,
+    e.g. ``de_DE-thorsten-medium`` or ``en_GB-semaine-medium``.
+
+    Args:
+        voice_name: The Piper voice model key (e.g. "en_US-ryan-high").
+
+    Returns:
+        Two-letter ISO 639-1 language code. Defaults to "de" for
+        unrecognised prefixes.
+    """
+    if voice_name.startswith("en_"):
+        return "en"
+    return "de"
+
 
 # --- v1.3: Terminal Mode toggle hotkey ---
 # Toggles paste shortcut between Ctrl+V (GUI) and Ctrl+Shift+V (terminal).

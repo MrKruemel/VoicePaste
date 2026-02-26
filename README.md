@@ -32,6 +32,7 @@
 - **Choose your transcription source**: Cloud (OpenAI Whisper API) or offline (local faster-whisper with Silero VAD).
 - **Multiple summarization backends**: OpenAI, OpenRouter (Claude, Llama), or local Ollama.
 - **Multiple TTS providers**: ElevenLabs cloud (human-quality voices) or local Piper (offline, free, 14 voices including German, English US, English GB).
+- **TTS Audio Effects Preview**: Test pitch shift, formant shift, EQ, and reverb in real-time with the Preview button. RMS loudness normalization ensures consistent output volume after processing.
 - **Tabbed Settings dialog**: Organized configuration interface with Transcription, Summarization, Text-to-Speech, Hands-Free, and General tabs.
 - **Secure credential storage**: API keys stored in OS credential store (Windows Credential Manager / Linux keyring), never in plain text files.
 - **Silent operation**: Runs in system tray. Never steals focus.
@@ -431,7 +432,7 @@ Tabs:
 
 - **Transcription**: Choose cloud (OpenAI Whisper) or local (faster-whisper) backend. Download local models, set device/compute type, enable/disable VAD filter.
 - **Summarization**: Enable/disable text cleanup. Choose provider (OpenAI, OpenRouter, Ollama). Custom prompts.
-- **Text-to-Speech**: Enable/disable TTS. Choose provider (ElevenLabs cloud or Piper local). Download Piper voice models, select voice. Adjust speech speed. Configure TTS caching (deduplication, retention) and export settings (save to files).
+- **Text-to-Speech**: Enable/disable TTS. Choose provider (ElevenLabs cloud or Piper local). Download Piper voice models, select voice. Adjust speech speed. Configure audio effects (pitch, formant, EQ, reverb) with real-time Preview button. Configure TTS caching (deduplication, retention) and export settings (save to files).
 - **Hands-Free**: Enable/disable wake word detection. Configure wake phrase, matching mode, pipeline, silence timeout, max recording duration.
 - **Claude Code**: Enable/disable Claude Code CLI integration. Set working directory, system prompt, response mode (paste/speak/both), timeout, and permission settings.
 - **General**: Toggle audio cues, set log level, manage API credentials (OpenAI, OpenRouter, ElevenLabs) via OS credential store. Toggle floating overlay display.

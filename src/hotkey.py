@@ -378,21 +378,31 @@ class HotkeyManager:
     def _on_slot_fired(self, name: str) -> None:
         """Generic hotkey handler with debounce logic.
 
-        The cancel slot skips debounce (it must respond instantly).
+        IMPORTANT: This method runs on the keyboard hook thread (Windows
+        WH_KEYBOARD_LL).  The hook MUST return quickly or Windows will
+        remove it, causing all hotkey detection to fail.  Key-up events
+        for modifier keys (Ctrl, Alt) are also missed while this method
+        blocks, leading to "stuck modifier" symptoms (e.g. pressing just
+        "T" triggers Ctrl+Alt+T).
+
+        Solution: After debounce checks (which must be synchronous),
+        dispatch the actual callback to a daemon thread so the hook
+        returns immediately.
         """
         slot = self._slots[name]
 
-        # Cancel slot: no debounce
+        # Cancel slot: no debounce, but still dispatch in thread
         if name == "cancel":
             logger.info("Cancel hotkey pressed: %s", CANCEL_HOTKEY)
             if slot.callback:
-                try:
-                    slot.callback()
-                except Exception:
-                    logger.exception("Error in cancel hotkey callback.")
+                cb = slot.callback
+                threading.Thread(
+                    target=self._safe_callback, args=(cb, slot.label),
+                    daemon=True, name=f"hotkey-{name}",
+                ).start()
             return
 
-        # All other slots: debounce
+        # All other slots: debounce (synchronous, fast)
         with self._lock:
             now = time.monotonic()
             elapsed_ms = (now - slot.last_trigger) * 1000
@@ -412,12 +422,21 @@ class HotkeyManager:
         )
 
         if slot.callback:
-            try:
-                slot.callback()
-            except Exception:
-                logger.exception("Error in %s hotkey callback.", slot.label)
+            cb = slot.callback
+            threading.Thread(
+                target=self._safe_callback, args=(cb, slot.label),
+                daemon=True, name=f"hotkey-{name}",
+            ).start()
         else:
             logger.warning("%s hotkey fired but no callback registered.", slot.label)
+
+    @staticmethod
+    def _safe_callback(callback: Callable[[], None], label: str) -> None:
+        """Run a hotkey callback with exception logging."""
+        try:
+            callback()
+        except Exception:
+            logger.exception("Error in %s hotkey callback.", label)
 
     # -- Public API (preserves existing interface) --
 

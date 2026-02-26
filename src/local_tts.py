@@ -35,11 +35,14 @@ import threading
 import time
 import wave
 from pathlib import Path
-from typing import Iterator, Optional
+from typing import TYPE_CHECKING, Iterator, Optional
 
 import numpy as np
 
 from tts import TTSError
+
+if TYPE_CHECKING:
+    from audio_fx import AudioFXConfig
 
 logger = logging.getLogger(__name__)
 
@@ -175,6 +178,7 @@ class EspeakPhonemizer:
         self._lib: Optional[ctypes.CDLL] = None
         self._initialized = False
         self._current_language: Optional[str] = None
+        self._lock = threading.Lock()
 
     def _ensure_initialized(self) -> None:
         """Load and initialize espeak-ng if not already done.
@@ -310,6 +314,8 @@ class EspeakPhonemizer:
         markers (primary U+02C8 and secondary U+02CC) which Piper models
         expect.
 
+        Thread-safe: uses internal lock since espeak-ng is not reentrant.
+
         Args:
             text: Input text to phonemize.
             language: Language code (default: "de" for German).
@@ -323,6 +329,11 @@ class EspeakPhonemizer:
         if not text or not text.strip():
             return ""
 
+        with self._lock:
+            return self._phonemize_unlocked(text, language)
+
+    def _phonemize_unlocked(self, text: str, language: str) -> str:
+        """Internal phonemization (caller must hold self._lock)."""
         self._ensure_initialized()
         self._set_language(language)
 
@@ -376,6 +387,23 @@ class EspeakPhonemizer:
         self._lib = None
 
 
+# Module-level singleton: espeak-ng is a process-global C library.
+# Calling espeak_Initialize() multiple times (from separate instances)
+# resets internal state and corrupts phonemization output. All
+# PiperLocalTTS instances must share one EspeakPhonemizer.
+_shared_phonemizer: Optional[EspeakPhonemizer] = None
+_shared_phonemizer_lock = threading.Lock()
+
+
+def _get_shared_phonemizer() -> EspeakPhonemizer:
+    """Return the module-level EspeakPhonemizer singleton."""
+    global _shared_phonemizer
+    with _shared_phonemizer_lock:
+        if _shared_phonemizer is None:
+            _shared_phonemizer = EspeakPhonemizer()
+        return _shared_phonemizer
+
+
 class PiperLocalTTS:
     """Local TTS backend using Piper ONNX models.
 
@@ -405,6 +433,7 @@ class PiperLocalTTS:
         noise_scale: Optional[float] = None,
         noise_w: Optional[float] = None,
         speaker_id: int = 0,
+        audio_fx_config: Optional["AudioFXConfig"] = None,
     ) -> None:
         """Initialize the Piper local TTS backend.
 
@@ -423,6 +452,9 @@ class PiperLocalTTS:
                 Set to 0 to disable sentence-level synthesis. Default 350.
             noise_scale: VITS phoneme noise (0.0-1.0). None = use model default.
             noise_w: VITS duration noise (0.0-1.0). None = use model default.
+            speaker_id: Speaker/emotion ID for multi-speaker models.
+            audio_fx_config: Audio effects configuration. None or bypass
+                config = no post-processing.
         """
         self._voice_name = voice_name
         self._model_dir = model_dir
@@ -431,6 +463,7 @@ class PiperLocalTTS:
         self._noise_scale = noise_scale
         self._noise_w = noise_w
         self._speaker_id = speaker_id
+        self._audio_fx_config = audio_fx_config
         self._speaker_id_map: Optional[dict[str, int]] = None
         self._session: Optional[object] = None  # ort.InferenceSession
         self._config: Optional[dict] = None
@@ -440,11 +473,12 @@ class PiperLocalTTS:
         self._session_input_names: list[str] = []
         self._load_lock = threading.Lock()
         self._loaded = False
-        self._phonemizer = EspeakPhonemizer()
+        self._phonemizer = _get_shared_phonemizer()
 
         logger.info(
             "PiperLocalTTS initialized: voice=%s, model_dir=%s, speed=%.2f, "
-            "sentence_pause=%dms, noise_scale=%s, noise_w=%s, speaker_id=%d",
+            "sentence_pause=%dms, noise_scale=%s, noise_w=%s, speaker_id=%d, "
+            "audio_fx=%s",
             voice_name,
             model_dir or "(auto/cache)",
             speed,
@@ -452,6 +486,7 @@ class PiperLocalTTS:
             noise_scale if noise_scale is not None else "(model default)",
             noise_w if noise_w is not None else "(model default)",
             speaker_id,
+            "disabled" if audio_fx_config is None else "active",
         )
 
     @property
@@ -716,6 +751,10 @@ class PiperLocalTTS:
         clauses = self._split_clauses(normalized, self._sentence_pause_ms)
 
         def _generate() -> Iterator[np.ndarray]:
+            from constants import SEGMENT_FADE_MS
+
+            fade_samples = int(self._sample_rate * SEGMENT_FADE_MS / 1000)
+
             try:
                 if len(clauses) <= 1 or self._sentence_pause_ms <= 0:
                     pcm_float32 = self._synthesize_segment(
@@ -728,7 +767,12 @@ class PiperLocalTTS:
                         chunk = self._synthesize_segment(clause_text, language)
                         pcm_clipped = np.clip(chunk, -1.0, 1.0)
                         pcm_int16 = (pcm_clipped * 32767).astype(np.int16)
+                        # Fade-in on all segments except the first
+                        if i > 0:
+                            self._apply_fade_in(pcm_int16, fade_samples)
                         if pause_ms > 0 and i < len(clauses) - 1:
+                            # Fade-out before the silence gap
+                            self._apply_fade_out(pcm_int16, fade_samples)
                             silence = np.zeros(
                                 int(self._sample_rate * pause_ms / 1000),
                                 dtype=np.int16,
@@ -774,6 +818,11 @@ class PiperLocalTTS:
         language = self._get_language()
 
         def _generate() -> Iterator[np.ndarray]:
+            from constants import SEGMENT_FADE_MS
+
+            fade_samples = int(self._sample_rate * SEGMENT_FADE_MS / 1000)
+            seg_index = 0
+
             try:
                 for text, sid in segments:
                     text = text.strip()
@@ -785,8 +834,13 @@ class PiperLocalTTS:
                     )
                     pcm_clipped = np.clip(chunk, -1.0, 1.0)
                     pcm_int16 = (pcm_clipped * 32767).astype(np.int16)
+                    # Fade-in on all segments except the first
+                    if seg_index > 0:
+                        self._apply_fade_in(pcm_int16, fade_samples)
                     # Add sentence pause between segments
                     if self._sentence_pause_ms > 0:
+                        # Fade-out before the silence gap
+                        self._apply_fade_out(pcm_int16, fade_samples)
                         silence = np.zeros(
                             int(self._sample_rate * self._sentence_pause_ms / 1000),
                             dtype=np.int16,
@@ -794,6 +848,7 @@ class PiperLocalTTS:
                         yield np.concatenate([pcm_int16, silence])
                     else:
                         yield pcm_int16
+                    seg_index += 1
             except TTSError:
                 raise
             except MemoryError as e:
@@ -834,7 +889,17 @@ class PiperLocalTTS:
                 "The text may contain only unsupported characters."
             )
         phoneme_ids = self._phonemes_to_ids(phonemes)
-        return self._infer(phoneme_ids, speaker_id=speaker_id)
+        pcm = self._infer(phoneme_ids, speaker_id=speaker_id)
+
+        # Apply audio effects if configured (pitch shift, EQ, reverb, etc.)
+        if (
+            self._audio_fx_config is not None
+            and not self._audio_fx_config.is_bypass
+        ):
+            from audio_fx import apply_effects
+            pcm = apply_effects(pcm, self._sample_rate, self._audio_fx_config)
+
+        return pcm
 
     @staticmethod
     def _split_sentences(text: str) -> list[str]:
@@ -1081,6 +1146,56 @@ class PiperLocalTTS:
         """
         num_samples = int(sample_rate * duration_ms / 1000)
         return np.zeros(num_samples, dtype=np.float32)
+
+    @staticmethod
+    def _apply_fade_out(pcm_int16: np.ndarray, fade_samples: int) -> np.ndarray:
+        """Apply raised-cosine fade-out to the last N samples (in-place).
+
+        The fade curve goes from 1.0 (full amplitude) to 0.0 (silence)
+        using a raised-cosine shape: (cos(t) + 1) / 2 for t in [0, pi].
+        This eliminates the sharp discontinuity at segment boundaries
+        that causes audible pops/crackles.
+
+        Args:
+            pcm_int16: 1-D int16 PCM array to modify.
+            fade_samples: Number of samples over which to fade out.
+
+        Returns:
+            The modified array (same object, modified in-place).
+        """
+        if fade_samples <= 0 or len(pcm_int16) <= fade_samples:
+            return pcm_int16
+        t = np.linspace(0, np.pi, fade_samples, dtype=np.float32)
+        curve = (np.cos(t) + 1.0) * 0.5  # 1.0 -> 0.0
+        tail = pcm_int16[-fade_samples:].astype(np.float32)
+        tail *= curve
+        pcm_int16[-fade_samples:] = tail.astype(np.int16)
+        return pcm_int16
+
+    @staticmethod
+    def _apply_fade_in(pcm_int16: np.ndarray, fade_samples: int) -> np.ndarray:
+        """Apply raised-cosine fade-in to the first N samples (in-place).
+
+        The fade curve goes from 0.0 (silence) to 1.0 (full amplitude)
+        using a raised-cosine shape: (cos(t) + 1) / 2 for t in [pi, 0].
+        This eliminates the sharp onset at segment boundaries that causes
+        audible pops/crackles.
+
+        Args:
+            pcm_int16: 1-D int16 PCM array to modify.
+            fade_samples: Number of samples over which to fade in.
+
+        Returns:
+            The modified array (same object, modified in-place).
+        """
+        if fade_samples <= 0 or len(pcm_int16) <= fade_samples:
+            return pcm_int16
+        t = np.linspace(np.pi, 0, fade_samples, dtype=np.float32)
+        curve = (np.cos(t) + 1.0) * 0.5  # 0.0 -> 1.0
+        head = pcm_int16[:fade_samples].astype(np.float32)
+        head *= curve
+        pcm_int16[:fade_samples] = head.astype(np.int16)
+        return pcm_int16
 
     def _resolve_model_dir(self) -> Optional[Path]:
         """Resolve the model directory path.

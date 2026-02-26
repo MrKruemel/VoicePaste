@@ -466,17 +466,21 @@ class TestPreprocessConstants:
         assert "bullets_to_prose" in TTS_PREPROCESS_PRESETS
 
     def test_presets_have_label_and_prompt(self):
-        """Each preset has 'label' and 'prompt' keys."""
+        """Each preset has bilingual label and prompt keys."""
         from constants import TTS_PREPROCESS_PRESETS
         for key, info in TTS_PREPROCESS_PRESETS.items():
-            assert "label" in info, f"Missing 'label' in preset '{key}'"
-            assert "prompt" in info, f"Missing 'prompt' in preset '{key}'"
-            assert len(info["prompt"]) > 20, f"Prompt too short in preset '{key}'"
+            assert "label_de" in info, f"Missing 'label_de' in preset '{key}'"
+            assert "label_en" in info, f"Missing 'label_en' in preset '{key}'"
+            assert "prompt_de" in info, f"Missing 'prompt_de' in preset '{key}'"
+            assert "prompt_en" in info, f"Missing 'prompt_en' in preset '{key}'"
+            assert len(info["prompt_de"]) > 20, f"prompt_de too short in preset '{key}'"
+            assert len(info["prompt_en"]) > 20, f"prompt_en too short in preset '{key}'"
 
     def test_default_prompt_exists(self):
-        """TTS_PREPROCESS_DEFAULT_PROMPT exists and is non-empty."""
-        from constants import TTS_PREPROCESS_DEFAULT_PROMPT
+        """TTS_PREPROCESS_DEFAULT_PROMPT and EN variant exist and are non-empty."""
+        from constants import TTS_PREPROCESS_DEFAULT_PROMPT, TTS_PREPROCESS_DEFAULT_PROMPT_EN
         assert len(TTS_PREPROCESS_DEFAULT_PROMPT) > 20
+        assert len(TTS_PREPROCESS_DEFAULT_PROMPT_EN) > 20
 
     def test_config_defaults(self):
         """AppConfig has correct defaults for preprocess fields."""
