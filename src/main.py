@@ -53,6 +53,7 @@ from constants import (
     PROMPT_SYSTEM_PROMPT,
     SUPPORTED_LANGUAGES,
     TTS_MAX_TEXT_LENGTH,
+    TTS_MAX_TEXT_LENGTH_LOCAL,
     VALID_TRANSITIONS,
 )
 from config import AppConfig, load_config
@@ -397,6 +398,7 @@ class VoicePasteApp:
             openai_tts_model=config.tts_openai_model,
             openai_tts_format=config.tts_openai_format,
             openai_tts_instructions=config.tts_openai_instructions,
+            speaker_id=config.tts_piper_speaker_id,
         )
         if self._tts is not None:
             logger.info("TTS backend ready: %s", config.tts_provider)
@@ -508,10 +510,13 @@ class VoicePasteApp:
             self._tray_manager.notify(APP_NAME, "Clipboard is empty.")
             return
 
-        if len(text) > TTS_MAX_TEXT_LENGTH:
+        max_len = (TTS_MAX_TEXT_LENGTH_LOCAL
+                   if self.config.tts_provider == "piper"
+                   else TTS_MAX_TEXT_LENGTH)
+        if len(text) > max_len:
             self._tray_manager.notify(
                 APP_NAME,
-                f"Text too long for TTS ({len(text)} chars, max {TTS_MAX_TEXT_LENGTH}).",
+                f"Text too long for TTS ({len(text)} chars, max {max_len}).",
             )
             return
 
@@ -913,6 +918,7 @@ class VoicePasteApp:
             "tts_model_id",
             "tts_output_format",
             "tts_local_voice",
+            "tts_piper_speaker_id",
         }
         if changed_fields.keys() & tts_keys:
             # Unload previous local TTS model if switching away

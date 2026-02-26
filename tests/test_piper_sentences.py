@@ -341,7 +341,7 @@ class TestSentenceLevelSynthesis:
         backend._phonemizer.phonemize.return_value = "ab ab"
 
         # Mock ONNX inference to return known PCM
-        def fake_infer(phoneme_ids):
+        def fake_infer(phoneme_ids, speaker_id=None):
             return np.ones(1000, dtype=np.float32) * 0.5
 
         backend._infer = MagicMock(side_effect=fake_infer)

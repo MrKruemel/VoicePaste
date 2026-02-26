@@ -1121,6 +1121,39 @@ class SettingsDialog:
             side=tk.LEFT, padx=(4, 0)
         )
 
+        # Piper speaker/emotion row (visible only for multi-speaker models)
+        self._tts_speaker_frame = ttk.Frame(self._tts_local_frame)
+        # Don't pack yet — shown/hidden by _update_tts_speaker_controls
+
+        tts_speaker_row = ttk.Frame(self._tts_speaker_frame)
+        tts_speaker_row.pack(fill=tk.X, pady=(0, 4))
+        ttk.Label(tts_speaker_row, text="Emotion:", width=10, anchor=tk.W).pack(side=tk.LEFT)
+        self._tts_speaker_var = tk.StringVar()
+        self._tts_speaker_combo = ttk.Combobox(
+            tts_speaker_row,
+            textvariable=self._tts_speaker_var,
+            state="readonly",
+            width=20,
+        )
+        self._tts_speaker_combo.pack(side=tk.LEFT, padx=(4, 0))
+
+        # Dynamic emotions checkbox
+        self._tts_dynamic_emotions_var = tk.BooleanVar()
+        self._tts_dynamic_emotions_check = ttk.Checkbutton(
+            self._tts_speaker_frame,
+            text="Dynamic emotions (LLM tags each sentence)",
+            variable=self._tts_dynamic_emotions_var,
+        )
+        self._tts_dynamic_emotions_check.pack(fill=tk.X, pady=(0, 2))
+
+        tts_dynamic_hint = ttk.Label(
+            self._tts_speaker_frame,
+            text="Requires summarization enabled. LLM assigns emotions per sentence.",
+            foreground="#999999",
+            font=("", 8),
+        )
+        tts_dynamic_hint.pack(fill=tk.X, pady=(0, 4))
+
         # Piper privacy hint
         tts_local_hint = ttk.Label(
             self._tts_local_frame,
@@ -2183,6 +2216,10 @@ class SettingsDialog:
         # TTS speed
         self._tts_speed_var.set(str(config.tts_speed))
 
+        # Speaker/emotion controls
+        self._tts_dynamic_emotions_var.set(config.tts_dynamic_emotions)
+        self._update_tts_speaker_controls()
+
         # TTS LLM Preprocessing
         self._tts_preprocess_var.set(config.tts_preprocess_with_llm)
         from constants import TTS_PREPROCESS_PRESETS, TTS_PREPROCESS_DEFAULT_PROMPT
@@ -2881,6 +2918,38 @@ class SettingsDialog:
     def _on_tts_piper_voice_changed(self, event=None) -> None:
         """Handle Piper voice dropdown change. Refresh download status."""
         self._update_tts_model_status()
+        self._update_tts_speaker_controls()
+
+    def _update_tts_speaker_controls(self) -> None:
+        """Show/hide speaker/emotion controls based on selected Piper voice."""
+        tk = self._tk
+        from constants import PIPER_VOICE_MODELS
+        voice_key = self._get_selected_tts_voice_key()
+        voice_info = PIPER_VOICE_MODELS.get(voice_key, {})
+        sid_map = voice_info.get("speaker_id_map")
+
+        if sid_map:
+            # Multi-speaker model — show controls, populate dropdown
+            self._tts_speaker_frame.pack(fill=tk.X, pady=(4, 0))
+            emotion_names = sorted(sid_map.keys(), key=lambda k: sid_map[k])
+            display_values = [
+                f"{name} ({sid_map[name]})" for name in emotion_names
+            ]
+            self._tts_speaker_combo.config(values=display_values)
+            # Select current speaker_id or default to first
+            current_sid = self._config.tts_piper_speaker_id
+            selected = None
+            for name in emotion_names:
+                if sid_map[name] == current_sid:
+                    selected = f"{name} ({current_sid})"
+                    break
+            if selected:
+                self._tts_speaker_var.set(selected)
+            elif display_values:
+                self._tts_speaker_var.set(display_values[0])
+        else:
+            # Single-speaker model — hide controls
+            self._tts_speaker_frame.pack_forget()
 
     def _get_tts_cache_dir(self) -> "Path":
         """Return the TTS cache directory path.
@@ -3643,6 +3712,23 @@ class SettingsDialog:
         if new_tts_speed != config.tts_speed:
             changed_fields["tts_speed"] = new_tts_speed
             config.tts_speed = new_tts_speed
+
+        # Piper speaker/emotion
+        speaker_display = self._tts_speaker_var.get()
+        if speaker_display:
+            # Parse "emotion (id)" → extract the id
+            import re as _re
+            sid_match = _re.search(r"\((\d+)\)$", speaker_display)
+            if sid_match:
+                new_speaker_id = int(sid_match.group(1))
+                if new_speaker_id != config.tts_piper_speaker_id:
+                    changed_fields["tts_piper_speaker_id"] = new_speaker_id
+                    config.tts_piper_speaker_id = new_speaker_id
+
+        new_dynamic_emotions = self._tts_dynamic_emotions_var.get()
+        if new_dynamic_emotions != config.tts_dynamic_emotions:
+            changed_fields["tts_dynamic_emotions"] = new_dynamic_emotions
+            config.tts_dynamic_emotions = new_dynamic_emotions
 
         # TTS LLM Preprocessing
         new_preprocess = self._tts_preprocess_var.get()

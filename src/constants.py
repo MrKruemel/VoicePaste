@@ -333,7 +333,8 @@ AUDIO_CUE_TTS_STOP_FREQS = (660, 440)
 AUDIO_CUE_TTS_STOP_DURATION_MS = 75
 
 # Max text length for TTS (prevent accidentally reading huge clipboard content)
-TTS_MAX_TEXT_LENGTH = 10000
+TTS_MAX_TEXT_LENGTH = 10000           # Cloud providers (API cost / rate limits)
+TTS_MAX_TEXT_LENGTH_LOCAL = 500000    # Local Piper (no API cost, only RAM/time)
 
 # --- v0.7: Piper local TTS configuration ---
 DEFAULT_PIPER_VOICE = "de_DE-thorsten-medium"
@@ -342,6 +343,10 @@ DEFAULT_TTS_SENTENCE_PAUSE_MS = 350  # silence between sentences (ms)
 # VITS expressiveness parameters (advanced, config.toml only)
 DEFAULT_TTS_NOISE_SCALE = 0.667  # phoneme noise (higher = more expressive)
 DEFAULT_TTS_NOISE_W = 0.8        # phoneme width noise (higher = more varied duration)
+
+# --- Piper speaker/emotion ---
+DEFAULT_TTS_PIPER_SPEAKER_ID = 0
+DEFAULT_TTS_DYNAMIC_EMOTIONS = False
 
 # --- TTS LLM Preprocessing (Ctrl+Alt+T readback) ---
 DEFAULT_TTS_PREPROCESS_WITH_LLM = False
@@ -390,6 +395,21 @@ TTS_PREPROCESS_PRESETS: dict[str, dict[str, str]] = {
         ),
     },
 }
+
+# --- Dynamic emotion tagging prompt ---
+# The LLM tags each sentence with an emotion from the Piper emotional model.
+# Output format: one line per sentence, prefixed with "emotion: text"
+TTS_EMOTION_TAGGING_PROMPT = (
+    "You will receive a text. Split it into individual sentences and assign "
+    "EXACTLY ONE label to each sentence. Available labels:\n"
+    "{emotion_descriptions}\n\n"
+    "Reply ONLY in the format: label: sentence text\n"
+    "One sentence per line. No explanations, no numbering. "
+    "Do NOT change the text, only prepend the label.\n\n"
+    "Example:\n"
+    "{examples}\n\n"
+    "Text:\n{text}"
+)
 
 # Clause-boundary conjunctions for graduated pause splitting
 CLAUSE_CONJUNCTIONS_DE = frozenset({
@@ -446,6 +466,20 @@ PIPER_VOICE_MODELS: dict[str, dict[str, Any]] = {
             "de_DE-thorsten_emotional-medium.onnx": "c1764e652266cd6dcebf1b95c61973df5970a5f5272e94b655ff1ddf9a99d1ff",
             "de_DE-thorsten_emotional-medium.onnx.json": "92895b9e99f7cfc13f4a9879da615c3d6e0baa4d660e26d7b685abdd27a6d1d3",
         },
+        "speaker_id_map": {
+            "amused": 0, "angry": 1, "disgusted": 2, "drunk": 3,
+            "neutral": 4, "sleepy": 5, "surprised": 6, "whisper": 7,
+        },
+        "speaker_descriptions": {
+            "amused": "amuesiert, lachend",
+            "angry": "wuetend, aergerlich",
+            "disgusted": "angewidert",
+            "drunk": "betrunken, lallend",
+            "neutral": "sachlich, neutral",
+            "sleepy": "muede, schlaefrig",
+            "surprised": "ueberrascht, erstaunt",
+            "whisper": "fluestern, leise",
+        },
     },
     "de_DE-mls-medium": {
         "label": "MLS (DE, medium quality)",
@@ -458,6 +492,60 @@ PIPER_VOICE_MODELS: dict[str, dict[str, Any]] = {
             "de_DE-mls-medium.onnx": "69cd1d2aa5a35839a518966fcc4924b5f93e5f8c948ed0752b1a616ad53f65bf",
             "de_DE-mls-medium.onnx.json": "b0af1c89ddfdc72d32e015729b0e89b99eec13c2c8caa1db7488d98e9e570b40",
         },
+    },
+    "de_DE-thorsten-low": {
+        "label": "Thorsten (DE, low quality, small)",
+        "repo": "rhasspy/piper-voices",
+        "files": "de/de_DE/thorsten/low/de_DE-thorsten-low.onnx,"
+                 "de/de_DE/thorsten/low/de_DE-thorsten-low.onnx.json",
+        "download_mb": "63",
+        "sample_rate": "16000",
+        "sha256": {},
+    },
+    "de_DE-kerstin-low": {
+        "label": "Kerstin (DE, low quality, female)",
+        "repo": "rhasspy/piper-voices",
+        "files": "de/de_DE/kerstin/low/de_DE-kerstin-low.onnx,"
+                 "de/de_DE/kerstin/low/de_DE-kerstin-low.onnx.json",
+        "download_mb": "63",
+        "sample_rate": "16000",
+        "sha256": {},
+    },
+    "de_DE-ramona-low": {
+        "label": "Ramona (DE, low quality, female)",
+        "repo": "rhasspy/piper-voices",
+        "files": "de/de_DE/ramona/low/de_DE-ramona-low.onnx,"
+                 "de/de_DE/ramona/low/de_DE-ramona-low.onnx.json",
+        "download_mb": "63",
+        "sample_rate": "16000",
+        "sha256": {},
+    },
+    "de_DE-eva_k-x_low": {
+        "label": "Eva K. (DE, extra-low quality, female, tiny)",
+        "repo": "rhasspy/piper-voices",
+        "files": "de/de_DE/eva_k/x_low/de_DE-eva_k-x_low.onnx,"
+                 "de/de_DE/eva_k/x_low/de_DE-eva_k-x_low.onnx.json",
+        "download_mb": "21",
+        "sample_rate": "16000",
+        "sha256": {},
+    },
+    "de_DE-karlsson-low": {
+        "label": "Karlsson (DE, low quality, male)",
+        "repo": "rhasspy/piper-voices",
+        "files": "de/de_DE/karlsson/low/de_DE-karlsson-low.onnx,"
+                 "de/de_DE/karlsson/low/de_DE-karlsson-low.onnx.json",
+        "download_mb": "63",
+        "sample_rate": "16000",
+        "sha256": {},
+    },
+    "de_DE-pavoque-low": {
+        "label": "Pavoque (DE, low quality, male)",
+        "repo": "rhasspy/piper-voices",
+        "files": "de/de_DE/pavoque/low/de_DE-pavoque-low.onnx,"
+                 "de/de_DE/pavoque/low/de_DE-pavoque-low.onnx.json",
+        "download_mb": "63",
+        "sample_rate": "16000",
+        "sha256": {},
     },
     # --- English (US) voices ---
     "en_US-ryan-high": {
@@ -579,6 +667,24 @@ PIPER_VOICE_MODELS: dict[str, dict[str, Any]] = {
         "sha256": {
             "en_GB-alan-medium.onnx": "0a309668932205e762801f1efc2736cd4b0120329622adf62be09e56339d3330",
             "en_GB-alan-medium.onnx.json": "c0f0d124e5895c00e7c03b35dcc8287f319a6998a365b182deb5c8e752ee8c1e",
+        },
+    },
+    "en_GB-semaine-medium": {
+        "label": "Semaine (EN-GB, medium, multi-personality)",
+        "repo": "rhasspy/piper-voices",
+        "files": "en/en_GB/semaine/medium/en_GB-semaine-medium.onnx,"
+                 "en/en_GB/semaine/medium/en_GB-semaine-medium.onnx.json",
+        "download_mb": "64",
+        "sample_rate": "22050",
+        "sha256": {},
+        "speaker_id_map": {
+            "prudence": 0, "spike": 1, "obadiah": 2, "poppy": 3,
+        },
+        "speaker_descriptions": {
+            "prudence": "calm, neutral, sensible",
+            "spike": "angry, confrontational, aggressive",
+            "obadiah": "sad, gloomy, depressive",
+            "poppy": "happy, cheerful, outgoing",
         },
     },
 }

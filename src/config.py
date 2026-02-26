@@ -57,9 +57,11 @@ from constants import (
     DEFAULT_TTS_EXPORT_PATH,
     DEFAULT_TTS_HOTKEY,
     DEFAULT_TTS_MODEL_ID,
+    DEFAULT_TTS_DYNAMIC_EMOTIONS,
     DEFAULT_TTS_NOISE_SCALE,
     DEFAULT_TTS_NOISE_W,
     DEFAULT_TTS_OUTPUT_FORMAT,
+    DEFAULT_TTS_PIPER_SPEAKER_ID,
     DEFAULT_TTS_PREPROCESS_WITH_LLM,
     DEFAULT_TTS_PROVIDER,
     DEFAULT_TTS_SENTENCE_PAUSE_MS,
@@ -291,6 +293,8 @@ class AppConfig:
     tts_sentence_pause_ms: int = DEFAULT_TTS_SENTENCE_PAUSE_MS
     tts_noise_scale: float = DEFAULT_TTS_NOISE_SCALE
     tts_noise_w: float = DEFAULT_TTS_NOISE_W
+    tts_piper_speaker_id: int = DEFAULT_TTS_PIPER_SPEAKER_ID
+    tts_dynamic_emotions: bool = DEFAULT_TTS_DYNAMIC_EMOTIONS
 
     # --- TTS LLM Preprocessing (Ctrl+Alt+T readback) ---
     tts_preprocess_with_llm: bool = DEFAULT_TTS_PREPROCESS_WITH_LLM
@@ -497,6 +501,12 @@ sentence_pause_ms = {self.tts_sentence_pause_ms}
 # noise_w controls duration variation (0.0-1.0, higher = more varied rhythm).
 # noise_scale = {self.tts_noise_scale}
 # noise_w = {self.tts_noise_w}
+# Speaker ID for multi-speaker models (e.g., thorsten_emotional: 0=amused,
+# 1=angry, 2=disgusted, 3=drunk, 4=neutral, 5=sleepy, 6=surprised, 7=whisper)
+speaker_id = {self.tts_piper_speaker_id}
+# Dynamic emotions: let LLM tag each sentence with an emotion before synthesis.
+# Requires tts_preprocess_with_llm = true and a multi-speaker model.
+dynamic_emotions = {str(self.tts_dynamic_emotions).lower()}
 # --- TTS LLM Preprocessing (for Ctrl+Alt+T clipboard readback) ---
 # Preprocess clipboard text with LLM before TTS synthesis.
 # Rewrites messy text (bullets, markdown, URLs) into natural spoken prose.
@@ -918,6 +928,15 @@ def load_config() -> Optional[AppConfig]:
     tts_noise_w = float(tts_section.get("noise_w", DEFAULT_TTS_NOISE_W))
     tts_noise_w = max(0.0, min(tts_noise_w, 1.0))
 
+    # Piper speaker/emotion
+    tts_piper_speaker_id = int(
+        tts_section.get("speaker_id", DEFAULT_TTS_PIPER_SPEAKER_ID)
+    )
+    tts_piper_speaker_id = max(0, tts_piper_speaker_id)
+    tts_dynamic_emotions = bool(
+        tts_section.get("dynamic_emotions", DEFAULT_TTS_DYNAMIC_EMOTIONS)
+    )
+
     # TTS LLM Preprocessing
     tts_preprocess_with_llm = bool(
         tts_section.get("tts_preprocess_with_llm", DEFAULT_TTS_PREPROCESS_WITH_LLM)
@@ -1133,6 +1152,8 @@ def load_config() -> Optional[AppConfig]:
         tts_sentence_pause_ms=tts_sentence_pause_ms,
         tts_noise_scale=tts_noise_scale,
         tts_noise_w=tts_noise_w,
+        tts_piper_speaker_id=tts_piper_speaker_id,
+        tts_dynamic_emotions=tts_dynamic_emotions,
         # TTS LLM Preprocessing
         tts_preprocess_with_llm=tts_preprocess_with_llm,
         tts_preprocess_prompt=tts_preprocess_prompt,

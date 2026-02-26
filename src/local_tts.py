@@ -35,7 +35,7 @@ import threading
 import time
 import wave
 from pathlib import Path
-from typing import Optional
+from typing import Iterator, Optional
 
 import numpy as np
 
@@ -394,6 +394,8 @@ class PiperLocalTTS:
         voice_name: Piper voice name (e.g., "de_DE-thorsten-medium").
     """
 
+    supports_streaming = True
+
     def __init__(
         self,
         voice_name: str,
@@ -402,6 +404,7 @@ class PiperLocalTTS:
         sentence_pause_ms: int = 350,
         noise_scale: Optional[float] = None,
         noise_w: Optional[float] = None,
+        speaker_id: int = 0,
     ) -> None:
         """Initialize the Piper local TTS backend.
 
@@ -427,6 +430,8 @@ class PiperLocalTTS:
         self._sentence_pause_ms = sentence_pause_ms
         self._noise_scale = noise_scale
         self._noise_w = noise_w
+        self._speaker_id = speaker_id
+        self._speaker_id_map: Optional[dict[str, int]] = None
         self._session: Optional[object] = None  # ort.InferenceSession
         self._config: Optional[dict] = None
         self._phoneme_id_map: Optional[dict[str, list[int]]] = None
@@ -439,13 +444,14 @@ class PiperLocalTTS:
 
         logger.info(
             "PiperLocalTTS initialized: voice=%s, model_dir=%s, speed=%.2f, "
-            "sentence_pause=%dms, noise_scale=%s, noise_w=%s",
+            "sentence_pause=%dms, noise_scale=%s, noise_w=%s, speaker_id=%d",
             voice_name,
             model_dir or "(auto/cache)",
             speed,
             sentence_pause_ms,
             noise_scale if noise_scale is not None else "(model default)",
             noise_w if noise_w is not None else "(model default)",
+            speaker_id,
         )
 
     @property
@@ -457,6 +463,11 @@ class PiperLocalTTS:
     def is_model_loaded(self) -> bool:
         """Whether the ONNX model is currently loaded in memory."""
         return self._loaded and self._session is not None
+
+    @property
+    def speaker_id_map(self) -> Optional[dict[str, int]]:
+        """Map of speaker/emotion names to IDs, or None for single-speaker models."""
+        return self._speaker_id_map
 
     def load_model(self) -> None:
         """Load the ONNX model and voice config into memory.
@@ -521,6 +532,7 @@ class PiperLocalTTS:
                 "sample_rate", 22050
             )
             self._inference_params = self._config.get("inference", {})
+            self._speaker_id_map = self._config.get("speaker_id_map", None)
 
             if not self._phoneme_id_map:
                 raise TTSError(
@@ -677,7 +689,129 @@ class PiperLocalTTS:
                 f"Local TTS synthesis failed: {type(e).__name__}: {e}"
             ) from e
 
-    def _synthesize_segment(self, text: str, language: str) -> np.ndarray:
+    def synthesize_streaming(self, text: str) -> tuple[int, Iterator[np.ndarray]]:
+        """Stream-synthesize text, yielding int16 PCM arrays per clause.
+
+        Unlike synthesize() which concatenates all clauses before returning,
+        this yields each clause's audio as soon as it's synthesized. This
+        allows playback to start after the first clause (~200ms latency)
+        instead of waiting for the entire text.
+
+        Returns:
+            (sample_rate, iterator) — iterator yields 1-D int16 numpy arrays,
+            one per clause including trailing silence.
+
+        Raises:
+            TTSError: If text is empty or synthesis fails.
+        """
+        if not text or not text.strip():
+            raise TTSError("Cannot synthesize empty text.")
+
+        # Lazy load model on first use
+        if not self._loaded or self._session is None:
+            self.load_model()
+
+        language = self._get_language()
+        normalized = self._normalize_for_tts(text, language)
+        clauses = self._split_clauses(normalized, self._sentence_pause_ms)
+
+        def _generate() -> Iterator[np.ndarray]:
+            try:
+                if len(clauses) <= 1 or self._sentence_pause_ms <= 0:
+                    pcm_float32 = self._synthesize_segment(
+                        normalized.strip(), language
+                    )
+                    pcm_clipped = np.clip(pcm_float32, -1.0, 1.0)
+                    yield (pcm_clipped * 32767).astype(np.int16)
+                else:
+                    for i, (clause_text, pause_ms) in enumerate(clauses):
+                        chunk = self._synthesize_segment(clause_text, language)
+                        pcm_clipped = np.clip(chunk, -1.0, 1.0)
+                        pcm_int16 = (pcm_clipped * 32767).astype(np.int16)
+                        if pause_ms > 0 and i < len(clauses) - 1:
+                            silence = np.zeros(
+                                int(self._sample_rate * pause_ms / 1000),
+                                dtype=np.int16,
+                            )
+                            yield np.concatenate([pcm_int16, silence])
+                        else:
+                            yield pcm_int16
+            except TTSError:
+                raise
+            except MemoryError as e:
+                raise TTSError(
+                    "Out of memory during TTS synthesis.\n"
+                    "Try shorter text or close other applications."
+                ) from e
+            except Exception as e:
+                raise TTSError(
+                    f"Local TTS streaming synthesis failed: "
+                    f"{type(e).__name__}: {e}"
+                ) from e
+
+        return (self._sample_rate, _generate())
+
+    def synthesize_streaming_with_emotions(
+        self, segments: list[tuple[str, Optional[int]]],
+    ) -> tuple[int, Iterator[np.ndarray]]:
+        """Stream-synthesize with per-segment speaker/emotion IDs.
+
+        Each segment is a (text, speaker_id) tuple. speaker_id=None uses
+        the model's default. Used for LLM-tagged dynamic emotions.
+
+        Args:
+            segments: List of (text, speaker_id_or_none) tuples.
+
+        Returns:
+            (sample_rate, iterator) yielding int16 PCM arrays per segment.
+        """
+        if not segments:
+            raise TTSError("Cannot synthesize empty segments.")
+
+        if not self._loaded or self._session is None:
+            self.load_model()
+
+        language = self._get_language()
+
+        def _generate() -> Iterator[np.ndarray]:
+            try:
+                for text, sid in segments:
+                    text = text.strip()
+                    if not text:
+                        continue
+                    normalized = self._normalize_for_tts(text, language)
+                    chunk = self._synthesize_segment(
+                        normalized, language, speaker_id=sid,
+                    )
+                    pcm_clipped = np.clip(chunk, -1.0, 1.0)
+                    pcm_int16 = (pcm_clipped * 32767).astype(np.int16)
+                    # Add sentence pause between segments
+                    if self._sentence_pause_ms > 0:
+                        silence = np.zeros(
+                            int(self._sample_rate * self._sentence_pause_ms / 1000),
+                            dtype=np.int16,
+                        )
+                        yield np.concatenate([pcm_int16, silence])
+                    else:
+                        yield pcm_int16
+            except TTSError:
+                raise
+            except MemoryError as e:
+                raise TTSError(
+                    "Out of memory during TTS synthesis.\n"
+                    "Try shorter text or close other applications."
+                ) from e
+            except Exception as e:
+                raise TTSError(
+                    f"Local TTS emotion streaming failed: "
+                    f"{type(e).__name__}: {e}"
+                ) from e
+
+        return (self._sample_rate, _generate())
+
+    def _synthesize_segment(
+        self, text: str, language: str, speaker_id: Optional[int] = None,
+    ) -> np.ndarray:
         """Synthesize a single text segment to float32 PCM.
 
         Runs the full pipeline: phonemize → phoneme IDs → ONNX infer.
@@ -685,6 +819,7 @@ class PiperLocalTTS:
         Args:
             text: Text segment to synthesize (typically one sentence).
             language: Language code for phonemization.
+            speaker_id: Override speaker ID for this segment. None = default.
 
         Returns:
             1-D numpy array of float32 PCM samples.
@@ -699,7 +834,7 @@ class PiperLocalTTS:
                 "The text may contain only unsupported characters."
             )
         phoneme_ids = self._phonemes_to_ids(phonemes)
-        return self._infer(phoneme_ids)
+        return self._infer(phoneme_ids, speaker_id=speaker_id)
 
     @staticmethod
     def _split_sentences(text: str) -> list[str]:
@@ -1042,11 +1177,14 @@ class PiperLocalTTS:
 
         return ids
 
-    def _infer(self, phoneme_ids: list[int]) -> np.ndarray:
+    def _infer(
+        self, phoneme_ids: list[int], speaker_id: Optional[int] = None,
+    ) -> np.ndarray:
         """Run ONNX model inference to generate audio.
 
         Args:
             phoneme_ids: List of integer phoneme IDs.
+            speaker_id: Override speaker ID for this call. None = use default.
 
         Returns:
             1-D numpy array of float32 PCM samples.
@@ -1085,7 +1223,8 @@ class PiperLocalTTS:
 
         # Add speaker ID if the model supports multiple speakers
         if "sid" in self._session_input_names:
-            inputs["sid"] = np.array([0], dtype=np.int64)
+            sid = speaker_id if speaker_id is not None else self._speaker_id
+            inputs["sid"] = np.array([sid], dtype=np.int64)
 
         try:
             output = self._session.run(None, inputs)

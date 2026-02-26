@@ -8,8 +8,9 @@ v0.7: WAV support for local Piper TTS (miniaudio handles both formats).
 """
 
 import logging
+import queue
 import threading
-from typing import Optional
+from typing import Iterable, Optional
 
 import miniaudio
 import numpy as np
@@ -108,6 +109,128 @@ class AudioPlayer:
         except Exception:
             logger.exception("Error during TTS audio playback.")
             return False
+
+        finally:
+            with self._lock:
+                self._playing = False
+
+    def play_streaming(
+        self,
+        pcm_iter: Iterable[np.ndarray],
+        sample_rate: int,
+    ) -> tuple[bool, list[np.ndarray]]:
+        """Play int16 PCM chunks with true parallel synthesis and playback.
+
+        Uses a producer-consumer model: a background thread synthesizes
+        clauses (advancing the generator) and enqueues PCM chunks, while
+        the calling thread consumes them and writes to sounddevice. This
+        ensures synthesis of clause N+1 overlaps with playback of clause N
+        regardless of how long synthesis takes.
+
+        Args:
+            pcm_iter: Iterator yielding 1-D int16 numpy arrays.
+            sample_rate: Audio sample rate in Hz.
+
+        Returns:
+            (completed, chunks) — completed is True if playback finished
+            normally. chunks contains all received PCM arrays for
+            post-playback caching.
+        """
+        self._stop_event.clear()
+        collected_chunks: list[np.ndarray] = []
+        chunk_size = sample_rate // 4  # 250ms sub-chunks
+        # maxsize=2: producer can be up to 2 clauses ahead
+        pcm_queue: queue.Queue[Optional[np.ndarray]] = queue.Queue(maxsize=2)
+        producer_error: list[Exception] = []
+
+        def _produce() -> None:
+            """Synthesize clauses and enqueue PCM chunks."""
+            try:
+                for pcm_chunk in pcm_iter:
+                    if self._stop_event.is_set():
+                        return
+                    # Put with timeout so we can check stop_event
+                    while not self._stop_event.is_set():
+                        try:
+                            pcm_queue.put(pcm_chunk, timeout=0.1)
+                            break
+                        except queue.Full:
+                            continue
+            except Exception as e:
+                producer_error.append(e)
+            finally:
+                # Sentinel: signal end-of-stream
+                while not self._stop_event.is_set():
+                    try:
+                        pcm_queue.put(None, timeout=0.1)
+                        break
+                    except queue.Full:
+                        continue
+                else:
+                    # stop_event is set — force sentinel to unblock consumer
+                    try:
+                        pcm_queue.put_nowait(None)
+                    except queue.Full:
+                        pass
+
+        try:
+            with self._lock:
+                self._playing = True
+
+            producer = threading.Thread(
+                target=_produce, daemon=True, name="tts-synth-producer",
+            )
+            producer.start()
+
+            stream = sd.OutputStream(
+                samplerate=sample_rate,
+                channels=1,
+                dtype="int16",
+                blocksize=chunk_size,
+            )
+            stream.start()
+
+            try:
+                while True:
+                    if self._stop_event.is_set():
+                        logger.info("Streaming TTS playback stopped.")
+                        return (False, collected_chunks)
+
+                    try:
+                        pcm_chunk = pcm_queue.get(timeout=0.1)
+                    except queue.Empty:
+                        continue
+
+                    if pcm_chunk is None:
+                        break  # Producer finished
+
+                    collected_chunks.append(pcm_chunk)
+
+                    # Write in 250ms sub-chunks for stop responsiveness
+                    offset = 0
+                    while offset < len(pcm_chunk):
+                        if self._stop_event.is_set():
+                            logger.info("Streaming TTS playback stopped.")
+                            return (False, collected_chunks)
+
+                        end = min(offset + chunk_size, len(pcm_chunk))
+                        sub = pcm_chunk[offset:end]
+                        stream.write(sub.reshape(-1, 1))
+                        offset = end
+
+                if producer_error:
+                    raise producer_error[0]
+
+                return (True, collected_chunks)
+
+            finally:
+                stream.stop()
+                stream.close()
+                producer.join(timeout=2.0)
+
+        except Exception:
+            logger.exception("Error during streaming TTS playback.")
+            return (False, collected_chunks)
 
         finally:
             with self._lock:

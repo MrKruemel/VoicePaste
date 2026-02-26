@@ -11,7 +11,7 @@ import logging
 import threading
 from typing import Optional, Protocol, runtime_checkable
 
-from constants import APP_VERSION, AppState, TTS_MAX_TEXT_LENGTH
+from constants import APP_VERSION, AppState, TTS_MAX_TEXT_LENGTH, TTS_MAX_TEXT_LENGTH_LOCAL
 
 logger = logging.getLogger(__name__)
 
@@ -155,11 +155,14 @@ class APIController:
                 "message": "text is required and must be non-empty",
             }
         text = text.strip()
-        if len(text) > TTS_MAX_TEXT_LENGTH:
+        max_len = (TTS_MAX_TEXT_LENGTH_LOCAL
+                   if self._app.config.tts_provider == "piper"
+                   else TTS_MAX_TEXT_LENGTH)
+        if len(text) > max_len:
             return {
                 "status": "error",
                 "error_code": "TEXT_TOO_LONG",
-                "message": f"Text exceeds {TTS_MAX_TEXT_LENGTH} character limit",
+                "message": f"Text exceeds {max_len} character limit",
             }
         if not self._tts:
             return {
@@ -302,11 +305,14 @@ class APIController:
                 "message": "text is required and must be non-empty",
             }
         text = text.strip()
-        if len(text) > TTS_MAX_TEXT_LENGTH:
+        max_len = (TTS_MAX_TEXT_LENGTH_LOCAL
+                   if self._app.config.tts_provider == "piper"
+                   else TTS_MAX_TEXT_LENGTH)
+        if len(text) > max_len:
             return {
                 "status": "error",
                 "error_code": "TEXT_TOO_LONG",
-                "message": f"Text exceeds {TTS_MAX_TEXT_LENGTH} character limit",
+                "message": f"Text exceeds {max_len} character limit",
             }
         if not self._tts:
             return {

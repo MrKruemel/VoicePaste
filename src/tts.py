@@ -233,6 +233,7 @@ def create_tts_backend(
     openai_tts_model: str = "",
     openai_tts_format: str = "",
     openai_tts_instructions: str = "",
+    speaker_id: int = 0,
 ) -> Optional[TTSBackend]:
     """Factory: create a TTS backend from configuration.
 
@@ -276,6 +277,7 @@ def create_tts_backend(
                 sentence_pause_ms=sentence_pause_ms,
                 noise_scale=noise_scale,
                 noise_w=noise_w,
+                speaker_id=speaker_id,
             )
 
         except ImportError as e:
