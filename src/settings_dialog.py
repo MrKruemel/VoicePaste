@@ -373,7 +373,7 @@ class SettingsDialog:
         self._dialog.title("Voice Paste - Settings")
         self._dialog.configure(bg=self._bg_color)
         self._dialog.resizable(True, True)
-        self._dialog.minsize(720, 580)
+        self._dialog.minsize(850, 580)
 
         # Track editing state for API key fields
         self._openai_key_editing = False
@@ -402,10 +402,10 @@ class SettingsDialog:
         self._populate_from_config()
 
         # Set a fixed initial size and center on screen.
-        # Width 680 accommodates all 6 tab labels; height 640 fits most
-        # tabs without scrolling and always shows Save/Cancel.
+        # Width 820 accommodates all 6 tab labels without truncation;
+        # height 640 fits most tabs without scrolling and always shows Save/Cancel.
         self._dialog.update_idletasks()
-        w = 720
+        w = 850
         screen_h = self._dialog.winfo_screenheight()
         h = min(640, screen_h - 80)
         x = (self._dialog.winfo_screenwidth() // 2) - (w // 2)
@@ -464,7 +464,7 @@ class SettingsDialog:
 
         # === Error label (above buttons, hidden by default) ===
         self._error_label = ttk.Label(
-            main_frame, text="", foreground="#FF6B6B", wraplength=620
+            main_frame, text="", foreground="#FF6B6B", wraplength=720
         )
         # Not packed initially; shown by _on_save_clicked on validation error
 
