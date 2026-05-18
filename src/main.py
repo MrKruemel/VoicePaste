@@ -280,6 +280,8 @@ class VoicePasteApp:
         self._api_server = None
         self._api_thread = None
         # v1.1: API dispatch controller (extracted from main.py)
+        # v1.4: pass STT backend + TTS orchestrator for /stt and
+        # streaming /tts endpoints.
         self._api_controller = APIController(
             app=self,
             tts_backend=self._tts,
@@ -287,6 +289,8 @@ class VoicePasteApp:
             tts_cache=self._tts_cache,
             tts_exporter=self._tts_exporter,
             paste_cancel_event=self._paste_cancel_event,
+            stt_backend=self._stt,
+            tts_orchestrator=self._tts_orchestrator,
         )
 
     @property
@@ -739,6 +743,7 @@ class VoicePasteApp:
             self._api_server, self._api_thread = start_api_server(
                 port=self.config.api_port,
                 dispatch=self._api_dispatch,
+                controller=self._api_controller,
             )
             self._tray_manager.notify(
                 APP_NAME,
@@ -1004,6 +1009,8 @@ class VoicePasteApp:
                 )
             else:
                 logger.warning("STT backend unavailable after settings change.")
+            # Keep the API dispatcher in sync (v1.4: /stt endpoint).
+            self._api_controller.update_stt(self._stt)
 
         # v0.6+v0.7: Determine if TTS backend needs rebuild
         tts_keys = {

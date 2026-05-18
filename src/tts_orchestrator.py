@@ -490,6 +490,115 @@ class TTSOrchestrator:
         finally:
             self._set_state(AppState.IDLE)
 
+    def synthesize_to_bytes(
+        self,
+        text: str,
+        voice: Optional[str] = None,
+    ) -> tuple[bytes, str]:
+        """Synthesize text and return raw audio bytes (no playback).
+
+        Used by the HTTP API streaming mode (Accept: audio/*) so that
+        external consumers (e.g. PURR's Telegram bot) can pipe Cati's
+        voice into another channel without the local speaker firing.
+
+        Cache-through: checks cache before synthesis, stores after.
+        Honours the per-call ``voice`` override exactly like
+        ``synthesize_and_play``.
+
+        Args:
+            text: Text to synthesize.
+            voice: Optional Piper voice override (validated by caller).
+
+        Returns:
+            Tuple of (audio_bytes, mime_type). Piper natively produces
+            WAV bytes, so the mime is ``audio/wav``.
+
+        Raises:
+            TTSError: If synthesis fails.
+        """
+        if self.tts is None:
+            raise TTSError("TTS backend is not configured.")
+
+        text = self._preprocess_text(text)
+
+        # No override -> default path.
+        if voice is None or voice == self.config.tts_local_voice:
+            cache_key = self.get_cache_key(text)
+            cached = self.tts_cache.get(cache_key)
+            if cached is not None:
+                logger.info("TTS cache hit (stream) -- skipping synthesis.")
+                return cached, "audio/wav"
+            audio_data = self.tts.synthesize(text)
+            self.tts_cache.put(
+                cache_key, audio_data,
+                voice_label=self.get_voice_label(),
+            )
+            return audio_data, "audio/wav"
+
+        # Per-call voice override: build a transient backend, swap
+        # config so the cache key reflects the override, restore in
+        # finally. Matches _run_tts_pipeline semantics.
+        from tts import create_tts_backend
+        from constants import DEFAULT_TTS_NOISE_SCALE, DEFAULT_TTS_NOISE_W
+
+        original_voice = self.config.tts_local_voice
+        original_backend = self.tts
+        try:
+            audio_fx = getattr(self.tts, "_audio_fx_config", None)
+            noise_scale = (
+                self.config.tts_noise_scale
+                if self.config.tts_noise_scale != DEFAULT_TTS_NOISE_SCALE
+                else None
+            )
+            noise_w = (
+                self.config.tts_noise_w
+                if self.config.tts_noise_w != DEFAULT_TTS_NOISE_W
+                else None
+            )
+            override_backend = create_tts_backend(
+                api_key="",
+                provider="piper",
+                local_voice=voice,
+                speed=self.config.tts_speed,
+                sentence_pause_ms=self.config.tts_sentence_pause_ms,
+                noise_scale=noise_scale,
+                noise_w=noise_w,
+                speaker_id=self.config.tts_piper_speaker_id,
+                audio_fx_config=audio_fx,
+            )
+            if override_backend is None:
+                logger.warning(
+                    "Voice override '%s' could not be instantiated; "
+                    "falling back to default voice '%s'.",
+                    voice, original_voice,
+                )
+                cache_key = self.get_cache_key(text)
+                audio_data = self.tts.synthesize(text)
+                self.tts_cache.put(
+                    cache_key, audio_data,
+                    voice_label=self.get_voice_label(),
+                )
+                return audio_data, "audio/wav"
+
+            self.config.tts_local_voice = voice
+            self.tts = override_backend
+            cache_key = self.get_cache_key(text)
+            cached = self.tts_cache.get(cache_key)
+            if cached is not None:
+                logger.info(
+                    "TTS cache hit (stream, override='%s').", voice,
+                )
+                return cached, "audio/wav"
+            audio_data = override_backend.synthesize(text)
+            self.tts_cache.put(
+                cache_key, audio_data,
+                voice_label=self.get_voice_label(),
+            )
+            return audio_data, "audio/wav"
+        finally:
+            self.config.tts_local_voice = original_voice
+            self.tts = original_backend
+
     def synthesize_for_ask(self, text: str) -> None:
         """Synthesize and play for TTS Ask mode (within the pipeline thread).
 

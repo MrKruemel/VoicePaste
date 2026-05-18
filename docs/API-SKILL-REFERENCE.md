@@ -25,7 +25,8 @@ curl -X POST http://127.0.0.1:18923/tts \
 |--------|------------------|----------------------------------------|
 | GET    | `/health`        | Health check (always 200 when running) |
 | GET    | `/status`        | Current app state + version info       |
-| POST   | `/tts`           | Speak text via TTS                     |
+| POST   | `/tts`           | Speak text via TTS (default) or stream as audio bytes |
+| POST   | `/stt`           | Transcribe raw audio bytes to text     |
 | POST   | `/stop`          | Stop TTS playback                      |
 | POST   | `/record/start`  | Start microphone recording             |
 | POST   | `/record/stop`   | Stop recording, trigger STT pipeline   |
@@ -53,28 +54,75 @@ Possible `state` values: `idle`, `recording`, `processing`, `speaking`, `pasting
 
 ### POST /tts
 
-Speak text aloud on the user's speakers. **Fire-and-forget**: returns immediately, audio plays asynchronously.
+Two modes: **default** (speak on user's speakers, fire-and-forget) or **stream** (return raw audio bytes, no playback).
 
 **Request body:**
 ```json
 {
-  "text": "The deployment finished with 0 errors."
+  "text": "The deployment finished with 0 errors.",
+  "voice": "de_DE-thorsten_emotional-medium",
+  "stream": false
 }
 ```
 
-| Field  | Type   | Required | Constraint          |
-|--------|--------|----------|---------------------|
-| `text` | string | yes      | Max 10,000 chars    |
+| Field    | Type    | Required | Constraint                                              |
+|----------|---------|----------|---------------------------------------------------------|
+| `text`   | string  | yes      | Max 10,000 chars                                        |
+| `voice`  | string  | no       | Override for this call. Must be a known Piper voice ID (see `src/constants.py:PIPER_VOICE_MODELS`). Falls back to `config.tts_local_voice` if absent. Only meaningful with the Piper provider. |
+| `stream` | boolean | no       | If `true`, response is audio bytes instead of JSON. Equivalent triggers: `?stream=ogg` query param, or `Accept: audio/*` header. **In stream mode the audio is NOT played on the speakers** — to avoid Tim hearing his own assistant twice when a remote consumer (e.g. PURR's Telegram-voice-out path) renders it elsewhere. |
+
+**Default-mode response:** `{"status": "ok"}` (audio plays in background).
+
+**Stream-mode response:** raw audio bytes, `Content-Type: audio/wav` (Piper produces WAV natively — no transcoding to OGG/Opus inside VoicePaste). Consumers that need OGG (e.g. Telegram-`send_voice`) should convert client-side (`pydub`, `ffmpeg`, `pyav`).
 
 **Responses:**
 
 | Status | Meaning                                |
 |--------|----------------------------------------|
-| 200    | TTS started                            |
-| 400    | Missing or empty `text`                |
-| 409    | Busy (another operation in progress)   |
-| 413    | Text exceeds 10,000 character limit    |
-| 503    | TTS not enabled or configured          |
+| 200    | TTS started (default) or bytes returned (stream) |
+| 400    | Missing/empty `text`, or unknown `voice`         |
+| 409    | Busy (another operation in progress)             |
+| 413    | Text exceeds 10,000 character limit              |
+| 503    | TTS not enabled or configured                    |
+
+### POST /stt
+
+Transcribe raw audio bytes via the local Whisper backend (`LocalWhisperSTT`, faster-whisper).
+
+**Request body:** raw audio bytes (`Content-Type` should be set, e.g. `audio/wav`, `audio/ogg`, `audio/x-opus+ogg`). Max 25 MB.
+
+**Query params:**
+
+| Param      | Type   | Default | Purpose                                       |
+|------------|--------|---------|-----------------------------------------------|
+| `language` | string | `de`    | Whisper-recognized language code (`de`, `en`, …). |
+
+**Response:**
+```json
+{
+  "status": "ok",
+  "transcript": "Hier spricht Cati",
+  "language": "de"
+}
+```
+
+**Responses:**
+
+| Status | Meaning                                                                            |
+|--------|------------------------------------------------------------------------------------|
+| 200    | Transcript ready                                                                   |
+| 400    | Empty body                                                                         |
+| 409    | Busy (another operation in progress)                                               |
+| 413    | Body > 25 MB                                                                       |
+| 503    | STT backend not configured (faster-whisper missing) or audio format not decodable in this build (see Caveats below) |
+
+**Caveats:**
+
+- **WAV input is the fast path** — read directly into faster-whisper.
+- **OGG/Opus/MP3/etc.** require PyAV for decoding. In the **frozen Linux binary build** PyAV is stubbed out (`rthook_av_stub.py`, saves ~119 MB) so non-WAV input returns 503 `STT_NOT_CONFIGURED`. In source-mode (`python src/main.py`) PyAV is available and OGG works.
+  - **For PURR's Telegram-voice-in pipeline**: convert OGG/Opus to WAV client-side (PURR already has PyAV via its `.venv`) and POST the WAV — that's the recommended path.
+  - Alternative: rebuild VoicePaste without the PyAV stub (`voice_paste_linux.spec`, remove the rthook), at the cost of ~+119 MB binary size.
+- **First call loads the Whisper model** — for `base` this takes 2–4 s on the first hit; subsequent calls are warm. If you're calling from a context with a tight timeout (e.g. a Telegram-bot handler), consider pre-warming with one dummy POST during your service startup.
 
 ### POST /stop
 
@@ -117,7 +165,7 @@ All errors follow this structure:
 }
 ```
 
-Error codes: `NOT_FOUND`, `INVALID_PARAMS`, `TEXT_TOO_LONG`, `TTS_NOT_CONFIGURED`, `RATE_LIMITED`.
+Error codes: `NOT_FOUND`, `INVALID_PARAMS`, `TEXT_TOO_LONG`, `TTS_NOT_CONFIGURED`, `STT_NOT_CONFIGURED`, `BUSY`, `RATE_LIMITED`.
 
 ---
 

@@ -32,6 +32,7 @@ import threading
 import time
 from http.server import HTTPServer, BaseHTTPRequestHandler
 from typing import Any, Callable, Optional
+from urllib.parse import urlparse, parse_qs
 
 # Strict CORS origin pattern: only http://localhost or http://localhost:PORT
 _ALLOWED_ORIGIN_RE = re.compile(r"^http://localhost(:\d+)?$")
@@ -43,7 +44,11 @@ logger = logging.getLogger(__name__)
 
 # Rate limiting
 RATE_LIMIT_PER_SECOND = 5
-MAX_CONTENT_LENGTH = 65536  # 64 KB max request body
+MAX_CONTENT_LENGTH = 65536  # 64 KB max JSON request body
+# STT audio bodies are much larger -- allow up to 25 MB (matches OpenAI
+# Whisper's upload limit). Telegram voice messages cap at ~1 minute @ 16 kbps,
+# i.e. well under 200 KB, so 25 MB is comfortable headroom.
+MAX_AUDIO_CONTENT_LENGTH = 25 * 1024 * 1024
 
 
 class _RateLimiter:
@@ -151,7 +156,22 @@ class VoicePasteAPIHandler(BaseHTTPRequestHandler):
             })
             return
 
-        # Parse body
+        parsed = urlparse(self.path)
+        path = parsed.path
+        query = parse_qs(parsed.query)
+
+        # v1.4: Speech-to-Text (raw audio body in, JSON out).
+        if path == "/stt":
+            self._handle_stt_request(query)
+            return
+
+        # v1.4: TTS streaming mode (raw audio bytes out).
+        # Triggered by Accept: audio/* OR ?stream=ogg OR body field stream:true.
+        if path == "/tts" and self._is_tts_stream_request(query):
+            self._handle_tts_stream_request(query)
+            return
+
+        # Parse body for the JSON-only routes
         try:
             body = self._read_json_body()
         except (json.JSONDecodeError, ValueError):
@@ -170,6 +190,11 @@ class VoicePasteAPIHandler(BaseHTTPRequestHandler):
             })
             return
 
+        # If stream was requested via body field, route to stream handler.
+        if path == "/tts" and isinstance(body, dict) and body.get("stream"):
+            self._handle_tts_stream_request(query, prefetched_body=body)
+            return
+
         # Route to action
         route_map = {
             "/tts": "tts",
@@ -180,11 +205,11 @@ class VoicePasteAPIHandler(BaseHTTPRequestHandler):
             "/cancel": "cancel",
         }
 
-        action = route_map.get(self.path)
+        action = route_map.get(path)
 
         # v1.0: TTS cache replay route (POST /tts/replay/{id})
-        if action is None and self.path.startswith("/tts/replay/"):
-            entry_id = self.path.split("/")[-1]
+        if action is None and path.startswith("/tts/replay/"):
+            entry_id = path.split("/")[-1]
             if not _VALID_ENTRY_ID_RE.match(entry_id):
                 self._send_json(400, {
                     "status": "error",
@@ -204,7 +229,7 @@ class VoicePasteAPIHandler(BaseHTTPRequestHandler):
             return
 
         body["action"] = action
-        logger.info("API request: %s %s", self.command, self.path)
+        logger.info("API request: %s %s", self.command, path)
 
         result = self.server.dispatch(body)
 
@@ -224,6 +249,155 @@ class VoicePasteAPIHandler(BaseHTTPRequestHandler):
             }.get(error_code, 500)
 
         self._send_json(status_code, result)
+
+    # ------------------------------------------------------------------
+    # v1.4: New binary endpoints
+    # ------------------------------------------------------------------
+
+    def _is_tts_stream_request(self, query: dict) -> bool:
+        """Return True if the caller wants raw audio bytes instead of JSON.
+
+        Triggers:
+          * ``Accept: audio/*`` header (handles audio/ogg, audio/wav, ...).
+          * ``?stream=ogg`` (or any non-empty value) query string.
+          * Body field ``stream: true`` (checked separately after JSON parse).
+        """
+        accept = self.headers.get("Accept", "").lower()
+        if accept.startswith("audio/") or "audio/*" in accept:
+            return True
+        if "stream" in query and query["stream"] and query["stream"][0]:
+            return True
+        return False
+
+    def _send_binary(
+        self, status_code: int, content_type: str, payload: bytes,
+    ) -> None:
+        """Send a raw binary response with CORS headers."""
+        self.send_response(status_code)
+        self.send_header("Content-Type", content_type)
+        self.send_header("Content-Length", str(len(payload)))
+        origin = self.headers.get("Origin", "")
+        if _ALLOWED_ORIGIN_RE.match(origin):
+            self.send_header("Access-Control-Allow-Origin", origin)
+        self.end_headers()
+        if payload:
+            self.wfile.write(payload)
+
+    def _http_status_for(self, result: dict, fallback: int = 500) -> int:
+        result_status = result.get("status", "")
+        if result_status == "busy":
+            return 409
+        if result_status == "ok":
+            return 200
+        if result_status == "error":
+            return {
+                "INVALID_PARAMS": 400,
+                "TEXT_TOO_LONG": 413,
+                "TTS_NOT_CONFIGURED": 503,
+                "STT_NOT_CONFIGURED": 503,
+                "AUDIO_DECODE_FAILED": 400,
+                "TTS_FAILED": 500,
+                "STT_FAILED": 500,
+                "EXPORT_DISABLED": 403,
+                "RATE_LIMITED": 429,
+            }.get(result.get("error_code", ""), fallback)
+        return fallback
+
+    def _handle_tts_stream_request(
+        self, query: dict, prefetched_body: Optional[dict] = None,
+    ) -> None:
+        """POST /tts with Accept: audio/* -- return raw audio bytes."""
+        if prefetched_body is not None:
+            body = prefetched_body
+        else:
+            try:
+                body = self._read_json_body()
+            except (json.JSONDecodeError, ValueError):
+                self._send_json(400, {
+                    "status": "error",
+                    "error_code": "INVALID_PARAMS",
+                    "message": "Invalid JSON body",
+                })
+                return
+            if body is None:
+                self._send_json(413, {
+                    "status": "error",
+                    "error_code": "INVALID_PARAMS",
+                    "message": "Request body too large",
+                })
+                return
+
+        logger.info("API request: %s /tts (stream)", self.command)
+        ctrl = self.server.controller
+        if ctrl is None:
+            self._send_json(503, {
+                "status": "error",
+                "error_code": "TTS_NOT_CONFIGURED",
+                "message": "API controller not wired for streaming",
+            })
+            return
+
+        audio_bytes, mime, status = ctrl.dispatch_tts_stream(body)
+        if audio_bytes is None:
+            self._send_json(self._http_status_for(status), status)
+            return
+        self._send_binary(200, mime or "application/octet-stream", audio_bytes)
+
+    def _handle_stt_request(self, query: dict) -> None:
+        """POST /stt -- raw audio body in, JSON transcript out."""
+        ctrl = self.server.controller
+        if ctrl is None:
+            self._send_json(503, {
+                "status": "error",
+                "error_code": "STT_NOT_CONFIGURED",
+                "message": "API controller not wired for STT",
+            })
+            return
+
+        content_length = int(self.headers.get("Content-Length", 0))
+        if content_length <= 0:
+            self._send_json(400, {
+                "status": "error",
+                "error_code": "INVALID_PARAMS",
+                "message": "Audio body is empty",
+            })
+            return
+        if content_length > MAX_AUDIO_CONTENT_LENGTH:
+            self._send_json(413, {
+                "status": "error",
+                "error_code": "INVALID_PARAMS",
+                "message": (
+                    f"Audio body too large "
+                    f"({content_length} > {MAX_AUDIO_CONTENT_LENGTH} bytes)"
+                ),
+            })
+            return
+
+        audio_data = self.rfile.read(content_length)
+        if not audio_data:
+            self._send_json(400, {
+                "status": "error",
+                "error_code": "INVALID_PARAMS",
+                "message": "Audio body is empty",
+            })
+            return
+
+        content_type = self.headers.get("Content-Type", "")
+        # language: query string first, fall back to default.
+        language: Optional[str] = None
+        if "language" in query and query["language"]:
+            language = query["language"][0]
+
+        # REQ-S11: never log audio data, only its length.
+        logger.info(
+            "API request: %s /stt (%d bytes, %s)",
+            self.command, len(audio_data), content_type or "no-type",
+        )
+
+        status_code, payload = ctrl.dispatch_stt(
+            audio_data, content_type=content_type, language=language,
+        )
+        self._send_json(status_code, payload)
 
     def do_DELETE(self) -> None:
         """Handle DELETE requests (v1.0: TTS cache)."""
@@ -282,8 +456,14 @@ class VoicePasteAPIServer(HTTPServer):
         self,
         port: int,
         dispatch: Callable[[dict], dict],
+        controller: Any = None,
     ) -> None:
         self.dispatch = dispatch
+        # v1.4: Optional direct controller reference for the binary
+        # endpoints (POST /stt, POST /tts stream). The legacy ``dispatch``
+        # callback only returns JSON-serializable dicts, which cannot
+        # express raw audio responses.
+        self.controller = controller
         self.rate_limiter = _RateLimiter()
         super().__init__(("127.0.0.1", port), VoicePasteAPIHandler)
         logger.info("API server initialized on http://127.0.0.1:%d", port)
@@ -310,6 +490,7 @@ class VoicePasteAPIServer(HTTPServer):
 def start_api_server(
     port: int,
     dispatch: Callable[[dict], dict],
+    controller: Any = None,
 ) -> tuple[VoicePasteAPIServer, threading.Thread]:
     """Create and start the API server on a daemon thread.
 
@@ -317,6 +498,8 @@ def start_api_server(
         port: TCP port to bind to (on 127.0.0.1).
         dispatch: Callback to handle API commands. Receives a dict
             with an "action" key and returns a dict response.
+        controller: Optional APIController reference (for v1.4 binary
+            endpoints /stt and /tts streaming).
 
     Returns:
         Tuple of (server, thread). Call server.shutdown() to stop.
@@ -324,7 +507,7 @@ def start_api_server(
     Raises:
         OSError: If the port is already in use.
     """
-    server = VoicePasteAPIServer(port, dispatch)
+    server = VoicePasteAPIServer(port, dispatch, controller=controller)
     thread = threading.Thread(
         target=server.serve_forever,
         daemon=True,
