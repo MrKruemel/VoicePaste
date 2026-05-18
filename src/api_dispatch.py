@@ -11,7 +11,13 @@ import logging
 import threading
 from typing import Optional, Protocol, runtime_checkable
 
-from constants import APP_VERSION, AppState, TTS_MAX_TEXT_LENGTH, TTS_MAX_TEXT_LENGTH_LOCAL
+from constants import (
+    APP_VERSION,
+    AppState,
+    PIPER_VOICE_MODELS,
+    TTS_MAX_TEXT_LENGTH,
+    TTS_MAX_TEXT_LENGTH_LOCAL,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -32,7 +38,7 @@ class AppContext(Protocol):
     def _start_recording(self) -> None: ...
     def _stop_recording_and_process(self) -> None: ...
     def _on_cancel(self) -> None: ...
-    def _run_tts_pipeline(self, text: str) -> None: ...
+    def _run_tts_pipeline(self, text: str, voice: Optional[str] = None) -> None: ...
     def _run_tts_export_pipeline(self, text: str, filename_hint: str = "") -> None: ...
     def replay_tts_entry(self, entry_id: str) -> bool: ...
 
@@ -164,6 +170,37 @@ class APIController:
                 "error_code": "TEXT_TOO_LONG",
                 "message": f"Text exceeds {max_len} character limit",
             }
+        # Optional per-call voice override (Piper voice name).
+        # Defaults to None -> pipeline keeps the globally configured voice.
+        voice_override: Optional[str] = None
+        if "voice" in command and command["voice"] is not None:
+            requested = command["voice"]
+            if not isinstance(requested, str) or not requested.strip():
+                return {
+                    "status": "error",
+                    "error_code": "INVALID_PARAMS",
+                    "message": "voice must be a non-empty string",
+                }
+            requested = requested.strip()
+            if requested not in PIPER_VOICE_MODELS:
+                return {
+                    "status": "error",
+                    "error_code": "INVALID_PARAMS",
+                    "message": (
+                        f"Unknown voice '{requested}'. "
+                        f"Must be one of the registered Piper voices."
+                    ),
+                }
+            if self._app.config.tts_provider != "piper":
+                return {
+                    "status": "error",
+                    "error_code": "INVALID_PARAMS",
+                    "message": (
+                        "voice override is only supported with the Piper "
+                        "TTS provider"
+                    ),
+                }
+            voice_override = requested
         if not self._tts:
             return {
                 "status": "error",
@@ -181,6 +218,7 @@ class APIController:
         thread = threading.Thread(
             target=self._app._run_tts_pipeline,
             args=(text,),
+            kwargs={"voice": voice_override},
             daemon=True,
             name="api-tts-worker",
         )

@@ -640,9 +640,77 @@ class VoicePasteApp:
         else:
             logger.info("Claude Code hotkey ignored (state=%s).", current.value)
 
-    def _run_tts_pipeline(self, text: str) -> None:
-        """Synthesize text and play audio. Delegates to TTSOrchestrator."""
-        self._tts_orchestrator.synthesize_and_play(text)
+    def _run_tts_pipeline(self, text: str, voice: "str | None" = None) -> None:
+        """Synthesize text and play audio. Delegates to TTSOrchestrator.
+
+        Args:
+            text: Text to synthesize and play.
+            voice: Optional Piper voice name to use for this call only
+                (e.g. ``de_DE-thorsten_emotional-medium``). If ``None``,
+                the globally configured ``tts_local_voice`` is used. The
+                API dispatch layer validates the value against
+                ``PIPER_VOICE_MODELS`` before calling.
+        """
+        if voice is None or voice == self.config.tts_local_voice:
+            # No override or override matches current setting -> no swap needed.
+            self._tts_orchestrator.synthesize_and_play(text)
+            return
+
+        # Per-call voice override: build a transient Piper backend with the
+        # requested voice while preserving all other TTS settings (speed,
+        # noise, fx, ...). Swap config/backend for the duration of the call
+        # and restore in finally so the next call uses the global default.
+        # The state machine (PROCESSING guard in the dispatcher) prevents
+        # overlapping TTS calls, so the swap is safe single-threaded.
+        from tts import create_tts_backend
+
+        original_voice = self.config.tts_local_voice
+        original_backend = self._tts
+        try:
+            # Preserve audio FX from the currently active backend so the
+            # override sounds the same except for the voice itself.
+            audio_fx = getattr(self._tts, "_audio_fx_config", None)
+            # Match _rebuild_tts() semantics: "default" noise values mean
+            # "use the model's built-in default" (None).
+            noise_scale = (
+                self.config.tts_noise_scale
+                if self.config.tts_noise_scale != DEFAULT_TTS_NOISE_SCALE
+                else None
+            )
+            noise_w = (
+                self.config.tts_noise_w
+                if self.config.tts_noise_w != DEFAULT_TTS_NOISE_W
+                else None
+            )
+            override_backend = create_tts_backend(
+                api_key="",
+                provider="piper",
+                local_voice=voice,
+                speed=self.config.tts_speed,
+                sentence_pause_ms=self.config.tts_sentence_pause_ms,
+                noise_scale=noise_scale,
+                noise_w=noise_w,
+                speaker_id=self.config.tts_piper_speaker_id,
+                audio_fx_config=audio_fx,
+            )
+            if override_backend is None:
+                logger.warning(
+                    "Voice override '%s' could not be instantiated; "
+                    "falling back to default voice '%s'.",
+                    voice, original_voice,
+                )
+                self._tts_orchestrator.synthesize_and_play(text)
+                return
+
+            self.config.tts_local_voice = voice
+            self._tts = override_backend
+            self._tts_orchestrator.update_tts(override_backend)
+            logger.info("TTS voice override active: '%s'", voice)
+            self._tts_orchestrator.synthesize_and_play(text)
+        finally:
+            self.config.tts_local_voice = original_voice
+            self._tts = original_backend
+            self._tts_orchestrator.update_tts(original_backend)
 
     def _run_tts_export_pipeline(self, text: str, filename_hint: str = "") -> None:
         """Synthesize text and export to file. Delegates to TTSOrchestrator."""
